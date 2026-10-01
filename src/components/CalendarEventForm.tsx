@@ -79,7 +79,8 @@ export function CalendarEventForm({ value, isNew, categories, events, onChange, 
   const meeting = { ...defaultMeeting, ...value.meeting };
   const updateMeeting = (changes: Partial<CalendarMeetingOptions>) => update("meeting", { ...meeting, ...changes });
   const categoryNames = categories.map((category) => category.name);
-  const selectedColor = calendarColorOptions.find((color) => color.value === calendarColorValue(value.color)) ?? calendarColorOptions[0];
+  const selectedCategory = categories.find((category) => category.name === value.category);
+  const selectedCategoryColor = calendarColorOptions.find((color) => color.value === calendarColorValue(selectedCategory?.color ?? "gray"))?.border ?? "#64748b";
   const calendarLabel = value.source.trim() && value.source !== "local" ? value.source : "Agenda";
   const recurrence = value.recurrence ?? null;
   const recurrencePreset = !recurrence ? "none" : recurrence.frequency === "monthly" && recurrence.interval === 6 ? "semiannual" : recurrence.frequency;
@@ -211,7 +212,7 @@ export function CalendarEventForm({ value, isNew, categories, events, onChange, 
         </div>
         <label className="calendar-command-select"><Eye size={16} /><select aria-label="Anzeigen als" value={meeting.showAs} onChange={(event) => updateMeeting({ showAs: event.target.value as CalendarAvailability })}>{Object.entries(availabilityLabels).map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select></label>
         <label className="calendar-command-select"><Bell size={16} /><select aria-label="Erinnerung" value={meeting.reminderMinutes ?? "none"} onChange={(event) => updateMeeting({ reminderMinutes: event.target.value === "none" ? null : Number(event.target.value) })}><option value="none">Keine Erinnerung</option><option value="0">Zum Start</option><option value="5">5 Minuten vorher</option><option value="15">15 Minuten vorher</option><option value="30">30 Minuten vorher</option><option value="60">1 Stunde vorher</option><option value="1440">1 Tag vorher</option></select></label>
-        <label className="calendar-command-select calendar-category-select"><Tag size={16} /><select aria-label="Kategorie" value={value.category} onChange={(event) => updateCategory(event.target.value)}><option value="">Keine Kategorie</option>{value.category && !categoryNames.includes(value.category) && <option value={value.category}>{value.category}</option>}{categories.map((category) => <option value={category.name} key={category.name}>{category.name}</option>)}</select></label>
+        <label className="calendar-command-select calendar-category-select"><Tag size={16} /><span className="calendar-category-color-dot" aria-hidden="true" style={{ backgroundColor: selectedCategoryColor }} /><select aria-label="Kategorie" value={value.category} onChange={(event) => updateCategory(event.target.value)}><option value="">Keine Kategorie</option>{value.category && !categoryNames.includes(value.category) && <option value={value.category}>{value.category}</option>}{categories.map((category) => <option value={category.name} key={category.name}>{category.name}</option>)}</select></label>
         <button className={meeting.isPrivate ? "calendar-command-toggle active" : "calendar-command-toggle"} type="button" aria-pressed={meeting.isPrivate} onClick={() => updateMeeting({ isPrivate: !meeting.isPrivate })}><Lock size={16} /> Privat</button>
         <button className="calendar-command-icon" type="button" onClick={() => window.print()} aria-label="Drucken" title="Drucken"><Printer size={17} /></button>
         {!isNew && <button className="calendar-command-icon danger" type="button" onClick={onDelete} aria-label="Termin löschen" title="Termin löschen"><Trash2 size={17} /></button>}
@@ -269,7 +270,6 @@ export function CalendarEventForm({ value, isNew, categories, events, onChange, 
 
           <footer className="calendar-meeting-footer">
             <div className="calendar-source-summary"><CalendarClock size={17} /><span>Kalender:</span><strong>{calendarLabel}</strong></div>
-            <div className="calendar-color-row"><Tag size={17} /><span className="calendar-color-dot" style={{ backgroundColor: selectedColor.border }} /><label><span>Farbe</span><select aria-label="Terminfarbe" value={selectedColor.value} onChange={(event) => update("color", event.target.value)}>{calendarColorOptions.map((color) => <option value={color.value} key={color.value}>{color.label}</option>)}</select></label></div>
           </footer>
         </main>
 

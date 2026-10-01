@@ -1043,7 +1043,9 @@ export function ContactsPage({ onNavigate, onRegisterNavigationBlocker }: Contac
         summary: contactIds.length === 1 ? `Der Kontakt ist jetzt in „${targetLabel}“.` : `${contactIds.length} Kontakte sind jetzt in „${targetLabel}“.`,
         items: affectedContacts.map((contact) => ({ label: displayName(contact), detail: primaryContactEmail(contact) || contact.phone || contact.privatePhone || undefined })),
         itemsLabel: `${contactIds.length} verschobene Kontakte anzeigen`,
-        tone: "success"
+        tone: "success",
+        dismissalKey: "contacts-moved",
+        dismissalLabel: "Diesen Hinweis beim Verschieben von Kontakten nicht mehr anzeigen"
       });
       setSelectedContactIds(new Set());
       setSelectionMode(false);
@@ -1231,7 +1233,33 @@ export function ContactsPage({ onNavigate, onRegisterNavigationBlocker }: Contac
   };
 
   return (
-    <div className={`${draggedContactIds.length === 0 ? "page contacts-page" : "page contacts-page dragging-contact"} contacts-font-${contactsFontSize} groups-tab-active`}>
+    <div className={`${draggedContactIds.length === 0 ? "page contacts-page" : "page contacts-page dragging-contact"}${totalContactCount === 0 ? " contacts-empty" : ""} contacts-font-${contactsFontSize} groups-tab-active`}>
+      {totalContactCount === 0 && (
+        <header className="page-header">
+          <div>
+            <h2>Kontakte</h2>
+            <p>Kontakte übersichtlich verwalten.</p>
+          </div>
+          <div className="calendar-header-actions">
+            <button className="primary" type="button" onClick={startNew}>
+              <Plus size={20} /> Neuer Kontakt
+            </button>
+            <div className="calendar-actions-menu-wrap">
+              <button className="icon-only" type="button" aria-label="Weitere Kontaktaktionen" title="Weitere Aktionen" aria-haspopup="menu" aria-expanded={testMenuOpen} onClick={() => setTestMenuOpen((open) => !open)}>
+                <Ellipsis size={21} />
+              </button>
+              {testMenuOpen && <div className="calendar-actions-menu" role="menu">
+                <button type="button" onClick={() => { setTestMenuOpen(false); setM365SyncDialogOpen(true); }}>
+                  <RefreshCw size={18} /> Microsoft 365 / Exchange verwalten
+                </button>
+                <span className="calendar-actions-separator" />
+                <button type="button" onClick={() => { setTestMenuOpen(false); onNavigate("import"); }}><Upload size={18} /> Kontakte importieren</button>
+                <button type="button" onClick={() => { setTestMenuOpen(false); onNavigate("export"); }}><Download size={18} /> Kontakte exportieren</button>
+              </div>}
+            </div>
+          </div>
+        </header>
+      )}
       <StatusMessage message={actionResult ? "" : message} type={messageType} />
       <ActionResultDialog result={actionResult} onClose={() => setActionResult(null)} />
       <UnsavedContactChangesDialog
@@ -1475,11 +1503,13 @@ export function ContactsPage({ onNavigate, onRegisterNavigationBlocker }: Contac
       )}
 
       {totalContactCount === 0 ? (
-        <EmptyImportState
-          kind="contacts"
-          onEasyImport={() => setEasyImportOpen(true)}
-          onManualImport={() => onNavigate("contact-import")}
-        />
+        <div className="empty-import-screen">
+          <EmptyImportState
+            kind="contacts"
+            onEasyImport={() => setEasyImportOpen(true)}
+            onManualImport={() => onNavigate("contact-import")}
+          />
+        </div>
       ) : <section
           className="contacts-workspace"
           ref={contactsWorkspaceRef}

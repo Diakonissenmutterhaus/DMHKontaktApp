@@ -12,6 +12,11 @@ export interface Microsoft365ConnectionStatus {
   account: Microsoft365Account | null;
 }
 
+export interface Microsoft365CalendarCategory {
+  name: string;
+  color: string;
+}
+
 export interface Microsoft365DeviceCode {
   userCode: string;
   verificationUri: string;

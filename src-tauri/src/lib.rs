@@ -253,6 +253,18 @@ pub struct AppSetting {
     pub value: String,
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AuditLogEntry {
+    pub id: i64,
+    pub occurred_at: String,
+    pub actor: String,
+    pub action: String,
+    pub entity_kind: String,
+    pub entity_id: Option<String>,
+    pub summary: String,
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct CalendarRecurrence {
@@ -833,6 +845,17 @@ fn now() -> String {
     Utc::now().to_rfc3339()
 }
 
+fn audit_actor() -> String {
+    let username =
+        env::var("USERNAME").unwrap_or_else(|_| "Unbekannter Windows-Benutzer".to_string());
+    let domain = env::var("USERDOMAIN").unwrap_or_default();
+    if domain.trim().is_empty() {
+        username
+    } else {
+        format!("{}\\{}", domain.trim(), username)
+    }
+}
+
 fn open_db(app: &AppHandle) -> Result<Connection, String> {
     let state = app.state::<AppState>();
     let db_path = state
@@ -953,6 +976,111 @@ fn init_db(app: &AppHandle) -> Result<(), String> {
             updated_at TEXT NOT NULL,
             deleted_at TEXT
         );
+        CREATE TABLE IF NOT EXISTS audit_context (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            actor TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS audit_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            occurred_at TEXT NOT NULL,
+            actor TEXT NOT NULL,
+            action TEXT NOT NULL,
+            entity_kind TEXT NOT NULL,
+            entity_id TEXT,
+            summary TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_audit_log_occurred_at ON audit_log(occurred_at DESC, id DESC);
+        CREATE TRIGGER IF NOT EXISTS audit_contacts_insert AFTER INSERT ON contacts BEGIN
+          INSERT INTO audit_log(occurred_at, actor, action, entity_kind, entity_id, summary)
+          VALUES(strftime('%Y-%m-%dT%H:%M:%fZ','now'), (SELECT actor FROM audit_context WHERE id = 1), 'created', 'contact', CAST(NEW.id AS TEXT),
+            printf('Kontakt erstellt: %s', CASE WHEN trim(NEW.display_name) = '' THEN 'Ohne Name' ELSE NEW.display_name END));
+        END;
+        CREATE TRIGGER IF NOT EXISTS audit_contacts_changed AFTER UPDATE ON contacts
+          WHEN OLD.deleted_at IS NEW.deleted_at AND NEW.deleted_at IS NULL BEGIN
+          INSERT INTO audit_log(occurred_at, actor, action, entity_kind, entity_id, summary)
+          VALUES(strftime('%Y-%m-%dT%H:%M:%fZ','now'), (SELECT actor FROM audit_context WHERE id = 1), 'updated', 'contact', CAST(NEW.id AS TEXT),
+            printf('Kontakt geändert: %s', CASE WHEN trim(NEW.display_name) = '' THEN 'Ohne Name' ELSE NEW.display_name END));
+        END;
+        CREATE TRIGGER IF NOT EXISTS audit_contacts_deleted AFTER UPDATE OF deleted_at ON contacts
+          WHEN OLD.deleted_at IS NULL AND NEW.deleted_at IS NOT NULL BEGIN
+          INSERT INTO audit_log(occurred_at, actor, action, entity_kind, entity_id, summary)
+          VALUES(strftime('%Y-%m-%dT%H:%M:%fZ','now'), (SELECT actor FROM audit_context WHERE id = 1), 'deleted', 'contact', CAST(NEW.id AS TEXT),
+            printf('Kontakt in Papierkorb verschoben: %s', CASE WHEN trim(NEW.display_name) = '' THEN 'Ohne Name' ELSE NEW.display_name END));
+        END;
+        CREATE TRIGGER IF NOT EXISTS audit_contacts_restored AFTER UPDATE OF deleted_at ON contacts
+          WHEN OLD.deleted_at IS NOT NULL AND NEW.deleted_at IS NULL BEGIN
+          INSERT INTO audit_log(occurred_at, actor, action, entity_kind, entity_id, summary)
+          VALUES(strftime('%Y-%m-%dT%H:%M:%fZ','now'), (SELECT actor FROM audit_context WHERE id = 1), 'restored', 'contact', CAST(NEW.id AS TEXT),
+            printf('Kontakt wiederhergestellt: %s', CASE WHEN trim(NEW.display_name) = '' THEN 'Ohne Name' ELSE NEW.display_name END));
+        END;
+        CREATE TRIGGER IF NOT EXISTS audit_contacts_purged BEFORE DELETE ON contacts BEGIN
+          INSERT INTO audit_log(occurred_at, actor, action, entity_kind, entity_id, summary)
+          VALUES(strftime('%Y-%m-%dT%H:%M:%fZ','now'), (SELECT actor FROM audit_context WHERE id = 1), 'purged', 'contact', CAST(OLD.id AS TEXT),
+            printf('Kontakt endgültig gelöscht: %s', CASE WHEN trim(OLD.display_name) = '' THEN 'Ohne Name' ELSE OLD.display_name END));
+        END;
+        CREATE TRIGGER IF NOT EXISTS audit_groups_insert AFTER INSERT ON groups BEGIN
+          INSERT INTO audit_log(occurred_at, actor, action, entity_kind, entity_id, summary)
+          VALUES(strftime('%Y-%m-%dT%H:%M:%fZ','now'), (SELECT actor FROM audit_context WHERE id = 1), 'created', 'group', CAST(NEW.id AS TEXT), printf('Gruppe erstellt: %s', NEW.name));
+        END;
+        CREATE TRIGGER IF NOT EXISTS audit_groups_changed AFTER UPDATE ON groups
+          WHEN OLD.deleted_at IS NEW.deleted_at AND NEW.deleted_at IS NULL BEGIN
+          INSERT INTO audit_log(occurred_at, actor, action, entity_kind, entity_id, summary)
+          VALUES(strftime('%Y-%m-%dT%H:%M:%fZ','now'), (SELECT actor FROM audit_context WHERE id = 1), 'updated', 'group', CAST(NEW.id AS TEXT), printf('Gruppe geändert: %s', NEW.name));
+        END;
+        CREATE TRIGGER IF NOT EXISTS audit_groups_deleted AFTER UPDATE OF deleted_at ON groups
+          WHEN OLD.deleted_at IS NULL AND NEW.deleted_at IS NOT NULL BEGIN
+          INSERT INTO audit_log(occurred_at, actor, action, entity_kind, entity_id, summary)
+          VALUES(strftime('%Y-%m-%dT%H:%M:%fZ','now'), (SELECT actor FROM audit_context WHERE id = 1), 'deleted', 'group', CAST(NEW.id AS TEXT), printf('Gruppe in Papierkorb verschoben: %s', NEW.name));
+        END;
+        CREATE TRIGGER IF NOT EXISTS audit_groups_restored AFTER UPDATE OF deleted_at ON groups
+          WHEN OLD.deleted_at IS NOT NULL AND NEW.deleted_at IS NULL BEGIN
+          INSERT INTO audit_log(occurred_at, actor, action, entity_kind, entity_id, summary)
+          VALUES(strftime('%Y-%m-%dT%H:%M:%fZ','now'), (SELECT actor FROM audit_context WHERE id = 1), 'restored', 'group', CAST(NEW.id AS TEXT), printf('Gruppe wiederhergestellt: %s', NEW.name));
+        END;
+        CREATE TRIGGER IF NOT EXISTS audit_groups_purged BEFORE DELETE ON groups BEGIN
+          INSERT INTO audit_log(occurred_at, actor, action, entity_kind, entity_id, summary)
+          VALUES(strftime('%Y-%m-%dT%H:%M:%fZ','now'), (SELECT actor FROM audit_context WHERE id = 1), 'purged', 'group', CAST(OLD.id AS TEXT), printf('Gruppe endgültig gelöscht: %s', OLD.name));
+        END;
+        CREATE TRIGGER IF NOT EXISTS audit_calendar_insert AFTER INSERT ON calendar_events BEGIN
+          INSERT INTO audit_log(occurred_at, actor, action, entity_kind, entity_id, summary)
+          VALUES(strftime('%Y-%m-%dT%H:%M:%fZ','now'), (SELECT actor FROM audit_context WHERE id = 1), 'created', 'calendar', NEW.id, 'Termin erstellt');
+        END;
+        CREATE TRIGGER IF NOT EXISTS audit_calendar_changed AFTER UPDATE ON calendar_events
+          WHEN OLD.deleted_at IS NEW.deleted_at AND NEW.deleted_at IS NULL BEGIN
+          INSERT INTO audit_log(occurred_at, actor, action, entity_kind, entity_id, summary)
+          VALUES(strftime('%Y-%m-%dT%H:%M:%fZ','now'), (SELECT actor FROM audit_context WHERE id = 1), 'updated', 'calendar', NEW.id, 'Termin geändert');
+        END;
+        CREATE TRIGGER IF NOT EXISTS audit_calendar_deleted AFTER UPDATE OF deleted_at ON calendar_events
+          WHEN OLD.deleted_at IS NULL AND NEW.deleted_at IS NOT NULL BEGIN
+          INSERT INTO audit_log(occurred_at, actor, action, entity_kind, entity_id, summary)
+          VALUES(strftime('%Y-%m-%dT%H:%M:%fZ','now'), (SELECT actor FROM audit_context WHERE id = 1), 'deleted', 'calendar', NEW.id, 'Termin in Papierkorb verschoben');
+        END;
+        CREATE TRIGGER IF NOT EXISTS audit_calendar_restored AFTER UPDATE OF deleted_at ON calendar_events
+          WHEN OLD.deleted_at IS NOT NULL AND NEW.deleted_at IS NULL BEGIN
+          INSERT INTO audit_log(occurred_at, actor, action, entity_kind, entity_id, summary)
+          VALUES(strftime('%Y-%m-%dT%H:%M:%fZ','now'), (SELECT actor FROM audit_context WHERE id = 1), 'restored', 'calendar', NEW.id, 'Termin wiederhergestellt');
+        END;
+        CREATE TRIGGER IF NOT EXISTS audit_calendar_purged BEFORE DELETE ON calendar_events BEGIN
+          INSERT INTO audit_log(occurred_at, actor, action, entity_kind, entity_id, summary)
+          VALUES(strftime('%Y-%m-%dT%H:%M:%fZ','now'), (SELECT actor FROM audit_context WHERE id = 1), 'purged', 'calendar', OLD.id, 'Termin endgültig gelöscht');
+        END;
+        CREATE TRIGGER IF NOT EXISTS audit_imports_insert AFTER INSERT ON import_history BEGIN
+          INSERT INTO audit_log(occurred_at, actor, action, entity_kind, entity_id, summary)
+          VALUES(strftime('%Y-%m-%dT%H:%M:%fZ','now'), (SELECT actor FROM audit_context WHERE id = 1), 'imported', 'contacts', NEW.batch_id,
+            printf('Kontaktimport abgeschlossen: %d importiert, %d übersprungen', NEW.imported_count, NEW.skipped_count));
+        END;
+        DROP TRIGGER IF EXISTS audit_settings_insert;
+        DROP TRIGGER IF EXISTS audit_settings_update;
+        CREATE TRIGGER audit_settings_insert AFTER INSERT ON app_settings
+          WHEN NEW.key IN ('confirm_deletions', 'default_email_app', 'collected_addresses_hidden', 'authenticator-entry-order-v1', 'synchronization_config_v1') BEGIN
+          INSERT INTO audit_log(occurred_at, actor, action, entity_kind, entity_id, summary)
+          VALUES(strftime('%Y-%m-%dT%H:%M:%fZ','now'), (SELECT actor FROM audit_context WHERE id = 1), 'changed', 'setting', NEW.key, printf('Einstellung geändert: %s', NEW.key));
+        END;
+        CREATE TRIGGER audit_settings_update AFTER UPDATE ON app_settings
+          WHEN NEW.key IN ('confirm_deletions', 'default_email_app', 'collected_addresses_hidden', 'authenticator-entry-order-v1', 'synchronization_config_v1') AND OLD.value IS NOT NEW.value BEGIN
+          INSERT INTO audit_log(occurred_at, actor, action, entity_kind, entity_id, summary)
+          VALUES(strftime('%Y-%m-%dT%H:%M:%fZ','now'), (SELECT actor FROM audit_context WHERE id = 1), 'changed', 'setting', NEW.key, printf('Einstellung geändert: %s', NEW.key));
+        END;
         CREATE TABLE IF NOT EXISTS backup_change_log (
             entity_kind TEXT NOT NULL,
             entity_id TEXT NOT NULL,
@@ -1117,6 +1245,24 @@ fn init_db(app: &AppHandle) -> Result<(), String> {
         CREATE INDEX IF NOT EXISTS idx_vault_entries_updated_at
             ON vault_entries(updated_at DESC);
         ",
+    )
+    .map_err(|err| err.to_string())?;
+
+    conn.execute(
+        "INSERT INTO audit_context(id, actor) VALUES(1, ?1)
+         ON CONFLICT(id) DO UPDATE SET actor = excluded.actor",
+        params![audit_actor()],
+    )
+    .map_err(|err| err.to_string())?;
+
+    // The early audit implementation also recorded internal synchronization
+    // heartbeat state. Those entries are not user actions, so remove only that
+    // technical noise while preserving all actual audit records.
+    conn.execute(
+        "DELETE FROM audit_log
+         WHERE entity_kind = 'setting'
+           AND entity_id IN ('synchronization_runtime_status_v1', 'synchronization_history_v1')",
+        [],
     )
     .map_err(|err| err.to_string())?;
 
@@ -6131,6 +6277,35 @@ fn get_app_setting(app: AppHandle, key: String) -> Result<Option<String>, String
 }
 
 #[tauri::command]
+fn list_audit_log(app: AppHandle, limit: Option<usize>) -> Result<Vec<AuditLogEntry>, String> {
+    let conn = open_db(&app)?;
+    let limit = limit.unwrap_or(250).clamp(1, 1_000) as i64;
+    let mut statement = conn
+        .prepare(
+            "SELECT id, occurred_at, actor, action, entity_kind, entity_id, summary
+             FROM audit_log
+             ORDER BY occurred_at DESC, id DESC
+             LIMIT ?1",
+        )
+        .map_err(|err| err.to_string())?;
+    let rows = statement
+        .query_map(params![limit], |row| {
+            Ok(AuditLogEntry {
+                id: row.get(0)?,
+                occurred_at: row.get(1)?,
+                actor: row.get(2)?,
+                action: row.get(3)?,
+                entity_kind: row.get(4)?,
+                entity_id: row.get(5)?,
+                summary: row.get(6)?,
+            })
+        })
+        .map_err(|err| err.to_string())?;
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(|err| err.to_string())
+}
+
+#[tauri::command]
 fn set_app_setting(app: AppHandle, key: String, value: String) -> Result<(), String> {
     let conn = open_db(&app)?;
     conn.execute(
@@ -9942,6 +10117,7 @@ pub fn run() {
             import_contacts,
             undo_last_import,
             undo_last_outlook_contact_import,
+            list_audit_log,
             get_backup_data,
             get_sync_backup_data,
             create_automatic_safety_backup,
@@ -9967,6 +10143,7 @@ pub fn run() {
             get_app_setting,
             set_app_setting,
             m365::get_m365_connection_status,
+            m365::list_m365_master_categories,
             m365::start_m365_interactive_connection,
             m365::start_m365_connection,
             m365::poll_m365_connection,

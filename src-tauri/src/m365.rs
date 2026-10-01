@@ -78,6 +78,13 @@ pub struct Microsoft365ConnectionStatus {
     account: Option<Microsoft365Account>,
 }
 
+#[derive(Debug, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct Microsoft365CalendarCategory {
+    name: String,
+    color: String,
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Microsoft365DeviceCode {
@@ -1964,27 +1971,35 @@ fn outlook_category_color(value: &str) -> &'static str {
     }
 }
 
-async fn m365_master_category_colors(access_token: &str) -> HashMap<String, String> {
-    let Ok(categories) = graph_collection(
+async fn m365_master_categories(
+    access_token: &str,
+) -> Result<Vec<Microsoft365CalendarCategory>, String> {
+    let categories = graph_collection(
         access_token,
         "https://graph.microsoft.com/v1.0/me/outlook/masterCategories?$select=displayName,color",
     )
-    .await
-    else {
-        return HashMap::new();
-    };
-    categories
+    .await?;
+    Ok(categories
         .into_iter()
         .filter_map(|category| {
             let name = value_text(&category, "displayName").trim();
             if name.is_empty() {
                 return None;
             }
-            Some((
-                name.to_lowercase(),
-                outlook_category_color(value_text(&category, "color")).to_string(),
-            ))
+            Some(Microsoft365CalendarCategory {
+                name: name.to_string(),
+                color: outlook_category_color(value_text(&category, "color")).to_string(),
+            })
         })
+        .collect())
+}
+
+async fn m365_master_category_colors(access_token: &str) -> HashMap<String, String> {
+    m365_master_categories(access_token)
+        .await
+        .unwrap_or_default()
+        .into_iter()
+        .map(|category| (category.name.to_lowercase(), category.color))
         .collect()
 }
 
@@ -4562,6 +4577,16 @@ pub async fn get_m365_connection_status(
         connected,
         account,
     })
+}
+
+#[tauri::command]
+pub async fn list_m365_master_categories(
+    app: AppHandle,
+) -> Result<Vec<Microsoft365CalendarCategory>, String> {
+    let mut access_token = refreshed_access_token(&app).await?;
+    let categories = m365_master_categories(&access_token).await;
+    access_token.zeroize();
+    categories
 }
 
 #[tauri::command]

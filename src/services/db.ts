@@ -33,6 +33,7 @@ import type {
   VaultStatus
 } from "../types/vault";
 import type {
+  Microsoft365CalendarCategory,
   Microsoft365ConnectionStatus,
   Microsoft365DeviceCode,
   Microsoft365PollResult,
@@ -45,6 +46,7 @@ import type {
 import type { DocumentConflictDecision, DocumentItem, DocumentMutationRequest, DocumentOfflineFolderResult, DocumentSource, DocumentSyncConflict, DocumentSyncSummary, DocumentTransferRequest, DocumentTransferResult, DocumentUploadResult, DocumentVersion, SystemFileIcon } from "../types/documents";
 import type { PhoneTransferStatus } from "../types/phoneTransfer";
 import type { AddNetworkPrinterRequest, PrinterDriver, PrinterInfo } from "../types/printer";
+import type { AuditLogEntry } from "../types/audit";
 
 export function listPrinters(): Promise<PrinterInfo[]> {
   return invoke("list_printers");
@@ -76,6 +78,10 @@ export function stopPhonePhotoTransfer(): Promise<void> {
 
 export function listContacts(search = "", groupId?: number): Promise<Contact[]> {
   return invoke("list_contacts", { search, groupId });
+}
+
+export function listAuditLog(limit = 250): Promise<AuditLogEntry[]> {
+  return invoke("list_audit_log", { limit });
 }
 
 export function getContactOverviewCounts(): Promise<ContactOverviewCounts> {
@@ -325,6 +331,10 @@ export function setAppSetting(key: string, value: string): Promise<void> {
 
 export function getMicrosoft365ConnectionStatus(): Promise<Microsoft365ConnectionStatus> {
   return invoke("get_m365_connection_status");
+}
+
+export function listMicrosoft365MasterCategories(): Promise<Microsoft365CalendarCategory[]> {
+  return invoke("list_m365_master_categories");
 }
 
 export function connectMicrosoft365Interactively(): Promise<import("../types/m365").Microsoft365Account> {

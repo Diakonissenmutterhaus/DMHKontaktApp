@@ -20,9 +20,7 @@ reduzir o repositório; o logo exibido na interface continua em `public/`.
 ## Configuração inicial no GitHub
 
 1. Manter somente a branch `main` como fonte dos builds publicados.
-2. Em **Settings > Environments**, criar:
-   - `admin-test`, sem aprovação obrigatória;
-   - `production`, com o administrador como *required reviewer* e sem autoaprovação, se o plano do repositório disponibilizar essa proteção.
+2. Opcionalmente, em **Settings > Environments**, criar `admin-test` para validações manuais isoladas. A publicação oficial automática não usa ambiente com aprovação manual.
 3. Confirmar em **Settings > Secrets and variables > Actions**:
    - em **Variables**: `M365_CLIENT_ID` e `M365_TENANT_ID`;
    - em **Secrets**: `TAURI_SIGNING_PRIVATE_KEY`;
@@ -36,7 +34,7 @@ reduzir o repositório; o logo exibido na interface continua em `public/`.
    - em **Secrets**: `MIGRATION_CAPTURE_URL`.
 4. Verificar se **Actions > General > Workflow permissions** permite escrita do `GITHUB_TOKEN`, necessária para publicar releases.
 
-O ambiente `production` funciona como o último portão humano. Se a conta/plano não disponibilizar revisores obrigatórios para este repositório, o workflow continua sendo manual e executa todas as verificações antes de publicar diretamente o commit selecionado da `main`.
+Todos os segredos de publicação devem ficar no nível do repositório em **Actions Secrets**, pois cada push na `main` publica diretamente após as verificações obrigatórias.
 
 ## Assinatura Authenticode interna
 
@@ -58,34 +56,19 @@ uma publicação sem assinatura. Computadores internos que instalem o aplicativo
 precisam receber o `.cer` público em **Trusted Root Certification Authorities**
 e **Trusted Publishers**, preferencialmente por GPO.
 
-## Fluxo automático: push -> Admin Test -> release oficial
+## Fluxo automático: push -> release oficial para usuárias
 
-Cada `push` para `main` inicia automaticamente o workflow **Admin-Test-Version veröffentlichen**.
-Ele testa o commit enviado e, somente depois de compilar e assinar o instalador, substitui a
-release prévia rolante `admin-test`. O instalador fica disponível na página dessa release
-para download do administrador; o canal Admin Test também pode atualizá-lo pelo próprio updater.
+Cada `push` para `main` inicia automaticamente o workflow **Offizielle Windows-Version veröffentlichen**.
+Ele executa build, testes de frontend, testes E2E, testes Rust e verifica a configuração de
+assinatura. Somente se tudo passar, publica uma release estável assinada para as instalações
+oficiais. O workflow não exige mais uma aprovação manual do ambiente `production`.
 
-O workflow cancela uma execução antiga quando chegam vários pushes seguidos. Assim, a versão
-disponível é sempre a última que terminou com sucesso. A numeração automática usa a versão-base
-do `package.json` com `-beta.<número da execução>`.
+A versão publicada é gerada como `0.1.<número-da-execução>` para garantir uma versão SemVer nova
+em cada push. A instalação oficial consulta `latest.json` ao abrir e apresenta a atualização para
+a usuária quando houver uma versão mais recente.
 
-## Release oficial depois da aprovação do Admin Test
-
-1. Implementar a alteração, fazer commit na `main` e enviá-la ao GitHub.
-2. Aguardar `CI` e **Admin-Test-Version veröffentlichen**.
-3. Baixar o instalador em `Releases > admin-test` e testá-lo como administrador.
-4. Copiar o SHA exibido na release prévia e confirmar que a versão-base existente no código está consistente:
-
-   ```powershell
-   npm run version:check
-   ```
-
-5. Em **Actions > Offizielle Windows-Version veröffentlichen > Run workflow**, selecionar `main`, informar o SHA testado em `source_ref` e a próxima versão oficial, por exemplo `0.1.1`.
-6. Aprovar o ambiente `production`. O workflow só libera a versão se:
-    - a versão informada for aplicada e conferida automaticamente em todos os manifestos e lockfiles do build;
-    - testes e build passarem;
-    - o endpoint EDV e a assinatura de produção estiverem configurados.
-7. Depois da publicação, as instalações oficiais consultam `latest.json` automaticamente ao abrir. Se houver uma versão nova, aparece a janela **Neue Version verfuegbar** para baixar e instalar; o instalador é aplicado ao fechar e abrir o app novamente.
+O canal **Admin Test** permanece disponível somente manualmente, quando a EDV quiser validar uma
+cópia isolada antes de enviar uma alteração para `main`.
 
 ## Admin Test manual (quando necessário)
 
@@ -134,14 +117,16 @@ Além da Sicherung manual, o aplicativo mantém automaticamente uma Sicherung cu
 
 A versão-base fica consistente no código. Tanto o sufixo beta do Admin Test quanto o número final escolhido para a release oficial são aplicados no servidor temporário de build; portanto, publicar uma versão não cria commits descartáveis nem deixa manifestos e lockfiles divergentes.
 
-## Primeira publicação 0.1.0
+## Primeira publicação automática
 
 1. Rodar `npm run version:check` e confirmar que todos os arquivos mostram a mesma versão-base.
 2. Confirmar que a CI da `main` passou.
-3. Fazer push para `main` e validar o Admin Test automático.
-4. Executar a release oficial `0.1.0` com o mesmo SHA testado e aprovar `production`.
-5. Instalar a release oficial em um PC piloto antes de distribuí-la às usuárias.
+3. Fazer push para `main`.
+4. Acompanhar **Offizielle Windows-Version veröffentlichen** em Actions. Após sucesso, a release
+   assinada fica disponível e a instalação oficial encontra a atualização automaticamente.
 
 ## Rollback
 
-Não substitua silenciosamente uma release oficial já distribuída. Se houver defeito em `0.1.1`, corrija na `main`, aguarde o Admin Test automático, teste como `0.1.2-beta.1` e publique `0.1.2`. Guarde os instaladores antigos para recuperação manual, mas prefira sempre avançar com uma versão de correção.
+Não substitua silenciosamente uma release oficial já distribuída. Se houver defeito, corrija na
+`main` e envie um novo commit. O workflow publica uma nova versão crescente. Guarde os
+instaladores antigos para recuperação manual, mas prefira sempre avançar com uma versão de correção.

@@ -20,7 +20,9 @@ import {
 import {
   listCalendarEvents,
   listCalendarEventsInRange,
+  getMicrosoft365ConnectionStatus,
   getCalendarOverview,
+  listMicrosoft365MasterCategories,
   mergeCalendarEvents,
   moveCalendarEventsToTrash,
   restoreCalendarEvents,
@@ -689,6 +691,30 @@ export function CalendarPage({ advancedMode, onAdvancedModeChange, onNavigate }:
     localStorage.setItem(calendarCategoriesStorageKey, JSON.stringify(sorted));
   };
 
+  useEffect(() => {
+    if (!editingEvent || !("__TAURI_INTERNALS__" in window)) return;
+    let cancelled = false;
+    void (async () => {
+      const status = await getMicrosoft365ConnectionStatus();
+      if (!status.connected) return;
+      const remoteCategories = await listMicrosoft365MasterCategories();
+      if (cancelled || remoteCategories.length === 0) return;
+      setCategories((current) => {
+        const byName = new Map<string, CalendarCategory>();
+        for (const category of current.map(normalizeCategory).filter((entry) => entry.name)) {
+          byName.set(category.name.toLowerCase(), category);
+        }
+        for (const category of remoteCategories.map(normalizeCategory).filter((entry) => entry.name)) {
+          byName.set(category.name.toLowerCase(), category);
+        }
+        const next = Array.from(byName.values()).sort((left, right) => left.name.localeCompare(right.name, "de"));
+        localStorage.setItem(calendarCategoriesStorageKey, JSON.stringify(next));
+        return next;
+      });
+    })().catch(() => undefined);
+    return () => { cancelled = true; };
+  }, [editingEvent?.id, editingIsNew]);
+
   const reviewExactDuplicates = async () => {
     setMessage("Kalender wird auf Duplikate geprüft …");
     try {
@@ -1109,7 +1135,7 @@ export function CalendarPage({ advancedMode, onAdvancedModeChange, onNavigate }:
   };
 
   return (
-    <div className="page calendar-page">
+    <div className={`page calendar-page${totalCalendarEvents === 0 ? " calendar-empty" : ""}`}>
       <header className="page-header">
         <div>
           <h2>Kalender</h2>
@@ -1242,7 +1268,9 @@ export function CalendarPage({ advancedMode, onAdvancedModeChange, onNavigate }:
       {!calendarLoaded ? (
         <div className="page-loading">Kalender wird geladen …</div>
       ) : totalCalendarEvents === 0 ? (
-        <EmptyImportState kind="calendar" onEasyImport={() => setEasyImportOpen(true)} onManualImport={() => onNavigate("calendar-import")} />
+        <div className="empty-import-screen">
+          <EmptyImportState kind="calendar" onEasyImport={() => setEasyImportOpen(true)} onManualImport={() => onNavigate("calendar-import")} />
+        </div>
       ) : <section className={advancedMode ? "calendar-shell advanced-calendar-shell" : "calendar-shell"}>
         {advancedMode && (
           <aside className="advanced-calendar-navigation" aria-label="Erweiterte Kalendernavigation">

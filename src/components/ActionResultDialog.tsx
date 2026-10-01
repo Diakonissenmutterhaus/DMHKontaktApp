@@ -12,6 +12,9 @@ export interface ActionResult {
   items?: Array<{ label: string; detail?: string }>;
   itemsLabel?: string;
   tone?: ActionResultTone;
+  /** Stable key for an optional, per-action preference to hide this success dialog in the future. */
+  dismissalKey?: string;
+  dismissalLabel?: string;
 }
 
 interface ActionResultDialogProps {
@@ -21,8 +24,24 @@ interface ActionResultDialogProps {
 
 export function ActionResultDialog({ result, onClose }: ActionResultDialogProps) {
   const [visibleItemCount, setVisibleItemCount] = useState(100);
+  const [dismissFutureResults, setDismissFutureResults] = useState(false);
 
-  useEffect(() => setVisibleItemCount(100), [result]);
+  const preferenceStorageKey = result?.dismissalKey ? `agendakontakte.dismissedActionResult.${result.dismissalKey}` : undefined;
+  const isDismissed = preferenceStorageKey ? localStorage.getItem(preferenceStorageKey) === "true" : false;
+
+  const close = () => {
+    if (dismissFutureResults && preferenceStorageKey) localStorage.setItem(preferenceStorageKey, "true");
+    onClose();
+  };
+
+  useEffect(() => {
+    setVisibleItemCount(100);
+    setDismissFutureResults(false);
+  }, [result]);
+
+  useEffect(() => {
+    if (result && isDismissed) onClose();
+  }, [isDismissed, onClose, result]);
 
   useEffect(() => {
     if (!result) return;
@@ -38,13 +57,13 @@ export function ActionResultDialog({ result, onClose }: ActionResultDialogProps)
   useEffect(() => {
     if (!result) return;
     const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key === "Escape") onClose();
+      if (event.key === "Escape") close();
     };
     window.addEventListener("keydown", closeOnEscape);
     return () => window.removeEventListener("keydown", closeOnEscape);
-  }, [onClose, result]);
+  }, [close, result]);
 
-  if (!result) return null;
+  if (!result || isDismissed) return null;
 
   const tone = result.tone ?? "info";
   const Icon = tone === "success" ? CheckCircle2 : tone === "error" ? AlertCircle : Info;
@@ -58,7 +77,7 @@ export function ActionResultDialog({ result, onClose }: ActionResultDialogProps)
             <p className="action-result-kicker">Ergebnis</p>
             <h3 id="action-result-title">{result.title}</h3>
           </div>
-          <button className="icon-only" type="button" aria-label="Schließen" onClick={onClose} autoFocus>
+          <button className="icon-only" type="button" aria-label="Schließen" onClick={close} autoFocus>
             <X size={22} />
           </button>
         </div>
@@ -87,8 +106,14 @@ export function ActionResultDialog({ result, onClose }: ActionResultDialogProps)
             )}
           </details>
         )}
+        {result.dismissalKey && (
+          <label className="action-result-dismiss-option">
+            <input type="checkbox" checked={dismissFutureResults} onChange={(event) => setDismissFutureResults(event.target.checked)} />
+            <span>{result.dismissalLabel ?? "Diesen Hinweis nicht mehr anzeigen"}</span>
+          </label>
+        )}
         <div className="button-row action-result-actions">
-          <button className="primary" type="button" onClick={onClose}>Verstanden</button>
+          <button className="primary" type="button" onClick={close}>Verstanden</button>
         </div>
       </section>
     </div>

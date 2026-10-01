@@ -1,23 +1,31 @@
 name: Offizielle Windows-Version veröffentlichen
 
 on:
+  push:
+    branches:
+      - main
   workflow_dispatch:
     inputs:
       source_ref:
-        description: "Zu veröffentlichender, zuvor getesteter Commit oder main"
-        required: true
-        default: "main"
+        description: "Optionaler Commit oder Branch für eine manuelle Veröffentlichung"
+        required: false
+        default: ""
         type: string
       version:
-        description: "Offizielle SemVer-Version (mindestens 0.1.1)"
-        required: true
-        default: "0.1.1"
+        description: "Optionale offizielle SemVer-Version; leer verwendet automatisch 0.1.<Run-Nummer>"
+        required: false
+        default: ""
         type: string
       release_notes:
         description: "Kurzer Hinweis für die Download-Seite"
         required: false
         default: "Stabilitäts- und Funktionsverbesserungen für DMH Backup."
         type: string
+
+env:
+  RELEASE_VERSION: ${{ inputs.version || format('0.1.{0}', github.run_number) }}
+  RELEASE_SOURCE_REF: ${{ inputs.source_ref || github.sha }}
+  RELEASE_NOTES: ${{ inputs.release_notes || 'Stabilitäts- und Funktionsverbesserungen für DMH Backup.' }}
 
 concurrency:
   group: release-stable
@@ -38,7 +46,7 @@ jobs:
         shell: pwsh
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          RELEASE_VERSION: ${{ inputs.version }}
+          RELEASE_VERSION: ${{ env.RELEASE_VERSION }}
         run: |
           if ("${{ github.ref }}" -ne "refs/heads/main") {
             throw "Offizielle Releases müssen über den Workflow auf dem Branch main gestartet werden."
@@ -78,7 +86,7 @@ jobs:
         shell: pwsh
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          SOURCE_REF: ${{ inputs.source_ref }}
+          SOURCE_REF: ${{ env.RELEASE_SOURCE_REF }}
         run: |
           $ErrorActionPreference = "Stop"
           $sourceRef = $env:SOURCE_REF.Trim()
@@ -131,8 +139,8 @@ jobs:
       - name: Offizielle Versionsnummer setzen und prüfen
         id: set_release_version
         run: |
-          node scripts/set-version.mjs "${{ inputs.version }}"
-          node scripts/check-version.mjs "${{ inputs.version }}"
+          node scripts/set-version.mjs "${{ env.RELEASE_VERSION }}"
+          node scripts/check-version.mjs "${{ env.RELEASE_VERSION }}"
 
       - name: Farbschemas prüfen
         id: check_theme
@@ -181,7 +189,7 @@ jobs:
         id: verify_diagnostics
         shell: pwsh
         env:
-          REQUESTED_VERSION: ${{ inputs.version }}
+          REQUESTED_VERSION: ${{ env.RELEASE_VERSION }}
           RESOLVED_SHA: ${{ steps.resolve_source.outputs.sha }}
           VALIDATE_OUTCOME: ${{ steps.validate_request.outcome }}
           CHECKOUT_OUTCOME: ${{ steps.checkout_source.outcome }}
@@ -236,7 +244,6 @@ jobs:
   release-windows:
     name: Produktion freigeben
     needs: verify
-    environment: production
     permissions:
       contents: write
     runs-on: windows-latest
@@ -272,8 +279,8 @@ jobs:
       - name: Offizielle Versionsnummer erneut setzen und prüfen
         id: set_release_version
         run: |
-          node scripts/set-version.mjs "${{ inputs.version }}"
-          node scripts/check-version.mjs "${{ inputs.version }}"
+          node scripts/set-version.mjs "${{ env.RELEASE_VERSION }}"
+          node scripts/check-version.mjs "${{ env.RELEASE_VERSION }}"
 
       - name: EDV-Endpunkt validieren
         id: check_edv_configuration
@@ -337,10 +344,10 @@ jobs:
           M365_CLIENT_ID: ${{ vars.M365_CLIENT_ID }}
           M365_TENANT_ID: ${{ vars.M365_TENANT_ID }}
         with:
-          tagName: v${{ inputs.version }}
-          releaseName: DMH Backup v${{ inputs.version }}
+          tagName: v${{ env.RELEASE_VERSION }}
+          releaseName: DMH Backup v${{ env.RELEASE_VERSION }}
           releaseBody: |
-            ${{ inputs.release_notes }}
+            ${{ env.RELEASE_NOTES }}
 
             Enthaltene Windows-Downloads:
             - EXE-Installer für die einfache Installation
@@ -356,7 +363,7 @@ jobs:
         id: publish_diagnostics
         shell: pwsh
         env:
-          REQUESTED_VERSION: ${{ inputs.version }}
+          REQUESTED_VERSION: ${{ env.RELEASE_VERSION }}
           SOURCE_SHA: ${{ needs.verify.outputs.source_sha }}
           CHECKOUT_OUTCOME: ${{ steps.checkout_source.outcome }}
           INSTALL_OUTCOME: ${{ steps.install_dependencies.outcome }}

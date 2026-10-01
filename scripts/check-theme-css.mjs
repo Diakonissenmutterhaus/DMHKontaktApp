@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const css = fs.readFileSync(path.join(root, "src/styles.css"), "utf8");
 const html = fs.readFileSync(path.join(root, "index.html"), "utf8");
+const theme = fs.readFileSync(path.join(root, "src/utils/theme.ts"), "utf8");
 
 function block(selector) {
   const start = css.indexOf(`${selector} {`);
@@ -40,49 +41,23 @@ function contrast(foreground, background) {
   return (lighter + 0.05) / (darker + 0.05);
 }
 
-const forbiddenPatterns = [
-  /data-color-mode=["']dark["'][^{]*body\s+\*/,
-  /data-color-mode=["']dark["'][\s\S]{0,180}color:\s*#fff(?:fff)?\s*!important/i
-];
-
-for (const pattern of forbiddenPatterns) {
-  if (pattern.test(css)) {
-    throw new Error(`Unsichere globale Dark-Mode-Regel gefunden: ${pattern}`);
-  }
+if (/:root\[data-(?:color-mode|accent)=/.test(css)) {
+  throw new Error("Alternative Farbpaletten dürfen nicht mehr im CSS enthalten sein.");
 }
 
-const requiredTokens = [
-  "--info-surface",
-  "--info-text",
-  "--danger-surface",
-  "--danger-text",
-  "--warning-surface",
-  "--warning-text",
-  "--success-surface",
-  "--success-text"
-];
-
-for (const token of requiredTokens) {
-  if (!block(':root[data-color-mode="dark"]').includes(token)) {
-    throw new Error(`Dark-Mode-Token fehlt: ${token}`);
-  }
-}
-
-for (const selector of [":root", ':root[data-color-mode="dark"]']) {
-  const values = variables(selector);
-  for (const [foreground, background] of [
-    ["text", "surface"],
-    ["info-text", "info-surface"],
-    ["danger-text", "danger-surface"],
-    ["warning-text", "warning-surface"],
-    ["success-text", "success-surface"]
-  ]) {
-    const ratio = contrast(values.get(foreground), values.get(background));
-    if (ratio < 4.5) {
-      throw new Error(
-        `${selector}: Kontrast ${foreground}/${background} ist mit ${ratio.toFixed(2)} zu niedrig.`
-      );
-    }
+const values = variables(":root");
+for (const [foreground, background] of [
+  ["text", "surface"],
+  ["info-text", "info-surface"],
+  ["danger-text", "danger-surface"],
+  ["warning-text", "warning-surface"],
+  ["success-text", "success-surface"]
+]) {
+  const ratio = contrast(values.get(foreground), values.get(background));
+  if (ratio < 4.5) {
+    throw new Error(
+      `Standarddesign: Kontrast ${foreground}/${background} ist mit ${ratio.toFixed(2)} zu niedrig.`
+    );
   }
 }
 
@@ -103,10 +78,11 @@ for (const [selector, tokens] of semanticBlocks) {
   }
 }
 
-const themeBootstrap = html.indexOf('localStorage.getItem("agendakontakte.theme.colorMode")');
-const appModule = html.indexOf('type="module"');
-if (themeBootstrap < 0 || appModule < 0 || themeBootstrap > appModule) {
-  throw new Error("Das gespeicherte Farbschema muss vor dem App-Modul initialisiert werden.");
+if (/agendakontakte\.theme\.|data-color-mode=|data-accent=/.test(html)) {
+  throw new Error("Die Startseite darf keine alten Farbwünsche mehr laden.");
+}
+if (!theme.includes('dataset.colorMode = "light"') || !theme.includes('dataset.accent = "pink"')) {
+  throw new Error("Das Standarddesign muss beim Start erzwungen werden.");
 }
 
-console.log("Theme-CSS und Initialisierung sind konsistent.");
+console.log("Das helle DMH-Standarddesign und seine Kontraste sind konsistent.");

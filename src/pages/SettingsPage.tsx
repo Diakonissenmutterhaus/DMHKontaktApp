@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
-import { AlertCircle, AlertTriangle, Bell, CalendarDays, CheckCircle2, ChevronDown, Cloud, ContactRound, Database, Download, Eye, EyeOff, HeartPulse, History, Mail, RefreshCw, Search, Trash2, X } from "lucide-react";
+import { AlertCircle, AlertTriangle, Bell, CalendarDays, CheckCircle2, ChevronDown, Cloud, ContactRound, Database, Download, Eye, EyeOff, HeartPulse, Mail, RefreshCw, Search, Trash2, X } from "lucide-react";
+import { AuditHistoryPanel } from "../components/AuditHistoryPanel";
 import { PrinterSettings } from "../components/PrinterSettings";
 import { StatusMessage } from "../components/StatusMessage";
 import { updateAvailableEvent } from "../components/UpdateNotifier";
@@ -12,7 +13,6 @@ import {
   getRecoveryArchiveStatus,
   getWelcomeDataCounts,
   importOutlookAccount,
-  listAuditLog,
   listMailAccounts,
   revealMailPassword,
   removeMailAccount,
@@ -21,7 +21,6 @@ import {
   testMailConnection
 } from "../services/db";
 import type { MailAccount, OutlookAccountCandidate } from "../types/mail";
-import type { AuditLogEntry } from "../types/audit";
 import { deletionConfirmationSettingKey } from "../utils/settings";
 
 interface SettingsPageProps {
@@ -53,7 +52,6 @@ const settingsSearchItems: SettingsSearchItem[] = [
   { id: "mail", label: "E-Mail-Konten verwalten", description: "E-Mail & Konten → Konten", keywords: "e-mail mail konto konten outlook verwalten kennwort", page: "settings", section: "mail", targetId: "settings-mail-accounts" },
   { id: "printer", label: "Drucker hinzufügen", description: "Drucker → Netzwerkdrucker", keywords: "drucker printer netzwerk freigabe ip hinzufügen", page: "settings", section: "printer" },
   { id: "backup", label: "Sicherung öffnen", description: "Sicherung → Öffnen", keywords: "sicherung backup daten wiederherstellen export", page: "backup", section: "backup" },
-  { id: "appearance", label: "Erscheinungsbild öffnen", description: "Erscheinungsbild → Darstellung", keywords: "erscheinungsbild thema farbe dunkel hell akzent", page: "appearance", section: "appearance" },
   { id: "advanced", label: "Optionale Bereiche", description: "Erweitert → optionale Bereiche", keywords: "erweitert optional 2fa passwörter dokumente", page: "feature-development", section: "advanced" },
   { id: "update", label: "App-Aktualisierung", description: "Allgemein → Nach Updates suchen", keywords: "update aktualisierung neue version github", page: "settings", section: "general" },
   { id: "activities", label: "Aktivitäten", description: "Allgemein → Bedienung", keywords: "aktivitäten verlauf protokoll benachrichtigungen einschalten ausschalten", page: "settings", section: "general", targetId: "settings-activity-center" },
@@ -78,8 +76,6 @@ export function SettingsPage({
   const [searchIndex, setSearchIndex] = useState(0);
   const [confirmDeletions, setConfirmDeletions] = useState(true);
   const [systemCheck, setSystemCheck] = useState<SystemCheckItem[] | null>(null);
-  const [auditEntries, setAuditEntries] = useState<AuditLogEntry[]>([]);
-  const [auditLoading, setAuditLoading] = useState(false);
   const [revealedPassword, setRevealedPassword] = useState<{
     accountId: number;
     accountLabel: string;
@@ -114,18 +110,6 @@ export function SettingsPage({
     setAccounts(result);
   };
 
-  const refreshAuditLog = async () => {
-    setAuditLoading(true);
-    try {
-      setAuditEntries(await listAuditLog());
-    } catch (error) {
-      setMessageType("error");
-      setMessage(`Die Historie konnte nicht geladen werden: ${error}`);
-    } finally {
-      setAuditLoading(false);
-    }
-  };
-
   useEffect(() => {
     refreshAccounts().catch((error) => {
       setMessageType("error");
@@ -135,10 +119,6 @@ export function SettingsPage({
       .then((value) => setConfirmDeletions(value !== "false"))
       .catch(() => setConfirmDeletions(true));
   }, []);
-
-  useEffect(() => {
-    if (section === "history") void refreshAuditLog();
-  }, [section]);
 
   const updateDeletionConfirmation = async (enabled: boolean) => {
     const previous = confirmDeletions;
@@ -583,39 +563,7 @@ export function SettingsPage({
         </div>
       )}
 
-      {section === "history" && (
-        <section className="form-panel audit-log-panel" aria-labelledby="audit-log-title">
-          <div className="panel-heading">
-            <div>
-              <h3 id="audit-log-title"><History size={23} aria-hidden="true" /> Historie</h3>
-              <p>Änderungen an Kontakten, Gruppen, Terminen, Importen und Einstellungen mit Datum, Uhrzeit und Windows-Benutzer.</p>
-            </div>
-            <button type="button" onClick={() => void refreshAuditLog()} disabled={auditLoading}>
-              <RefreshCw size={18} className={auditLoading ? "spin" : ""} /> {auditLoading ? "Wird geladen …" : "Aktualisieren"}
-            </button>
-          </div>
-          <p className="audit-log-note">Einträge werden lokal in der App-Datenbank abgelegt und können in dieser Oberfläche nicht gelöscht werden.</p>
-          {auditEntries.length === 0 && !auditLoading ? (
-            <div className="audit-log-empty">
-              <History size={34} aria-hidden="true" />
-              <strong>Noch keine protokollierten Änderungen</strong>
-              <p>Neue Änderungen erscheinen hier automatisch.</p>
-            </div>
-          ) : (
-            <div className="audit-log-list" aria-live="polite">
-              {auditEntries.map((entry) => (
-                <article className="audit-log-entry" key={entry.id}>
-                  <time dateTime={entry.occurredAt}>{new Date(entry.occurredAt).toLocaleString("de-DE", { dateStyle: "medium", timeStyle: "medium" })}</time>
-                  <div>
-                    <strong>{entry.summary}</strong>
-                    <span>{entry.actor}</span>
-                  </div>
-                </article>
-              ))}
-            </div>
-          )}
-        </section>
-      )}
+      {section === "history" && <AuditHistoryPanel />}
 
       {section === "printer" && <PrinterSettings />}
 

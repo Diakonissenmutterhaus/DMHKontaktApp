@@ -3,10 +3,7 @@ import {
   flushMicrosoft365CalendarOutbox,
   flushMicrosoft365ContactOutbox,
   getAppSetting,
-  getSyncBackupData,
   getMicrosoft365ConnectionStatus,
-  moveCalendarEventsToTrashFromMicrosoft365,
-  saveCalendarEventsFromMicrosoft365,
   setAppSetting
 } from "../services/db";
 import type { CalendarEvent } from "../types/calendar";
@@ -93,10 +90,10 @@ function parseHistory(raw: string | null): Microsoft365SyncHistoryEntry[] {
   }
 }
 
-async function applyCalendarChanges(calendarUpserts: CalendarEvent[], calendarDeletes: string[]): Promise<void> {
+function announceCalendarChanges(calendarUpserts: CalendarEvent[], calendarDeletes: string[]): void {
   if (calendarUpserts.length === 0 && calendarDeletes.length === 0) return;
-  if (calendarUpserts.length > 0) await saveCalendarEventsFromMicrosoft365(calendarUpserts);
-  if (calendarDeletes.length > 0) await moveCalendarEventsToTrashFromMicrosoft365(calendarDeletes);
+  // apply_m365_sync already committed the events and delta acknowledgements
+  // atomically in SQLite before returning to the WebView.
   mergeImportedCalendarCategories(calendarUpserts);
   window.dispatchEvent(new Event(calendarStorageUpdatedEventName));
 }
@@ -169,7 +166,11 @@ export async function runAutomaticCalendarSync(trigger: "open" | "change" | "pol
         (config.sourceDirections[sourceId] ?? config.direction) !== "export")
     : [];
   for (const sourceId of inboundContactSourceIds) reconciliationSourceDirections[sourceId] = "import";
-  const shouldRunReconciliation = inboundContactSourceIds.length > 0 || inboundCalendarSourceIds.length > 0;
+  // A local change only flushes the durable outboxes above. Rebuilding the full
+  // import plan is reserved for opening the app and the periodic background poll.
+  // This keeps typing or moving an appointment responsive on slower computers.
+  const shouldRunReconciliation = trigger !== "change"
+    && (inboundContactSourceIds.length > 0 || inboundCalendarSourceIds.length > 0);
 
   if (!shouldRunReconciliation) {
     const queueErrors = queued.errors + queuedContacts.errors;
@@ -192,10 +193,8 @@ export async function runAutomaticCalendarSync(trigger: "open" | "change" | "pol
       : { state: "success", message: "Microsoft 365 ist bereits synchron." };
   }
 
-  // Calendar records are read directly by the native synchronizer. This keeps
-  // large calendars out of the WebView and avoids a second full backup on each
-  // 30-second synchronization cycle.
-  const backup = await getSyncBackupData();
+  // The native synchronizer reads its compact backup directly from SQLite. This
+  // avoids sending contacts and settings through the WebView on every poll.
   const result = await applyMicrosoft365Sync({
     direction: config.direction,
     base: config.base,
@@ -208,11 +207,10 @@ export async function runAutomaticCalendarSync(trigger: "open" | "change" | "pol
     selectedContactSourceIds: inboundContactSourceIds,
     selectedCalendarSourceIds: inboundCalendarSourceIds,
     sourceDirections: reconciliationSourceDirections,
-    decisions: {},
-    backup
+    decisions: {}
   });
 
-  await applyCalendarChanges(result.calendarUpserts, result.calendarDeletes);
+  announceCalendarChanges(result.calendarUpserts, result.calendarDeletes);
   if (result.created + result.updated + result.deleted > 0) {
     window.dispatchEvent(new Event(m365DataUpdatedEventName));
   }

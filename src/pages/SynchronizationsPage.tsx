@@ -21,12 +21,12 @@ import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { StatusMessage } from "../components/StatusMessage";
 import type { SettingsSection } from "../components/SettingsSubtabs";
 import type { Page } from "../components/Sidebar";
-import { applyMicrosoft365Sync, cancelMicrosoft365Connection, connectMicrosoft365Interactively, createAutomaticSafetyBackup, disconnectMicrosoft365Account, getAppSetting, getMicrosoft365ConnectionStatus, getSyncBackupData, listMicrosoft365SyncSources, moveCalendarEventsToTrash, openMicrosoft365SignIn, pollMicrosoft365Connection, previewMicrosoft365Sync, saveCalendarEvents, setAppSetting, startMicrosoft365Connection, testMicrosoft365Connection } from "../services/db";
+import { applyMicrosoft365Sync, cancelMicrosoft365Connection, connectMicrosoft365Interactively, createAutomaticSafetyBackup, disconnectMicrosoft365Account, getAppSetting, getMicrosoft365ConnectionStatus, getSyncBackupData, listMicrosoft365SyncSources, openMicrosoft365SignIn, pollMicrosoft365Connection, previewMicrosoft365Sync, setAppSetting, startMicrosoft365Connection, testMicrosoft365Connection } from "../services/db";
 import type { Microsoft365ConflictDecision, Microsoft365ConnectionStatus, Microsoft365DeviceCode, Microsoft365PollResult, Microsoft365SyncHistoryEntry, Microsoft365SyncPreview, Microsoft365SyncSource, Microsoft365SyncSources } from "../types/m365";
 import { defaultSyncConfig, parseSyncConfig, type SyncConfig, type SyncDirection } from "../types/sync";
 import { captureBrowserStorage } from "../utils/backup";
 import { mergeImportedCalendarCategories } from "../utils/calendar";
-import { calendarChangedEventName, recordMicrosoft365SynchronizationError, recordMicrosoft365SynchronizationSuccess, synchronizationConfigKey as syncConfigKey, synchronizationHistoryKey as syncHistoryKey } from "../utils/automaticCalendarSync";
+import { calendarChangedEventName, calendarStorageUpdatedEventName, recordMicrosoft365SynchronizationError, recordMicrosoft365SynchronizationSuccess, synchronizationConfigKey as syncConfigKey, synchronizationHistoryKey as syncHistoryKey } from "../utils/automaticCalendarSync";
 import { initializeMicrosoft365SourceSelection, isTechnicalMicrosoft365Source } from "../utils/microsoft365SyncConfig";
 
 interface SynchronizationsPageProps {
@@ -406,9 +406,10 @@ export function SynchronizationsPage({ onNavigate, embedded = false, onClose }: 
         backup
       });
       if (result.calendarUpserts.length > 0 || result.calendarDeletes.length > 0) {
-        if (result.calendarUpserts.length > 0) await saveCalendarEvents(result.calendarUpserts);
-        if (result.calendarDeletes.length > 0) await moveCalendarEventsToTrash(result.calendarDeletes);
+        // Rust has already saved these calendar changes together with their
+        // delta acknowledgements. Only refresh the local UI metadata here.
         mergeImportedCalendarCategories(result.calendarUpserts);
+        window.dispatchEvent(new Event(calendarStorageUpdatedEventName));
       }
       await persistHistory({ ...result, id: `${result.startedAt}-${Date.now()}` });
       await recordMicrosoft365SynchronizationSuccess(config, result);

@@ -8,6 +8,7 @@
       {
         "additionalBrowserArgs": "--disable-background-timer-throttling --disable-renderer-backgrounding",
         "height": 780,
+        "maximized": true,
         "minHeight": 600,
         "minWidth": 760,
         "title": "DMH Backup",
@@ -39,18 +40,8 @@
       "nsis"
     ],
     "windows": {
-      "signCommand": {
-        "cmd": "powershell.exe",
-        "args": [
-          "-NoProfile",
-          "-ExecutionPolicy",
-          "Bypass",
-          "-File",
-          "scripts/sign-windows-artifact.ps1",
-          "-ArtifactPath",
-          "%1"
-        ]
-      }
+      "certificateThumbprint": "F9CC201BC20CC23DF35B0E619F71CC9B2BF08BFF",
+      "digestAlgorithm": "sha256"
     }
   },
   "identifier": "de.dmh.agendakontakte",

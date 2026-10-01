@@ -327,7 +327,7 @@ jobs:
           DMH_WINDOWS_CODESIGN_PFX_PASSWORD: ${{ secrets.DMH_WINDOWS_CODESIGN_PFX_PASSWORD }}
         run: powershell -NoProfile -ExecutionPolicy Bypass -File scripts/import-internal-code-signing-certificate.ps1
 
-      - name: Offizielle Tauri-Version bauen und veröffentlichen
+      - name: Offizielle Tauri-Version bauen und als Entwurf hochladen
         id: publish_stable_release
         uses: tauri-apps/tauri-action@v1
         env:
@@ -354,9 +354,31 @@ jobs:
             - MSI-Installer für die Softwareverteilung
 
             Quellstand: ${{ needs.verify.outputs.source_sha }}
-          releaseDraft: false
+          # Erst nach der Prüfung beider Installersignaturen für Benutzer freigeben.
+          releaseDraft: true
           prerelease: false
           updaterJsonPreferNsis: true
+
+      - name: Signierte Installer und Updater prüfen
+        id: verify_signed_release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_VERSION: ${{ env.RELEASE_VERSION }}
+        run: |
+          & ./scripts/verify-windows-release.ps1 -Version $env:RELEASE_VERSION -ReleaseTag "v$env:RELEASE_VERSION"
+
+      - name: Offizielle Version für Benutzer veröffentlichen
+        id: make_release_public
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_VERSION: ${{ env.RELEASE_VERSION }}
+        run: |
+          gh release edit "v$env:RELEASE_VERSION" --repo $env:GITHUB_REPOSITORY --draft=false --latest
+          if ($LASTEXITCODE -ne 0) {
+            throw "Die signierte Release wurde geprüft, konnte aber nicht veröffentlicht werden. Der Entwurf bleibt zur Prüfung erhalten."
+          }
 
       - name: Veröffentlichungs-Diagnosebericht erstellen
         if: always()
@@ -371,6 +393,8 @@ jobs:
           EDV_OUTCOME: ${{ steps.check_edv_configuration.outcome }}
           SIGNING_OUTCOME: ${{ steps.check_signing_configuration.outcome }}
           PUBLISH_OUTCOME: ${{ steps.publish_stable_release.outcome }}
+          VERIFY_SIGNATURES_OUTCOME: ${{ steps.verify_signed_release.outcome }}
+          MAKE_PUBLIC_OUTCOME: ${{ steps.make_release_public.outcome }}
         run: |
           $reportPath = Join-Path $env:RUNNER_TEMP "stable-publish-diagnostics.txt"
           $report = @(
@@ -387,6 +411,8 @@ jobs:
             "check_edv_configuration=$env:EDV_OUTCOME"
             "check_signing_configuration=$env:SIGNING_OUTCOME"
             "publish=$env:PUBLISH_OUTCOME"
+            "verify_signatures=$env:VERIFY_SIGNATURES_OUTCOME"
+            "make_public=$env:MAKE_PUBLIC_OUTCOME"
             "created_utc=$([DateTime]::UtcNow.ToString('o'))"
           )
           $report | Set-Content -LiteralPath $reportPath -Encoding utf8

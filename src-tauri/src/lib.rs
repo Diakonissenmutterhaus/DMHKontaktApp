@@ -259,10 +259,31 @@ pub struct AuditLogEntry {
     pub id: i64,
     pub occurred_at: String,
     pub actor: String,
+    pub source: String,
     pub action: String,
     pub entity_kind: String,
     pub entity_id: Option<String>,
     pub summary: String,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AuditLogFilter {
+    pub search: Option<String>,
+    pub action: Option<String>,
+    pub entity_kind: Option<String>,
+    pub source: Option<String>,
+    pub from_at: Option<String>,
+    pub before_at: Option<String>,
+    pub before_id: Option<i64>,
+    pub limit: Option<usize>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AuditLogPage {
+    pub entries: Vec<AuditLogEntry>,
+    pub has_more: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -978,12 +999,14 @@ fn init_db(app: &AppHandle) -> Result<(), String> {
         );
         CREATE TABLE IF NOT EXISTS audit_context (
             id INTEGER PRIMARY KEY CHECK (id = 1),
-            actor TEXT NOT NULL
+            actor TEXT NOT NULL,
+            source TEXT NOT NULL DEFAULT 'user'
         );
         CREATE TABLE IF NOT EXISTS audit_log (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             occurred_at TEXT NOT NULL,
             actor TEXT NOT NULL,
+            source TEXT NOT NULL DEFAULT 'user',
             action TEXT NOT NULL,
             entity_kind TEXT NOT NULL,
             entity_id TEXT,
@@ -1041,28 +1064,38 @@ fn init_db(app: &AppHandle) -> Result<(), String> {
           INSERT INTO audit_log(occurred_at, actor, action, entity_kind, entity_id, summary)
           VALUES(strftime('%Y-%m-%dT%H:%M:%fZ','now'), (SELECT actor FROM audit_context WHERE id = 1), 'purged', 'group', CAST(OLD.id AS TEXT), printf('Gruppe endgültig gelöscht: %s', OLD.name));
         END;
-        CREATE TRIGGER IF NOT EXISTS audit_calendar_insert AFTER INSERT ON calendar_events BEGIN
+        DROP TRIGGER IF EXISTS audit_calendar_insert;
+        DROP TRIGGER IF EXISTS audit_calendar_changed;
+        DROP TRIGGER IF EXISTS audit_calendar_deleted;
+        DROP TRIGGER IF EXISTS audit_calendar_restored;
+        DROP TRIGGER IF EXISTS audit_calendar_purged;
+        CREATE TRIGGER audit_calendar_insert AFTER INSERT ON calendar_events BEGIN
           INSERT INTO audit_log(occurred_at, actor, action, entity_kind, entity_id, summary)
-          VALUES(strftime('%Y-%m-%dT%H:%M:%fZ','now'), (SELECT actor FROM audit_context WHERE id = 1), 'created', 'calendar', NEW.id, 'Termin erstellt');
+          VALUES(strftime('%Y-%m-%dT%H:%M:%fZ','now'), (SELECT actor FROM audit_context WHERE id = 1), 'created', 'calendar', NEW.id,
+            printf('Termin erstellt: %s', COALESCE(NULLIF(trim(json_extract(NEW.event_json, '$.title')), ''), 'Ohne Titel')));
         END;
-        CREATE TRIGGER IF NOT EXISTS audit_calendar_changed AFTER UPDATE ON calendar_events
+        CREATE TRIGGER audit_calendar_changed AFTER UPDATE ON calendar_events
           WHEN OLD.deleted_at IS NEW.deleted_at AND NEW.deleted_at IS NULL BEGIN
           INSERT INTO audit_log(occurred_at, actor, action, entity_kind, entity_id, summary)
-          VALUES(strftime('%Y-%m-%dT%H:%M:%fZ','now'), (SELECT actor FROM audit_context WHERE id = 1), 'updated', 'calendar', NEW.id, 'Termin geändert');
+          VALUES(strftime('%Y-%m-%dT%H:%M:%fZ','now'), (SELECT actor FROM audit_context WHERE id = 1), 'updated', 'calendar', NEW.id,
+            printf('Termin geändert: %s', COALESCE(NULLIF(trim(json_extract(NEW.event_json, '$.title')), ''), 'Ohne Titel')));
         END;
-        CREATE TRIGGER IF NOT EXISTS audit_calendar_deleted AFTER UPDATE OF deleted_at ON calendar_events
+        CREATE TRIGGER audit_calendar_deleted AFTER UPDATE OF deleted_at ON calendar_events
           WHEN OLD.deleted_at IS NULL AND NEW.deleted_at IS NOT NULL BEGIN
           INSERT INTO audit_log(occurred_at, actor, action, entity_kind, entity_id, summary)
-          VALUES(strftime('%Y-%m-%dT%H:%M:%fZ','now'), (SELECT actor FROM audit_context WHERE id = 1), 'deleted', 'calendar', NEW.id, 'Termin in Papierkorb verschoben');
+          VALUES(strftime('%Y-%m-%dT%H:%M:%fZ','now'), (SELECT actor FROM audit_context WHERE id = 1), 'deleted', 'calendar', NEW.id,
+            printf('Termin in Papierkorb verschoben: %s', COALESCE(NULLIF(trim(json_extract(NEW.event_json, '$.title')), ''), 'Ohne Titel')));
         END;
-        CREATE TRIGGER IF NOT EXISTS audit_calendar_restored AFTER UPDATE OF deleted_at ON calendar_events
+        CREATE TRIGGER audit_calendar_restored AFTER UPDATE OF deleted_at ON calendar_events
           WHEN OLD.deleted_at IS NOT NULL AND NEW.deleted_at IS NULL BEGIN
           INSERT INTO audit_log(occurred_at, actor, action, entity_kind, entity_id, summary)
-          VALUES(strftime('%Y-%m-%dT%H:%M:%fZ','now'), (SELECT actor FROM audit_context WHERE id = 1), 'restored', 'calendar', NEW.id, 'Termin wiederhergestellt');
+          VALUES(strftime('%Y-%m-%dT%H:%M:%fZ','now'), (SELECT actor FROM audit_context WHERE id = 1), 'restored', 'calendar', NEW.id,
+            printf('Termin wiederhergestellt: %s', COALESCE(NULLIF(trim(json_extract(NEW.event_json, '$.title')), ''), 'Ohne Titel')));
         END;
-        CREATE TRIGGER IF NOT EXISTS audit_calendar_purged BEFORE DELETE ON calendar_events BEGIN
+        CREATE TRIGGER audit_calendar_purged BEFORE DELETE ON calendar_events BEGIN
           INSERT INTO audit_log(occurred_at, actor, action, entity_kind, entity_id, summary)
-          VALUES(strftime('%Y-%m-%dT%H:%M:%fZ','now'), (SELECT actor FROM audit_context WHERE id = 1), 'purged', 'calendar', OLD.id, 'Termin endgültig gelöscht');
+          VALUES(strftime('%Y-%m-%dT%H:%M:%fZ','now'), (SELECT actor FROM audit_context WHERE id = 1), 'purged', 'calendar', OLD.id,
+            printf('Termin endgültig gelöscht: %s', COALESCE(NULLIF(trim(json_extract(OLD.event_json, '$.title')), ''), 'Ohne Titel')));
         END;
         CREATE TRIGGER IF NOT EXISTS audit_imports_insert AFTER INSERT ON import_history BEGIN
           INSERT INTO audit_log(occurred_at, actor, action, entity_kind, entity_id, summary)
@@ -1248,9 +1281,29 @@ fn init_db(app: &AppHandle) -> Result<(), String> {
     )
     .map_err(|err| err.to_string())?;
 
+    ensure_column(
+        &conn,
+        "audit_context",
+        "source",
+        "TEXT NOT NULL DEFAULT 'user'",
+    )?;
+    ensure_column(&conn, "audit_log", "source", "TEXT NOT NULL DEFAULT 'user'")?;
+    conn.execute_batch(
+        "
+        DROP TRIGGER IF EXISTS audit_log_apply_context;
+        CREATE TRIGGER audit_log_apply_context AFTER INSERT ON audit_log
+          WHEN (SELECT source FROM audit_context WHERE id = 1) != 'user' BEGIN
+          UPDATE audit_log
+          SET source = (SELECT source FROM audit_context WHERE id = 1)
+          WHERE id = NEW.id;
+        END;
+        ",
+    )
+    .map_err(|err| err.to_string())?;
+
     conn.execute(
-        "INSERT INTO audit_context(id, actor) VALUES(1, ?1)
-         ON CONFLICT(id) DO UPDATE SET actor = excluded.actor",
+        "INSERT INTO audit_context(id, actor, source) VALUES(1, ?1, 'user')
+         ON CONFLICT(id) DO UPDATE SET actor = excluded.actor, source = 'user'",
         params![audit_actor()],
     )
     .map_err(|err| err.to_string())?;
@@ -1374,6 +1427,16 @@ fn ensure_column(
     Ok(())
 }
 
+fn set_audit_source(transaction: &rusqlite::Transaction<'_>, source: &str) -> Result<(), String> {
+    transaction
+        .execute(
+            "UPDATE audit_context SET source = ?1 WHERE id = 1",
+            params![source],
+        )
+        .map_err(|err| err.to_string())?;
+    Ok(())
+}
+
 fn normalized_calendar_duplicate_key(event: &CalendarEvent) -> String {
     let title = event
         .title
@@ -1417,6 +1480,20 @@ fn write_calendar_events(
     let transaction = conn
         .unchecked_transaction()
         .map_err(|error| error.to_string())?;
+    set_audit_source(
+        &transaction,
+        if queue_for_exchange { "user" } else { "m365" },
+    )?;
+    write_calendar_events_in_transaction(&transaction, events, queue_for_exchange)?;
+    set_audit_source(&transaction, "user")?;
+    transaction.commit().map_err(|error| error.to_string())
+}
+
+fn write_calendar_events_in_transaction(
+    transaction: &rusqlite::Transaction<'_>,
+    events: &[CalendarEvent],
+    queue_for_exchange: bool,
+) -> Result<(), String> {
     {
         let mut statement = transaction
             .prepare(
@@ -1484,7 +1561,7 @@ fn write_calendar_events(
             }
         }
     }
-    transaction.commit().map_err(|error| error.to_string())
+    Ok(())
 }
 
 #[tauri::command]
@@ -1713,11 +1790,27 @@ fn move_calendar_events_to_trash_internal(
     }
     let conn = open_db(&app)?;
     checkpoint_before_destructive_change(&app, &conn)?;
-    let mut changed = 0usize;
-    let timestamp = now();
     let transaction = conn
         .unchecked_transaction()
         .map_err(|error| error.to_string())?;
+    set_audit_source(
+        &transaction,
+        if queue_for_exchange { "user" } else { "m365" },
+    )?;
+    let changed =
+        move_calendar_events_to_trash_in_transaction(&transaction, &ids, queue_for_exchange)?;
+    set_audit_source(&transaction, "user")?;
+    transaction.commit().map_err(|error| error.to_string())?;
+    Ok(changed)
+}
+
+fn move_calendar_events_to_trash_in_transaction(
+    transaction: &rusqlite::Transaction<'_>,
+    ids: &[String],
+    queue_for_exchange: bool,
+) -> Result<usize, String> {
+    let mut changed = 0usize;
+    let timestamp = now();
     for id in ids {
         let json: Option<String> = transaction
             .query_row(
@@ -1752,8 +1845,50 @@ fn move_calendar_events_to_trash_internal(
                 .map_err(|error| error.to_string())?;
         }
     }
-    transaction.commit().map_err(|error| error.to_string())?;
     Ok(changed)
+}
+
+// Commit inbound calendar changes and their Graph delta acknowledgements in
+// the same SQLite transaction. A crash or a failed write must leave the delta
+// queue intact so the next sync can replay it.
+pub(crate) fn commit_m365_calendar_changes(
+    app: &AppHandle,
+    upserts: &[CalendarEvent],
+    deletes: &[String],
+    delta_acks: &[(String, String)],
+) -> Result<(), String> {
+    if upserts.is_empty() && deletes.is_empty() && delta_acks.is_empty() {
+        return Ok(());
+    }
+    let conn = open_db(app)?;
+    if !deletes.is_empty() {
+        checkpoint_before_destructive_change(app, &conn)?;
+    }
+    commit_m365_calendar_changes_in_db(&conn, upserts, deletes, delta_acks)
+}
+
+fn commit_m365_calendar_changes_in_db(
+    conn: &Connection,
+    upserts: &[CalendarEvent],
+    deletes: &[String],
+    delta_acks: &[(String, String)],
+) -> Result<(), String> {
+    let transaction = conn
+        .unchecked_transaction()
+        .map_err(|error| error.to_string())?;
+    set_audit_source(&transaction, "m365")?;
+    write_calendar_events_in_transaction(&transaction, upserts, false)?;
+    move_calendar_events_to_trash_in_transaction(&transaction, deletes, false)?;
+    for (source_id, remote_id) in delta_acks {
+        transaction
+            .execute(
+                "DELETE FROM m365_calendar_delta_changes WHERE source_id = ?1 AND remote_id = ?2",
+                params![source_id, remote_id],
+            )
+            .map_err(|error| error.to_string())?;
+    }
+    set_audit_source(&transaction, "user")?;
+    transaction.commit().map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -4513,6 +4648,10 @@ fn save_contact_internal(
     let transaction = conn
         .unchecked_transaction()
         .map_err(|err| err.to_string())?;
+    set_audit_source(
+        &transaction,
+        if queue_for_exchange { "user" } else { "m365" },
+    )?;
     let id = if let Some(id) = contact.id {
         transaction
             .execute(
@@ -4605,6 +4744,7 @@ fn save_contact_internal(
             )
             .map_err(|err| err.to_string())?;
     }
+    set_audit_source(&transaction, "user")?;
     transaction.commit().map_err(|err| err.to_string())?;
     Ok(id)
 }
@@ -4630,6 +4770,10 @@ fn delete_contact_internal(
     let transaction = conn
         .unchecked_transaction()
         .map_err(|err| err.to_string())?;
+    set_audit_source(
+        &transaction,
+        if queue_for_exchange { "user" } else { "m365" },
+    )?;
     let timestamp = now();
     let changed = transaction
         .execute(
@@ -4655,6 +4799,7 @@ fn delete_contact_internal(
                 .map_err(|err| err.to_string())?;
         }
     }
+    set_audit_source(&transaction, "user")?;
     transaction.commit().map_err(|err| err.to_string())?;
     Ok(())
 }
@@ -5533,10 +5678,14 @@ fn get_backup_data(app: AppHandle) -> Result<BackupData, String> {
 
 #[tauri::command]
 fn get_sync_backup_data(app: AppHandle) -> Result<BackupData, String> {
+    load_sync_backup_data(app)
+}
+
+pub(crate) fn load_sync_backup_data(app: AppHandle) -> Result<BackupData, String> {
     let conn = open_db(&app)?;
     // Calendar events are read by the synchronizer directly from SQLite. Do not
-    // load or serialize them here: this command runs during every automatic sync
-    // and installations may contain hundreds of thousands of appointments.
+    // load or serialize them into the WebView: automatic sync can run often and
+    // installations may contain hundreds of thousands of appointments.
     load_backup_data_without_calendar(&conn)
 }
 
@@ -6277,32 +6426,95 @@ fn get_app_setting(app: AppHandle, key: String) -> Result<Option<String>, String
 }
 
 #[tauri::command]
-fn list_audit_log(app: AppHandle, limit: Option<usize>) -> Result<Vec<AuditLogEntry>, String> {
-    let conn = open_db(&app)?;
-    let limit = limit.unwrap_or(250).clamp(1, 1_000) as i64;
+fn list_audit_log(app: AppHandle, filter: AuditLogFilter) -> Result<AuditLogPage, String> {
+    query_audit_log(&open_db(&app)?, filter)
+}
+
+fn query_audit_log(conn: &Connection, filter: AuditLogFilter) -> Result<AuditLogPage, String> {
+    let limit = filter.limit.unwrap_or(50).clamp(1, 100);
+    let search_terms = filter
+        .search
+        .as_deref()
+        .unwrap_or("")
+        .to_lowercase()
+        .split_whitespace()
+        .map(ToOwned::to_owned)
+        .collect::<Vec<_>>();
+    let sql_limit = if search_terms.is_empty() {
+        (limit + 1) as i64
+    } else {
+        -1
+    };
     let mut statement = conn
         .prepare(
-            "SELECT id, occurred_at, actor, action, entity_kind, entity_id, summary
+            "SELECT id, occurred_at, actor, source, action, entity_kind, entity_id, summary
              FROM audit_log
-             ORDER BY occurred_at DESC, id DESC
-             LIMIT ?1",
+             WHERE (?1 = '' OR action = ?1 OR (?1 = 'modified' AND action IN ('updated', 'changed')))
+               AND (?2 = '' OR entity_kind = ?2)
+               AND (?3 = '' OR source = ?3)
+               AND (?4 IS NULL OR occurred_at >= ?4)
+               AND (?5 IS NULL OR occurred_at < ?5)
+               AND (?6 IS NULL OR id < ?6)
+             ORDER BY id DESC
+             LIMIT ?7",
         )
         .map_err(|err| err.to_string())?;
     let rows = statement
-        .query_map(params![limit], |row| {
-            Ok(AuditLogEntry {
-                id: row.get(0)?,
-                occurred_at: row.get(1)?,
-                actor: row.get(2)?,
-                action: row.get(3)?,
-                entity_kind: row.get(4)?,
-                entity_id: row.get(5)?,
-                summary: row.get(6)?,
-            })
-        })
+        .query_map(
+            params![
+                filter.action.as_deref().unwrap_or(""),
+                filter.entity_kind.as_deref().unwrap_or(""),
+                filter.source.as_deref().unwrap_or(""),
+                filter.from_at,
+                filter.before_at,
+                filter.before_id,
+                sql_limit,
+            ],
+            |row| {
+                Ok(AuditLogEntry {
+                    id: row.get(0)?,
+                    occurred_at: row.get(1)?,
+                    actor: row.get(2)?,
+                    source: row.get(3)?,
+                    action: row.get(4)?,
+                    entity_kind: row.get(5)?,
+                    entity_id: row.get(6)?,
+                    summary: row.get(7)?,
+                })
+            },
+        )
         .map_err(|err| err.to_string())?;
-    rows.collect::<Result<Vec<_>, _>>()
-        .map_err(|err| err.to_string())
+    let mut entries = Vec::with_capacity(limit);
+    let mut has_more = false;
+    for row in rows {
+        let entry = row.map_err(|err| err.to_string())?;
+        let searchable_text = format!(
+            "{} {} {} {} {} {}",
+            entry.actor,
+            entry.summary,
+            entry.action,
+            entry.entity_kind,
+            entry.entity_id.as_deref().unwrap_or(""),
+            if entry.source == "m365" {
+                "Microsoft 365"
+            } else {
+                &entry.source
+            },
+        )
+        .to_lowercase();
+        if !search_terms
+            .iter()
+            .all(|term| searchable_text.contains(term))
+        {
+            continue;
+        }
+        if entries.len() == limit {
+            has_more = true;
+            break;
+        }
+        entries.push(entry);
+    }
+    Ok(AuditLogPage { entries, has_more })
 }
 
 #[tauri::command]
@@ -10008,6 +10220,7 @@ fn show_main_window(app: &AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.show();
         let _ = window.unminimize();
+        let _ = window.maximize();
         let _ = window.set_focus();
     }
 }
@@ -10231,6 +10444,181 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn inbound_calendar_delta_is_acknowledged_only_with_committed_local_changes() {
+        let conn = Connection::open_in_memory().expect("in-memory database");
+        conn.execute_batch(
+            "CREATE TABLE audit_context (id INTEGER PRIMARY KEY, actor TEXT NOT NULL, source TEXT NOT NULL);
+             INSERT INTO audit_context(id, actor, source) VALUES (1, 'test', 'user');
+             CREATE TABLE calendar_events (
+               id TEXT PRIMARY KEY, starts_at TEXT NOT NULL, duplicate_key TEXT NOT NULL,
+               event_json TEXT NOT NULL, updated_at TEXT NOT NULL, deleted_at TEXT
+             );
+             CREATE TABLE m365_calendar_delta_changes (
+               source_id TEXT NOT NULL, remote_id TEXT NOT NULL,
+               PRIMARY KEY(source_id, remote_id)
+             );
+             INSERT INTO m365_calendar_delta_changes(source_id, remote_id) VALUES ('source', 'remote');",
+        )
+        .expect("calendar and delta tables");
+        let event = CalendarEvent {
+            id: "local-event".to_string(),
+            updated_at: "2026-10-01T09:00:00Z".to_string(),
+            title: "Besprechung".to_string(),
+            starts_at: "2026-10-01T09:00:00".to_string(),
+            ends_at: "2026-10-01T10:00:00".to_string(),
+            is_all_day: false,
+            location: String::new(),
+            description: String::new(),
+            color: "blue".to_string(),
+            category: String::new(),
+            source: "M365".to_string(),
+            recurrence: None,
+            excluded_dates: Vec::new(),
+            deleted_at: None,
+            recurrence_master_id: None,
+            recurrence_id: None,
+            meeting: CalendarMeetingOptions::default(),
+        };
+        let ack = vec![("source".to_string(), "remote".to_string())];
+        let mut invalid = event.clone();
+        invalid.id.clear();
+        assert!(
+            commit_m365_calendar_changes_in_db(&conn, &[event.clone(), invalid], &[], &ack)
+                .is_err()
+        );
+        let count = |table: &str| -> i64 {
+            conn.query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| {
+                row.get(0)
+            })
+            .expect("row count")
+        };
+        assert_eq!(count("calendar_events"), 0);
+        assert_eq!(count("m365_calendar_delta_changes"), 1);
+
+        commit_m365_calendar_changes_in_db(&conn, &[event], &[], &ack).expect("atomic sync commit");
+        assert_eq!(count("calendar_events"), 1);
+        assert_eq!(count("m365_calendar_delta_changes"), 0);
+
+        conn.execute(
+            "INSERT INTO m365_calendar_delta_changes(source_id, remote_id) VALUES ('source', 'remote')",
+            [],
+        )
+        .expect("next remote delta");
+        commit_m365_calendar_changes_in_db(&conn, &[], &["local-event".to_string()], &ack)
+            .expect("atomic remote deletion");
+        let deleted_at: Option<String> = conn
+            .query_row(
+                "SELECT deleted_at FROM calendar_events WHERE id = 'local-event'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("stored calendar event");
+        assert!(deleted_at.is_some());
+        assert_eq!(count("m365_calendar_delta_changes"), 0);
+    }
+
+    #[test]
+    fn audit_history_search_reaches_old_entries_and_pages_filtered_results() {
+        let conn = Connection::open_in_memory().expect("in-memory database");
+        conn.execute_batch(
+            "CREATE TABLE audit_log (
+                id INTEGER PRIMARY KEY,
+                occurred_at TEXT NOT NULL,
+                actor TEXT NOT NULL,
+                source TEXT NOT NULL,
+                action TEXT NOT NULL,
+                entity_kind TEXT NOT NULL,
+                entity_id TEXT,
+                summary TEXT NOT NULL
+            )",
+        )
+        .expect("audit table");
+        for id in 1..=300 {
+            conn.execute(
+                "INSERT INTO audit_log(id, occurred_at, actor, source, action, entity_kind, entity_id, summary)
+                 VALUES(?1, '2026-10-01T09:00:00.000Z', ?2, ?3, ?4, ?5, ?6, ?7)",
+                params![
+                    id,
+                    if id == 1 { "ORG\\Julius" } else { "ORG\\Anna" },
+                    if id == 299 { "m365" } else { "user" },
+                    if id == 1 { "updated" } else { "created" },
+                    if id == 299 { "calendar" } else { "contact" },
+                    id.to_string(),
+                    if id == 1 {
+                        "Kontakt geändert: Jürgen"
+                    } else if id == 299 {
+                        "Termin erstellt: Projektbesprechung"
+                    } else {
+                        "Kontakt erstellt: Beispiel"
+                    },
+                ],
+            )
+            .expect("audit entry");
+        }
+
+        let old_match = query_audit_log(
+            &conn,
+            AuditLogFilter {
+                search: Some("JÜRGEN Julius".to_string()),
+                action: Some("modified".to_string()),
+                limit: Some(2),
+                ..Default::default()
+            },
+        )
+        .expect("search older history");
+        assert_eq!(old_match.entries.len(), 1);
+        assert_eq!(old_match.entries[0].id, 1);
+        assert!(!old_match.has_more);
+
+        let m365_match = query_audit_log(
+            &conn,
+            AuditLogFilter {
+                search: Some("projektbesprechung".to_string()),
+                source: Some("m365".to_string()),
+                entity_kind: Some("calendar".to_string()),
+                ..Default::default()
+            },
+        )
+        .expect("filter Microsoft 365 changes");
+        assert_eq!(m365_match.entries[0].id, 299);
+
+        let first_page = query_audit_log(
+            &conn,
+            AuditLogFilter {
+                limit: Some(2),
+                ..Default::default()
+            },
+        )
+        .expect("first history page");
+        assert_eq!(
+            first_page
+                .entries
+                .iter()
+                .map(|entry| entry.id)
+                .collect::<Vec<_>>(),
+            vec![300, 299]
+        );
+        assert!(first_page.has_more);
+        let next_page = query_audit_log(
+            &conn,
+            AuditLogFilter {
+                before_id: Some(299),
+                limit: Some(2),
+                ..Default::default()
+            },
+        )
+        .expect("next history page");
+        assert_eq!(
+            next_page
+                .entries
+                .iter()
+                .map(|entry| entry.id)
+                .collect::<Vec<_>>(),
+            vec![298, 297]
+        );
+    }
 
     #[test]
     fn onboarding_runs_only_for_a_new_local_database() {

@@ -16,6 +16,11 @@ try {
   if (-not $certificate.HasPrivateKey) {
     throw "O PFX importado não contém uma chave privada utilizável."
   }
+  $tauriConfigPath = Join-Path (Split-Path -Parent $PSScriptRoot) "src-tauri\tauri.conf.json"
+  $expectedThumbprint = (Get-Content -LiteralPath $tauriConfigPath -Raw | ConvertFrom-Json).bundle.windows.certificateThumbprint
+  if ($certificate.Thumbprint -ne $expectedThumbprint) {
+    throw "O certificado importado não corresponde ao certificado configurado para assinar o build."
+  }
   [PSCustomObject]@{
     Subject = $certificate.Subject
     Thumbprint = $certificate.Thumbprint

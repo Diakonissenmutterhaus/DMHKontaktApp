@@ -1,16 +1,15 @@
-import { ArchiveRestore, HeartPulse, History, Home, Mail, Palette, Printer, RefreshCw, Settings, SlidersHorizontal } from "lucide-react";
+import { ArchiveRestore, HeartPulse, History, Home, Mail, Printer, RefreshCw, Settings, SlidersHorizontal } from "lucide-react";
 import { getVersion } from "@tauri-apps/api/app";
 import { useEffect, useState } from "react";
 import type { Page } from "./Sidebar";
 
-export type SettingsSection = "general" | "mail" | "printer" | "history" | "appearance" | "import" | "backup" | "sync" | "recovery" | "advanced" | "trash";
+export type SettingsSection = "general" | "mail" | "printer" | "history" | "import" | "backup" | "sync" | "recovery" | "advanced" | "trash";
 
 const items: Array<{ page: Page; section: SettingsSection; label: string; icon: typeof Settings; activePages?: Page[] }> = [
   { page: "settings", section: "general", label: "Allgemein", icon: Settings },
   { page: "settings", section: "mail", label: "E-Mail & Konten", icon: Mail },
   { page: "settings", section: "printer", label: "Drucker", icon: Printer },
   { page: "settings", section: "history", label: "Historie", icon: History },
-  { page: "appearance", section: "appearance", label: "Erscheinungsbild", icon: Palette },
   { page: "backup", section: "backup", label: "Sicherung", icon: ArchiveRestore },
   { page: "synchronizations", section: "sync", label: "Exchange-Sync", icon: RefreshCw, activePages: ["synchronizations", "m365"] },
   { page: "recovery", section: "recovery", label: "Wiederherstellung", icon: HeartPulse },

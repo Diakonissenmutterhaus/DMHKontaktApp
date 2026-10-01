@@ -205,7 +205,8 @@ pub struct Microsoft365SyncApplyRequest {
     pub source_directions: HashMap<String, String>,
     #[serde(default)]
     pub decisions: HashMap<String, String>,
-    pub backup: crate::BackupData,
+    #[serde(default)]
+    pub backup: Option<crate::BackupData>,
 }
 
 #[derive(Debug, Serialize)]
@@ -1124,20 +1125,6 @@ fn read_calendar_delta_batch(
         values,
         removed_ids,
     })
-}
-
-fn acknowledge_calendar_delta_change(
-    app: &AppHandle,
-    source_id: &str,
-    remote_id: &str,
-) -> Result<(), String> {
-    open_db(app)?
-        .execute(
-            "DELETE FROM m365_calendar_delta_changes WHERE source_id = ?1 AND remote_id = ?2",
-            params![source_id, remote_id],
-        )
-        .map_err(|error| error.to_string())?;
-    Ok(())
 }
 
 fn encode_graph_path_segment(value: &str) -> String {
@@ -4050,8 +4037,11 @@ pub async fn apply_m365_sync(
     let _sync_guard = state.m365.sync_gate.lock().await;
     let started_at = Utc::now().to_rfc3339();
     let access_token = refreshed_access_token(&app).await?;
+    let backup = request
+        .backup
+        .unwrap_or(crate::load_sync_backup_data(app.clone())?);
     if request.contacts && request.contact_groups {
-        ensure_contact_group_folders(&access_token, &request.backup).await?;
+        ensure_contact_group_folders(&access_token, &backup).await?;
     }
     let preview_request = Microsoft365SyncPreviewRequest {
         direction: request.direction,
@@ -4065,13 +4055,11 @@ pub async fn apply_m365_sync(
         selected_contact_source_ids: request.selected_contact_source_ids,
         selected_calendar_source_ids: request.selected_calendar_source_ids,
         source_directions: request.source_directions,
-        backup: request.backup,
+        backup,
     };
     let plan = build_m365_sync_plan(&app, &access_token, &preview_request).await?;
     let conflicts = plan.preview.conflicts;
-    for (source_id, remote_id) in &plan.delta_noop_acks {
-        acknowledge_calendar_delta_change(&app, source_id, remote_id)?;
-    }
+    let mut delta_acks_to_commit = plan.delta_noop_acks;
     let delta_operation_acks = plan.delta_operation_acks;
     let mut result = Microsoft365SyncResult {
         started_at,
@@ -4477,7 +4465,7 @@ pub async fn apply_m365_sync(
         };
         if execution.is_ok() && conflict_was_decided {
             if let Some((source_id, remote_id)) = delta_ack {
-                acknowledge_calendar_delta_change(&app, &source_id, &remote_id)?;
+                delta_acks_to_commit.push((source_id, remote_id));
             }
         }
         if let Err(error) = execution {
@@ -4489,6 +4477,12 @@ pub async fn apply_m365_sync(
             }
         }
     }
+    crate::commit_m365_calendar_changes(
+        &app,
+        &result.calendar_upserts,
+        &result.calendar_deletes,
+        &delta_acks_to_commit,
+    )?;
     result.finished_at = Utc::now().to_rfc3339();
     Ok(result)
 }

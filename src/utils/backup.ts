@@ -1,4 +1,5 @@
 import type { BackupData } from "../types/contact";
+import { initializeTheme, obsoleteThemeStorageKeys } from "./theme";
 
 const browserStorageKeys = [
   "agendakontakte.calendarEvents",
@@ -6,8 +7,6 @@ const browserStorageKeys = [
   "agendakontakte.calendarCategories",
   "agendakontakte.calendarExactDuplicateCleanupBackup.v1",
   "agendakontakte.calendarReconciliationBaseline.v1",
-  "agendakontakte.theme.colorMode",
-  "agendakontakte.theme.accent",
   "dmh.contacts.fontSize",
   "dmh-dienstleistungen-bookings-v1",
   "dmh-dienstleistungen-outdoor-bookings-v1",
@@ -32,6 +31,7 @@ export function addBrowserDataToBackup(backup: BackupData): BackupData {
   // backup payload and must never be copied back into the quota-limited
   // WebView localStorage.
   const browserStorage = { ...backup.browserStorage, ...captureBrowserStorage() };
+  for (const key of obsoleteThemeStorageKeys) delete browserStorage[key];
   return {
     ...backup,
     version: "2.0.0",
@@ -40,6 +40,7 @@ export function addBrowserDataToBackup(backup: BackupData): BackupData {
 }
 
 export function restoreBrowserDataFromBackup(backup: Pick<BackupData, "browserStorage">): void {
+  initializeTheme();
   if (!backup.browserStorage) return;
   const webStorageOnlyKeys = browserStorageKeys.filter(
     (key) => key !== "agendakontakte.calendarEvents" && key !== "agendakontakte.deletedCalendarEvents"

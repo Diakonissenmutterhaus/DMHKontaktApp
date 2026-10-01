@@ -10,7 +10,6 @@ import { TrashPage } from "./pages/TrashPage";
 import { UpdateNotifier } from "./components/UpdateNotifier";
 import { ActivityCenter } from "./components/ActivityCenter";
 import { SettingsPage } from "./pages/SettingsPage";
-import { AppearancePage } from "./pages/AppearancePage";
 import { PasswordsPage } from "./pages/PasswordsPage";
 import { AuthenticatorPage } from "./pages/AuthenticatorPage";
 import { BackupPage } from "./pages/BackupPage";
@@ -56,7 +55,7 @@ const browserPreviewStatus: VaultStatus = {
   entryCount: 0
 };
 
-const edvPages = new Set<Page>(["settings", "appearance", "feature-development", "backup", "synchronizations", "m365", "recovery"]);
+const edvPages = new Set<Page>(["settings", "feature-development", "backup", "synchronizations", "m365", "recovery"]);
 const advancedCalendarStorageKey = "dmh.calendar.advanced.v1";
 type NavigationBlocker = (continueNavigation: () => void) => boolean;
 
@@ -81,11 +80,11 @@ export default function App() {
   const backupDirty = useRef(true);
   const backupGeneration = useRef(0);
   const documentSyncPromise = useRef<Promise<void> | null>(null);
-  const calendarSyncPromise = useRef<Promise<void> | null>(null);
+  const calendarSyncPromise = useRef<Promise<"success" | "error" | "skipped"> | null>(null);
   const queuedCalendarSyncTrigger = useRef<"open" | "change" | "poll" | null>(null);
   const navigationBlockerRef = useRef<NavigationBlocker | null>(null);
   const closing = useRef(false);
-  const settingsAreaOpen = page === "settings" || page === "appearance" || page === "feature-development" || page === "backup" || page === "synchronizations" || page === "m365" || page === "recovery";
+  const settingsAreaOpen = page === "settings" || page === "feature-development" || page === "backup" || page === "synchronizations" || page === "m365" || page === "recovery";
   const compactSidebar = settingsAreaOpen || (page === "calendar" && advancedCalendar);
 
   const changeAdvancedCalendar = (enabled: boolean) => {
@@ -118,7 +117,6 @@ export default function App() {
       return;
     }
     if (nextPage === "settings") setSettingsSection("general");
-    else if (nextPage === "appearance") setSettingsSection("appearance");
     else if (nextPage === "simple-import") setSettingsSection("import");
     else if (nextPage === "backup") setSettingsSection("backup");
     else if (nextPage === "synchronizations" || nextPage === "m365") setSettingsSection("sync");
@@ -183,13 +181,14 @@ export default function App() {
     finally { if (documentSyncPromise.current === promise) documentSyncPromise.current = null; }
   }, []);
 
-  const runCalendarSync = useCallback(async (trigger: "open" | "change" | "poll"): Promise<void> => {
-    if (!("__TAURI_INTERNALS__" in window)) return;
+  const runCalendarSync = useCallback(async (trigger: "open" | "change" | "poll"): Promise<"success" | "error" | "skipped"> => {
+    if (!("__TAURI_INTERNALS__" in window)) return "skipped";
     if (calendarSyncPromise.current) {
       if (trigger === "change" || queuedCalendarSyncTrigger.current === null) queuedCalendarSyncTrigger.current = trigger;
-      return;
+      return calendarSyncPromise.current;
     }
     const promise = (async () => {
+      let outcome: "success" | "error" | "skipped" = "skipped";
       let nextTrigger: "open" | "change" | "poll" | null = trigger;
       while (nextTrigger) {
         const currentTrigger = nextTrigger;
@@ -197,9 +196,11 @@ export default function App() {
         try {
           const status = await performAutomaticCalendarSync(currentTrigger);
           if (status) {
+            outcome = status.state;
             window.dispatchEvent(new CustomEvent<CalendarAutomaticSyncStatus>(calendarAutomaticSyncStatusEventName, { detail: status }));
           }
         } catch (error) {
+          outcome = "error";
           await recordMicrosoft365SynchronizationError(error).catch(() => undefined);
           window.dispatchEvent(new CustomEvent<CalendarAutomaticSyncStatus>(calendarAutomaticSyncStatusEventName, {
             detail: {
@@ -210,10 +211,11 @@ export default function App() {
         }
         nextTrigger = queuedCalendarSyncTrigger.current;
       }
+      return outcome;
     })();
     calendarSyncPromise.current = promise;
     try {
-      await promise;
+      return await promise;
     } finally {
       if (calendarSyncPromise.current === promise) calendarSyncPromise.current = null;
     }
@@ -238,35 +240,65 @@ export default function App() {
 
   useEffect(() => {
     if (!("__TAURI_INTERNALS__" in window)) return;
+    let pollingTimer: number | undefined;
+    let disposed = false;
+    let failedPollingCycles = 0;
+
+    const clearPollingTimer = () => {
+      if (pollingTimer !== undefined) {
+        window.clearTimeout(pollingTimer);
+        pollingTimer = undefined;
+      }
+    };
+    const nextPollingDelay = () => {
+      if (document.hidden) return 10 * 60_000;
+      return [2 * 60_000, 3 * 60_000, 5 * 60_000, 10 * 60_000][Math.min(failedPollingCycles, 3)];
+    };
+    const schedulePolling = () => {
+      clearPollingTimer();
+      if (disposed) return;
+      pollingTimer = window.setTimeout(() => void runScheduledPoll(), nextPollingDelay());
+    };
+    const runScheduledPoll = async () => {
+      const outcome = await runCalendarSync("poll");
+      failedPollingCycles = outcome === "error" ? Math.min(failedPollingCycles + 1, 3) : 0;
+      schedulePolling();
+    };
+
     void getMicrosoft365ConnectionStatus()
       .then(async (status) => {
-        if (!status.connected) return;
-        await enableCompleteAutomaticMicrosoft365Sync(false);
-        await runCalendarSync("open");
+        if (status.connected) {
+          await enableCompleteAutomaticMicrosoft365Sync(false);
+          const outcome = await runCalendarSync("open");
+          failedPollingCycles = outcome === "error" ? 1 : 0;
+        }
+        schedulePolling();
       })
       .catch(() => {
         // A missing or offline Microsoft connection is shown on its own page.
+        schedulePolling();
       });
 
     let debounceTimer: number | undefined;
     const queueChangedCalendarSync = () => {
       if (debounceTimer !== undefined) window.clearTimeout(debounceTimer);
-      debounceTimer = window.setTimeout(() => void runCalendarSync("change"), 1_200);
+      debounceTimer = window.setTimeout(() => void runCalendarSync("change"), 3_000);
     };
-    const startupTimer = window.setTimeout(() => void runCalendarSync("open"), 2_500);
-    const pollingTimer = window.setInterval(() => {
-      void runCalendarSync("poll");
-    }, 30_000);
     const syncWhenVisible = () => {
-      if (!document.hidden) void runCalendarSync("poll");
+      if (document.hidden) {
+        schedulePolling();
+        return;
+      }
+      clearPollingTimer();
+      void runScheduledPoll();
     };
     window.addEventListener(calendarChangedEventName, queueChangedCalendarSync);
     document.addEventListener("visibilitychange", syncWhenVisible);
     return () => {
       window.removeEventListener(calendarChangedEventName, queueChangedCalendarSync);
       document.removeEventListener("visibilitychange", syncWhenVisible);
-      window.clearTimeout(startupTimer);
-      window.clearInterval(pollingTimer);
+      disposed = true;
+      clearPollingTimer();
       if (debounceTimer !== undefined) window.clearTimeout(debounceTimer);
     };
   }, [runCalendarSync]);
@@ -409,7 +441,6 @@ export default function App() {
               onNavigate={navigate}
             />
           )}
-          {page === "appearance" && <AppearancePage />}
           {(page === "simple-import" || page === "import" || page === "contact-import" || page === "calendar-import" || page === "export") && (
             <Suspense fallback={<div className="page-loading"><LoaderCircle className="spin" size={28} /> Datenbereich wird geöffnet …</div>}>
               <DataTransferPage

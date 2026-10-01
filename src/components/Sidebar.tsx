@@ -1,7 +1,7 @@
 import { CalendarDays, Files, House, KeyRound, ShieldCheck, Trash2, UserRound } from "lucide-react";
 import { t } from "../i18n";
 
-export type Page = "welcome" | "contacts" | "calendar" | "documents" | "passwords" | "authenticator" | "services" | "import" | "contact-import" | "calendar-import" | "export" | "feature-development" | "m365" | "trash" | "settings" | "appearance" | "simple-import" | "backup" | "synchronizations" | "recovery";
+export type Page = "welcome" | "contacts" | "calendar" | "documents" | "passwords" | "authenticator" | "services" | "import" | "contact-import" | "calendar-import" | "export" | "feature-development" | "m365" | "trash" | "settings" | "simple-import" | "backup" | "synchronizations" | "recovery";
 
 const items: Array<{ page: Page; label: string; icon: typeof UserRound; group: "main" | "tools" }> = [
   { page: "welcome", label: "Startseite", icon: House, group: "main" },
@@ -12,7 +12,7 @@ const items: Array<{ page: Page; label: string; icon: typeof UserRound; group: "
   { page: "documents", label: "Dokumente", icon: Files, group: "tools" }
 ];
 
-const settingsPages = new Set<Page>(["settings", "appearance", "feature-development", "backup"]);
+const settingsPages = new Set<Page>(["settings", "feature-development", "backup"]);
 
 interface SidebarProps {
   activePage: Page;

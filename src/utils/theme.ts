@@ -1,34 +1,16 @@
-export type ColorMode = "light" | "dark";
-export type AccentTheme = "pink" | "green";
+export const obsoleteThemeStorageKeys = [
+  "agendakontakte.theme.colorMode",
+  "agendakontakte.theme.accent"
+] as const;
 
-export interface ThemePreferences {
-  colorMode: ColorMode;
-  accent: AccentTheme;
-}
-
-const colorModeStorageKey = "agendakontakte.theme.colorMode";
-const accentStorageKey = "agendakontakte.theme.accent";
-
-export function getThemePreferences(): ThemePreferences {
-  const savedColorMode = localStorage.getItem(colorModeStorageKey);
-  const savedAccent = localStorage.getItem(accentStorageKey);
-  return {
-    colorMode: savedColorMode === "dark" ? "dark" : "light",
-    accent: savedAccent === "green" ? "green" : "pink"
-  };
-}
-
-export function applyTheme(preferences: ThemePreferences): void {
-  document.documentElement.dataset.colorMode = preferences.colorMode;
-  document.documentElement.dataset.accent = preferences.accent;
-}
-
-export function saveThemePreferences(preferences: ThemePreferences): void {
-  localStorage.setItem(colorModeStorageKey, preferences.colorMode);
-  localStorage.setItem(accentStorageKey, preferences.accent);
-  applyTheme(preferences);
-}
-
+// The DMH appearance is fixed. Remove preferences left by older releases on
+// every startup so an update also migrates existing installations.
 export function initializeTheme(): void {
-  applyTheme(getThemePreferences());
+  document.documentElement.dataset.colorMode = "light";
+  document.documentElement.dataset.accent = "pink";
+  try {
+    for (const key of obsoleteThemeStorageKeys) localStorage.removeItem(key);
+  } catch {
+    // The fixed CSS palette still works if WebView storage is unavailable.
+  }
 }

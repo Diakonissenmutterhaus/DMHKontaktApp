@@ -4,7 +4,8 @@ param()
 $ErrorActionPreference = "Stop"
 $projectRoot = Split-Path -Parent $PSScriptRoot
 $targetDirectory = Join-Path $env:TEMP "agendakontakte-cargo-target"
-$signScript = Join-Path $PSScriptRoot "sign-windows-artifact.ps1"
+$tauriConfigPath = Join-Path $projectRoot "src-tauri\tauri.conf.json"
+$expectedThumbprint = (Get-Content -LiteralPath $tauriConfigPath -Raw | ConvertFrom-Json).bundle.windows.certificateThumbprint
 
 Push-Location $projectRoot
 try {
@@ -19,16 +20,19 @@ try {
   }
 
   foreach ($installer in $installers) {
-    & $signScript -ArtifactPath $installer.FullName
-    if ($LASTEXITCODE -ne 0) {
-      throw "A assinatura falhou para '$($installer.FullName)' (exit code $LASTEXITCODE)."
+    $signature = Get-AuthenticodeSignature -LiteralPath $installer.FullName
+    if ($null -eq $signature.SignerCertificate -or $signature.SignerCertificate.Thumbprint -ne $expectedThumbprint) {
+      throw "O instalador '$($installer.FullName)' não foi assinado com o certificado interno configurado."
+    }
+    if ($signature.Status -notin @("Valid", "NotTrusted")) {
+      throw "A assinatura do instalador '$($installer.FullName)' não passou na verificação Authenticode: $($signature.Status)."
     }
   }
 
   $installers | Select-Object FullName, Length, LastWriteTime | Format-Table -AutoSize
 
   if ($tauriExitCode -ne 0) {
-    throw "O Tauri gerou e assinou os instaladores, mas terminou com exit code $tauriExitCode. Verifique a configuração da assinatura do updater (TAURI_SIGNING_PRIVATE_KEY)."
+    throw "O Tauri gerou instaladores Authenticode, mas terminou com exit code $tauriExitCode. Verifique a assinatura do updater (TAURI_SIGNING_PRIVATE_KEY)."
   }
 } finally {
   Pop-Location

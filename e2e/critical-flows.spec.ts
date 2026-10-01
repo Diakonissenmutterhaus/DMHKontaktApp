@@ -184,3 +184,22 @@ test("evento de dia inteiro usa a faixa superior e esconde horários", async ({ 
   await expect(page.getByLabel("Ganztägige Termine")).toContainText("Fortbildung");
   await expect(page.getByRole("button", { name: /Speichern/ })).toBeEnabled();
 });
+
+test("o cartão de importação não cobre Neuer Termin em janelas grandes ou pequenas", async ({ page }) => {
+  await installTauriMock(page, []);
+  for (const viewport of [{ width: 1440, height: 900 }, { width: 760, height: 600 }]) {
+    await page.setViewportSize(viewport);
+    await page.goto("/");
+    await page.getByRole("button", { name: "Kalender", exact: true }).click();
+    const newEvent = page.getByRole("button", { name: /Neuer Termin/ });
+    const card = page.locator(".calendar-empty .first-import");
+    await expect(card).toBeVisible();
+    const buttonBox = await newEvent.boundingBox();
+    const cardBox = await card.boundingBox();
+    expect(buttonBox).not.toBeNull();
+    expect(cardBox).not.toBeNull();
+    expect(cardBox!.y).toBeGreaterThanOrEqual(buttonBox!.y + buttonBox!.height + 8);
+    await newEvent.click();
+    await expect(page.getByPlaceholder("Titel hinzufügen")).toBeVisible();
+  }
+});

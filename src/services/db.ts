@@ -46,7 +46,7 @@ import type {
 import type { DocumentConflictDecision, DocumentItem, DocumentMutationRequest, DocumentOfflineFolderResult, DocumentSource, DocumentSyncConflict, DocumentSyncSummary, DocumentTransferRequest, DocumentTransferResult, DocumentUploadResult, DocumentVersion, SystemFileIcon } from "../types/documents";
 import type { PhoneTransferStatus } from "../types/phoneTransfer";
 import type { AddNetworkPrinterRequest, PrinterDriver, PrinterInfo } from "../types/printer";
-import type { AuditLogEntry } from "../types/audit";
+import type { AuditLogFilter, AuditLogPage } from "../types/audit";
 
 export function listPrinters(): Promise<PrinterInfo[]> {
   return invoke("list_printers");
@@ -80,8 +80,8 @@ export function listContacts(search = "", groupId?: number): Promise<Contact[]> 
   return invoke("list_contacts", { search, groupId });
 }
 
-export function listAuditLog(limit = 250): Promise<AuditLogEntry[]> {
-  return invoke("list_audit_log", { limit });
+export function listAuditLog(filter: AuditLogFilter = {}): Promise<AuditLogPage> {
+  return invoke("list_audit_log", { filter });
 }
 
 export function getContactOverviewCounts(): Promise<ContactOverviewCounts> {
@@ -399,7 +399,7 @@ export function applyMicrosoft365Sync(request: {
   selectedCalendarSourceIds: string[];
   sourceDirections: Record<string, string>;
   decisions: Record<string, Microsoft365ConflictDecision>;
-  backup: BackupData;
+  backup?: BackupData;
 }): Promise<Microsoft365SyncResult> {
   return invoke("apply_m365_sync", { request });
 }

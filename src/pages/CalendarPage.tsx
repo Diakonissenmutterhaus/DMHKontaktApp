@@ -1135,7 +1135,7 @@ export function CalendarPage({ advancedMode, onAdvancedModeChange, onNavigate }:
   };
 
   return (
-    <div className={`page calendar-page${totalCalendarEvents === 0 ? " calendar-empty" : ""}`}>
+    <div className={`page calendar-page${calendarLoaded && totalCalendarEvents === 0 ? " calendar-empty" : ""}`}>
       <header className="page-header">
         <div>
           <h2>Kalender</h2>

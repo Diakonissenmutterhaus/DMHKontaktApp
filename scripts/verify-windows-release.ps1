@@ -24,7 +24,22 @@ $publicCertificate = Get-PfxCertificate -FilePath $publicCertificatePath
 if ($publicCertificate.Thumbprint -ne $thumbprint) {
   throw "O certificado público do projeto não corresponde ao thumbprint configurado no Tauri."
 }
-Write-Host "[1/3] Certificado público confirmado."
+
+# O GitHub runner é descartável e não conhece a cadeia interna da organização.
+# Confiar somente na parte pública, no perfil efêmero do runner, permite que a
+# validação Authenticode distinga uma assinatura válida de um erro de confiança.
+foreach ($store in @("Cert:\CurrentUser\Root", "Cert:\CurrentUser\TrustedPublisher")) {
+  $trustedCertificate = Get-ChildItem -Path $store |
+    Where-Object { $_.Thumbprint -eq $thumbprint } |
+    Select-Object -First 1
+  if ($null -eq $trustedCertificate) {
+    $trustedCertificate = Import-Certificate -FilePath $publicCertificatePath -CertStoreLocation $store
+  }
+  if ($trustedCertificate.Thumbprint -ne $thumbprint) {
+    throw "Não foi possível configurar a confiança temporária do certificado no runner ($store)."
+  }
+}
+Write-Host "[1/3] Certificado público confirmado e confiado no runner temporário."
 $signingCertificate = Get-Item -LiteralPath "Cert:\CurrentUser\My\$thumbprint" -ErrorAction Stop
 if (-not $signingCertificate.HasPrivateKey) {
   throw "O certificado de assinatura não possui a chave privada no runner."
@@ -42,10 +57,7 @@ if ($nsis.Count -ne 1 -or $msi.Count -ne 1) {
 
 foreach ($installer in @($nsis[0], $msi[0])) {
   $signature = Get-AuthenticodeSignature -LiteralPath $installer.FullName
-  # O certificado interno é autoassinado. O runner só precisa confirmar a
-  # assinatura embutida e o emissor; confiança de máquina é instalada nos PCs
-  # da organização, não no ambiente descartável do GitHub.
-  if ($signature.Status -notin @("Valid", "NotTrusted") -or
+  if ($signature.Status -ne "Valid" -or
       $null -eq $signature.SignerCertificate -or
       $signature.SignerCertificate.Thumbprint -ne $thumbprint) {
     throw "Assinatura Authenticode inválida ou certificado incorreto: '$($installer.Name)' ($($signature.Status))."

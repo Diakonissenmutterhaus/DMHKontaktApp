@@ -242,6 +242,7 @@ export function ContactsPage({ onNavigate, onRegisterNavigationBlocker }: Contac
   const notifyLocalM365Change = () => window.dispatchEvent(new Event(calendarChangedEventName));
   const [contacts, setContacts] = useState<Contact[]>([]);
   const [totalContactCount, setTotalContactCount] = useState<number | null>(null);
+  const [contactsLoaded, setContactsLoaded] = useState(false);
   const [reconciliationOpen, setReconciliationOpen] = useState(false);
   const [groups, setGroups] = useState<Group[]>([]);
   const [groupContactCounts, setGroupContactCounts] = useState<Record<number, number>>({});
@@ -457,10 +458,12 @@ export function ContactsPage({ onNavigate, onRegisterNavigationBlocker }: Contac
   }, [debouncedGroupSearch, groupSelection]);
 
   useEffect(() => {
-    refresh().catch((error) => {
-      setMessage(`Fehler beim Laden: ${error}`);
-      setMessageType("error");
-    });
+    void refresh()
+      .catch((error) => {
+        setMessage(`Fehler beim Laden: ${error}`);
+        setMessageType("error");
+      })
+      .finally(() => setContactsLoaded(true));
   }, [refresh]);
 
   useEffect(() => {
@@ -1233,8 +1236,8 @@ export function ContactsPage({ onNavigate, onRegisterNavigationBlocker }: Contac
   };
 
   return (
-    <div className={`${draggedContactIds.length === 0 ? "page contacts-page" : "page contacts-page dragging-contact"}${totalContactCount === 0 ? " contacts-empty" : ""} contacts-font-${contactsFontSize} groups-tab-active`}>
-      {totalContactCount === 0 && (
+    <div className={`${draggedContactIds.length === 0 ? "page contacts-page" : "page contacts-page dragging-contact"}${contactsLoaded && totalContactCount === 0 ? " contacts-empty" : ""} contacts-font-${contactsFontSize} groups-tab-active`}>
+      {(!contactsLoaded || totalContactCount === 0) && (
         <header className="page-header">
           <div>
             <h2>Kontakte</h2>
@@ -1502,7 +1505,9 @@ export function ContactsPage({ onNavigate, onRegisterNavigationBlocker }: Contac
         </div>
       )}
 
-      {totalContactCount === 0 ? (
+      {!contactsLoaded ? (
+        <div className="page-loading" role="status">Kontakte werden geladen …</div>
+      ) : totalContactCount === 0 ? (
         <div className="empty-import-screen">
           <EmptyImportState
             kind="contacts"

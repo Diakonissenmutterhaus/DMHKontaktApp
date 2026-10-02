@@ -2855,7 +2855,7 @@ td input[type="checkbox"] {
 
 .contacts-page.contacts-empty .empty-import-screen,
 .calendar-page.calendar-empty .empty-import-screen {
-  align-items: center;
+  align-items: flex-start;
   box-sizing: border-box;
   display: flex;
   flex: 1 1 auto;
@@ -2865,16 +2865,16 @@ td input[type="checkbox"] {
 }
 
 .calendar-page.calendar-empty .empty-import-screen {
-  padding-top: clamp(2rem, 10vh, 6rem);
+  padding-top: clamp(2rem, 4vh, 3rem);
 }
 
 .contacts-page.contacts-empty .empty-import-screen {
-  padding-top: clamp(2rem, 10vh, 6rem);
+  padding-top: clamp(2rem, 4vh, 3rem);
 }
 
 .contacts-page.contacts-empty .first-import,
 .calendar-page.calendar-empty .first-import {
-  align-self: center;
+  align-self: flex-start;
   margin-inline: auto;
   max-width: 900px;
   width: 100%;

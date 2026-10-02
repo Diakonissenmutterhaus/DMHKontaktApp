@@ -50,11 +50,14 @@ function mockContact(id: number, firstName: string, lastName: string): MockConta
   };
 }
 
-async function installTauriMock(page: Page, contacts: MockContact[]) {
-  await page.addInitScript((seedContacts) => {
+async function installTauriMock(page: Page, contacts: MockContact[], options: { loadDelayMs?: number } = {}) {
+  await page.addInitScript(({ seedContacts, loadDelayMs }) => {
     let callbackId = 0;
     const callbacks = new Map<number, (...args: unknown[]) => void>();
     const invoke = async (command: string) => {
+      if (loadDelayMs > 0 && ["list_contacts", "list_groups", "get_contact_overview_counts", "get_calendar_overview", "list_calendar_events_in_range", "list_calendar_events"].includes(command)) {
+        await new Promise((resolve) => window.setTimeout(resolve, loadDelayMs));
+      }
       switch (command) {
         case "get_vault_status":
           return { protectionEnabled: false, unlocked: true, username: "", recoveryEmail: "", recoveryEmailHint: "", recoveryAvailable: false, entryCount: 0 };
@@ -102,7 +105,7 @@ async function installTauriMock(page: Page, contacts: MockContact[]) {
         }
       }
     });
-  }, contacts);
+  }, { seedContacts: contacts, loadDelayMs: options.loadDelayMs ?? 0 });
 }
 
 test("zero contatos abre a página normalmente e só mostra o importador após escolha", async ({ page }) => {
@@ -199,7 +202,48 @@ test("o cartão de importação não cobre Neuer Termin em janelas grandes ou pe
     expect(buttonBox).not.toBeNull();
     expect(cardBox).not.toBeNull();
     expect(cardBox!.y).toBeGreaterThanOrEqual(buttonBox!.y + buttonBox!.height + 8);
+    if (viewport.height >= 900) {
+      expect(cardBox!.y).toBeLessThanOrEqual(200);
+    }
     await newEvent.click();
     await expect(page.getByPlaceholder("Titel hinzufügen")).toBeVisible();
   }
+});
+
+test("o cartão de importação não cobre Neuer Kontakt em janelas grandes ou pequenas", async ({ page }) => {
+  await installTauriMock(page, []);
+  for (const viewport of [{ width: 1440, height: 900 }, { width: 760, height: 600 }]) {
+    await page.setViewportSize(viewport);
+    await page.goto("/");
+    await page.getByRole("button", { name: "Kontakte", exact: true }).click();
+    const newContact = page.getByRole("button", { name: /Neuer Kontakt/ });
+    const card = page.locator(".contacts-empty .first-import");
+    await expect(card).toBeVisible();
+    const buttonBox = await newContact.boundingBox();
+    const cardBox = await card.boundingBox();
+    expect(buttonBox).not.toBeNull();
+    expect(cardBox).not.toBeNull();
+    expect(cardBox!.y).toBeGreaterThanOrEqual(buttonBox!.y + buttonBox!.height + 8);
+    if (viewport.height >= 900) {
+      expect(cardBox!.y).toBeLessThanOrEqual(200);
+    }
+    await newContact.click();
+    await expect(page.getByRole("dialog", { name: "Neuen Kontakt anlegen" })).toBeVisible();
+  }
+});
+
+test("abas aguardam os dados antes de mostrar o estado vazio", async ({ page }) => {
+  await installTauriMock(page, [], { loadDelayMs: 250 });
+  await page.goto("/");
+
+  await page.getByRole("button", { name: "Kontakte", exact: true }).click();
+  await expect(page.getByRole("status")).toHaveText("Kontakte werden geladen …");
+  await expect(page.getByRole("heading", { name: "Noch keine Kontakte" })).toHaveCount(0);
+  await expect(page.locator(".contacts-empty .first-import")).toHaveCount(0);
+  await expect(page.getByRole("heading", { name: "Noch keine Kontakte" })).toBeVisible();
+
+  await page.getByRole("button", { name: "Kalender", exact: true }).click();
+  await expect(page.getByText("Kalender wird geladen …", { exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Noch keine Termine" })).toHaveCount(0);
+  await expect(page.getByRole("heading", { name: "Noch keine Termine" })).toBeVisible();
 });

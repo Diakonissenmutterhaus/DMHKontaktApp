@@ -1,6 +1,10 @@
 name: Admin-Test-Version veröffentlichen
 
 on:
+  push:
+    branches:
+      - main
+      - staging
   workflow_dispatch:
     inputs:
       source_ref:

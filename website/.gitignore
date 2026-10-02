@@ -1,0 +1,4 @@
+# O vídeo original tem mais de 100 MiB e não pode ser enviado ao GitHub como arquivo comum.
+# Ele permanece nesta pasta para pré-visualização local; para publicar, use uma URL
+# pública de mídia em video-config.js (por exemplo, Vercel Blob).
+media/*.mp4

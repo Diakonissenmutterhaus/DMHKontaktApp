@@ -11,6 +11,7 @@ const actionNames: Record<string, string> = {
   deleted: "Papierkorb",
   restored: "Wiederhergestellt",
   purged: "Endgültig gelöscht",
+  linked: "Mit Microsoft 365 verknüpft",
   imported: "Importiert"
 };
 const areaNames: Record<string, string> = {
@@ -136,6 +137,7 @@ export function AuditHistoryPanel() {
             <option value="deleted">In Papierkorb</option>
             <option value="restored">Wiederhergestellt</option>
             <option value="purged">Endgültig gelöscht</option>
+            <option value="linked">Mit Microsoft 365 verknüpft</option>
             <option value="imported">Importiert</option>
           </select>
         </label>

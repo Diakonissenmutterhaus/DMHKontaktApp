@@ -18,6 +18,9 @@ certificates/**/*.pvk
 certificates/**/*.key
 certificates/**/*.pem
 
+# Temporary local M365 synchronization diagnostics may contain personal data.
+/.local-sync-test/
+
 # O pacote distribuído é Windows-only; o Tauri usa somente este ícone.
 src-tauri/icons/android/
 src-tauri/icons/ios/

@@ -16,8 +16,7 @@ export const calendarColorOptions = [
   { value: "green", label: "Grün", chip: "#dff5e8", border: "#15803d" },
   { value: "yellow", label: "Gelb", chip: "#fff4c2", border: "#ca8a04" },
   { value: "red", label: "Rot", chip: "#ffe1e1", border: "#dc2626" },
-  { value: "purple", label: "Lila", chip: "#eadcff", border: "#7c3aed" },
-  { value: "gray", label: "Grau", chip: "#eceff3", border: "#64748b" }
+  { value: "purple", label: "Lila", chip: "#eadcff", border: "#7c3aed" }
 ];
 
 const weekdayCodes = ["SU", "MO", "TU", "WE", "TH", "FR", "SA"];

@@ -1,4 +1,6 @@
-import { CalendarDays, ChevronLeft, ChevronRight, Clock3, Download, Filter, ListChecks, MoreHorizontal, PanelLeftClose, Plus, RefreshCw, Rows3, Settings2, Trash2, Undo2, Upload, X } from "lucide-react";
+import { CalendarDays, ChevronLeft, ChevronRight, Clock3, Copy, Download, Eye, ExternalLink, Filter, Forward, ListChecks, Lock, MoreHorizontal, PanelLeftClose, Palette, Plus, Printer, RefreshCw, Rows3, Settings2, Tag, Trash2, Undo2, Upload, X } from "lucide-react";
+import { save } from "@tauri-apps/plugin-dialog";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent } from "react";
 import { CalendarReconciliationDialog } from "../components/CalendarReconciliationDialog";
 import { CalendarEventForm } from "../components/CalendarEventForm";
@@ -8,8 +10,8 @@ import { EmptyImportState } from "../components/EmptyImportState";
 import { Microsoft365SyncDialog } from "../components/Microsoft365SyncDialog";
 import { StatusMessage } from "../components/StatusMessage";
 import type { Page } from "../components/Sidebar";
-import type { CalendarEvent } from "../types/calendar";
-import { calendarCategoriesStorageKey, calendarColorOptions, calendarColorStyle, calendarColorValue, calendarStorageKey, defaultCalendarColor, expandCalendarEvents, formatCalendarDate, parseCalendarDate } from "../utils/calendar";
+import type { CalendarAvailability, CalendarEvent } from "../types/calendar";
+import { calendarCategoriesStorageKey, calendarColorOptions, calendarColorStyle, calendarColorValue, calendarStorageKey, defaultCalendarColor, expandCalendarEvents, exportCalendarIcs, formatCalendarDate, parseCalendarDate } from "../utils/calendar";
 import { findExactCalendarDuplicateGroups, removeExactCalendarDuplicates } from "../utils/calendarDuplicates";
 import {
   calendarAutomaticSyncStatusEventName,
@@ -26,7 +28,9 @@ import {
   mergeCalendarEvents,
   moveCalendarEventsToTrash,
   restoreCalendarEvents,
-  saveCalendarEvents
+  saveCalendarEvents,
+  saveMicrosoft365MasterCategory,
+  writeExportFile
 } from "../services/db";
 
 const duplicateCleanupBackupKey = "agendakontakte.calendarExactDuplicateCleanupBackup.v1";
@@ -125,6 +129,15 @@ function eventTime(event: CalendarEvent): string {
   if (event.isAllDay) return "Ganztägig";
   const date = eventDate(event);
   return date ? new Intl.DateTimeFormat("de-DE", { hour: "2-digit", minute: "2-digit" }).format(date) : "";
+}
+
+type CalendarEventContextSubmenu = "symbol" | "availability" | "category" | null;
+
+interface CalendarEventContextMenuState {
+  event: CalendarEvent;
+  x: number;
+  y: number;
+  submenu: CalendarEventContextSubmenu;
 }
 
 function eventTimeRange(event: CalendarEvent): string {
@@ -337,7 +350,7 @@ function allDayEventLayouts(days: Date[], events: CalendarEvent[]): AllDayEventL
   });
 }
 
-function AllDayEventStrip({ days, events, onOpen }: { days: Date[]; events: CalendarEvent[]; onOpen: (event: CalendarEvent) => void }) {
+function AllDayEventStrip({ days, events, onOpen, onContextMenu }: { days: Date[]; events: CalendarEvent[]; onOpen: (event: CalendarEvent) => void; onContextMenu: (event: ReactMouseEvent<HTMLButtonElement>, calendarEvent: CalendarEvent) => void }) {
   const layouts = allDayEventLayouts(days, events);
   const visibleLayouts = layouts.filter((layout) => layout.lane < 4);
   const hiddenEvents = layouts.length - visibleLayouts.length;
@@ -357,6 +370,7 @@ function AllDayEventStrip({ days, events, onOpen }: { days: Date[]; events: Cale
           type="button"
           title={`${layout.event.title || "Ohne Titel"}${layout.event.location ? `\n${layout.event.location}` : ""}`}
           onClick={() => onOpen(layout.event)}
+          onContextMenu={(event) => onContextMenu(event, layout.event)}
           key={`${layout.event.id}-${layout.startIndex}`}
         >
           <span>{layout.event.title || "Ohne Titel"}</span>
@@ -367,10 +381,21 @@ function AllDayEventStrip({ days, events, onOpen }: { days: Date[]; events: Cale
   );
 }
 
+function spansWholeCalendarDays(event: CalendarEvent): boolean {
+  const starts = eventDate(event);
+  const ends = eventEndDate(event);
+  if (!starts || !ends || ends <= starts) return false;
+  const startsAtMidnight = starts.getHours() === 0 && starts.getMinutes() === 0 && starts.getSeconds() === 0;
+  const endsAtMidnight = ends.getHours() === 0 && ends.getMinutes() === 0 && ends.getSeconds() === 0;
+  return startsAtMidnight && endsAtMidnight;
+}
+
 function normalizeEvent(event: CalendarEvent): CalendarEvent {
   return {
     ...event,
-    isAllDay: event.isAllDay ?? false,
+    // A midnight-to-midnight span is a full calendar day, even if an imported
+    // source did not set its all-day flag correctly.
+    isAllDay: Boolean(event.isAllDay) || spansWholeCalendarDays(event),
     color: calendarColorValue(event.color),
     category: event.category ?? "",
     meeting: {
@@ -433,9 +458,13 @@ export function CalendarPage({ advancedMode, onAdvancedModeChange, onNavigate }:
   const [showDuplicateDialog, setShowDuplicateDialog] = useState(false);
   const [exactDuplicateGroups, setExactDuplicateGroups] = useState<ReturnType<typeof findExactCalendarDuplicateGroups>>([]);
   const [showActionsMenu, setShowActionsMenu] = useState(false);
+  const [eventContextMenu, setEventContextMenu] = useState<CalendarEventContextMenuState | null>(null);
+  const [eventToPrint, setEventToPrint] = useState<CalendarEvent | null>(null);
   const [m365SyncDialogOpen, setM365SyncDialogOpen] = useState(false);
   const [newCategoryName, setNewCategoryName] = useState("");
   const [newCategoryColor, setNewCategoryColor] = useState(defaultCalendarColor);
+  const [categoryManagerLoading, setCategoryManagerLoading] = useState(false);
+  const [categorySaving, setCategorySaving] = useState(false);
   const [duplicateCleanupBackup, setDuplicateCleanupBackup] = useState<CalendarDuplicateCleanupBackup | null>(
     () => readDuplicateCleanupBackup()
   );
@@ -518,12 +547,34 @@ export function CalendarPage({ advancedMode, onAdvancedModeChange, onNavigate }:
   }, []);
 
   useEffect(() => {
+    if (!eventToPrint) return;
+    const frame = window.requestAnimationFrame(() => {
+      window.print();
+      setEventToPrint(null);
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [eventToPrint]);
+
+  useEffect(() => {
     localStorage.setItem(calendarViewStorageKey, view);
   }, [view]);
 
   useEffect(() => {
     localStorage.setItem(advancedCalendarSettingsStorageKey, JSON.stringify(advancedSettings));
   }, [advancedSettings]);
+
+  useEffect(() => {
+    const closeContextMenu = () => setEventContextMenu(null);
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") closeContextMenu();
+    };
+    window.addEventListener("pointerdown", closeContextMenu);
+    window.addEventListener("keydown", closeOnEscape);
+    return () => {
+      window.removeEventListener("pointerdown", closeContextMenu);
+      window.removeEventListener("keydown", closeOnEscape);
+    };
+  }, []);
 
   useEffect(() => {
     const reloadStoredEvents = async () => {
@@ -691,6 +742,44 @@ export function CalendarPage({ advancedMode, onAdvancedModeChange, onNavigate }:
     localStorage.setItem(calendarCategoriesStorageKey, JSON.stringify(sorted));
   };
 
+  const mergeRemoteCategories = (remoteCategories: CalendarCategory[]) => {
+    setCategories((current) => {
+      const byName = new Map<string, CalendarCategory>();
+      for (const category of [...current, ...remoteCategories].map(normalizeCategory).filter((entry) => entry.name)) {
+        byName.set(category.name.toLowerCase(), category);
+      }
+      const next = Array.from(byName.values()).sort((left, right) => left.name.localeCompare(right.name, "de"));
+      localStorage.setItem(calendarCategoriesStorageKey, JSON.stringify(next));
+      return next;
+    });
+  };
+
+  const openCategoryManager = async () => {
+    setShowActionsMenu(false);
+    setShowCategoryDialog(true);
+    if (!("__TAURI_INTERNALS__" in window)) return;
+
+    setCategoryManagerLoading(true);
+    try {
+      const status = await getMicrosoft365ConnectionStatus();
+      if (!status.connected) return;
+      mergeRemoteCategories(await listMicrosoft365MasterCategories());
+    } catch {
+      setMessage("Exchange-Kategorien konnten nicht geladen werden. Lokale Kategorien bleiben verfügbar.");
+    } finally {
+      setCategoryManagerLoading(false);
+    }
+  };
+
+  const syncCategoryWithExchange = async (category: CalendarCategory) => {
+    if (!("__TAURI_INTERNALS__" in window)) return false;
+    const status = await getMicrosoft365ConnectionStatus();
+    if (!status.connected) return false;
+    const saved = await saveMicrosoft365MasterCategory(category);
+    mergeRemoteCategories([saved]);
+    return true;
+  };
+
   useEffect(() => {
     if (!editingEvent || !("__TAURI_INTERNALS__" in window)) return;
     let cancelled = false;
@@ -809,7 +898,7 @@ export function CalendarPage({ advancedMode, onAdvancedModeChange, onNavigate }:
     });
   };
 
-  const createCategory = () => {
+  const createCategory = async () => {
     const name = newCategoryName.trim();
     if (!name) {
       setMessage("Bitte geben Sie einen Kategorienamen ein.");
@@ -819,11 +908,37 @@ export function CalendarPage({ advancedMode, onAdvancedModeChange, onNavigate }:
       setMessage("Diese Kategorie gibt es bereits.");
       return;
     }
-    persistCategories([...categories, { name, color: newCategoryColor }]);
+    const category = { name, color: newCategoryColor };
+    persistCategories([...categories, category]);
     setNewCategoryName("");
     setNewCategoryColor(defaultCalendarColor);
-    setShowCategoryDialog(false);
-    setMessage(`Kategorie „${name}“ erstellt.`);
+    setCategorySaving(true);
+    try {
+      const synced = await syncCategoryWithExchange(category);
+      setMessage(synced
+        ? `Kategorie „${name}“ wurde mit Exchange gespeichert.`
+        : `Kategorie „${name}“ wurde lokal erstellt. Verbinden Sie Microsoft 365 und wählen Sie anschließend die Farbe erneut, um sie mit Exchange zu speichern.`);
+    } catch (error) {
+      setMessage(`Kategorie „${name}“ wurde lokal gespeichert. Exchange konnte sie noch nicht übernehmen: ${String(error)}`);
+    } finally {
+      setCategorySaving(false);
+    }
+  };
+
+  const updateCategoryColor = async (category: CalendarCategory, color: string) => {
+    const updated = { ...category, color };
+    persistCategories(categories.map((entry) => entry.name.toLowerCase() === category.name.toLowerCase() ? updated : entry));
+    setCategorySaving(true);
+    try {
+      const synced = await syncCategoryWithExchange(updated);
+      setMessage(synced
+        ? `Die Farbe von „${category.name}“ wurde mit Exchange aktualisiert.`
+        : `Die Farbe von „${category.name}“ wurde lokal gespeichert. Verbinden Sie Microsoft 365 und wählen Sie die Farbe danach erneut, um sie mit Exchange zu speichern.`);
+    } catch (error) {
+      setMessage(`Die Farbe von „${category.name}“ wurde lokal gespeichert. Exchange konnte sie noch nicht übernehmen: ${String(error)}`);
+    } finally {
+      setCategorySaving(false);
+    }
   };
 
   const openNewEvent = (date = new Date(), exactTime = false) => {
@@ -1068,6 +1183,101 @@ export function CalendarPage({ advancedMode, onAdvancedModeChange, onNavigate }:
     setEditingIsNew(false);
   };
 
+  const openEventContextMenu = (event: ReactMouseEvent<HTMLButtonElement>, calendarEvent: CalendarEvent) => {
+    event.preventDefault();
+    event.stopPropagation();
+    const menuWidth = 258;
+    const menuHeight = 480;
+    setEventContextMenu({
+      event: calendarEvent,
+      x: Math.max(8, Math.min(event.clientX, window.innerWidth - menuWidth - 8)),
+      y: Math.max(8, Math.min(event.clientY, window.innerHeight - menuHeight - 8)),
+      submenu: null
+    });
+  };
+
+  const contextMenuMaster = (event: CalendarEvent) => event.recurrenceMasterId
+    ? events.find((entry) => entry.id === event.recurrenceMasterId) ?? event
+    : event;
+
+  const updateContextMenuEvent = (event: CalendarEvent, update: Partial<CalendarEvent>) => {
+    const current = normalizeEvent(contextMenuMaster(event));
+    const currentMeeting = current.meeting ?? blankEvent().meeting!;
+    const nextMeeting = update.meeting ? { ...currentMeeting, ...update.meeting } : currentMeeting;
+    const updatedCategory = update.category;
+    const matchingCategory = typeof updatedCategory === "string"
+      ? categories.find((category) => category.name === updatedCategory.trim())
+      : undefined;
+    persistSingleEvent({
+      ...current,
+      ...update,
+      meeting: nextMeeting,
+      color: matchingCategory?.color ?? update.color ?? current.color,
+      updatedAt: new Date().toISOString()
+    });
+    setEventContextMenu(null);
+  };
+
+  const duplicateContextMenuEvent = (event: CalendarEvent) => {
+    const source = normalizeEvent(contextMenuMaster(event));
+    setEditingEvent({
+      ...source,
+      id: crypto.randomUUID(),
+      title: source.title ? `${source.title} (Kopie)` : "Kopie",
+      updatedAt: new Date().toISOString(),
+      recurrence: null,
+      recurrenceMasterId: undefined,
+      recurrenceId: undefined,
+      excludedDates: []
+    });
+    setEditingIsNew(true);
+    setEventContextMenu(null);
+  };
+
+  const forwardContextMenuEvent = async (event: CalendarEvent) => {
+    const target = contextMenuMaster(event);
+    const body = [
+      `Termin: ${target.title || "Ohne Titel"}`,
+      `Zeit: ${formatCalendarDate(target.startsAt)}${target.isAllDay ? " (ganztägig)" : ` · ${eventTimeRange(target)}`}`,
+      target.location ? `Ort: ${target.location}` : "",
+      target.description ? `\n${target.description}` : ""
+    ].filter(Boolean).join("\n");
+    const mailto = `mailto:?subject=${encodeURIComponent(`WG: ${target.title || "Termin"}`)}&body=${encodeURIComponent(body)}`;
+    try {
+      if ("__TAURI_INTERNALS__" in window) await openUrl(mailto);
+      else window.location.href = mailto;
+      setMessage("E-Mail-Programm zum Weiterleiten geöffnet.");
+    } catch {
+      setMessage("Das E-Mail-Programm konnte nicht geöffnet werden.");
+    } finally {
+      setEventContextMenu(null);
+    }
+  };
+
+  const exportContextMenuEvent = async (event: CalendarEvent) => {
+    const target = contextMenuMaster(event);
+    const safeName = (target.title || "Termin").replace(/[\\/:*?"<>|]+/g, "-").trim().slice(0, 80) || "Termin";
+    try {
+      if ("__TAURI_INTERNALS__" in window) {
+        const path = await save({ defaultPath: `${safeName}.ics`, filters: [{ name: "ICS", extensions: ["ics"] }] });
+        if (!path) return;
+        await writeExportFile(path, exportCalendarIcs([target]));
+      } else {
+        const url = URL.createObjectURL(new Blob([exportCalendarIcs([target])], { type: "text/calendar;charset=utf-8" }));
+        const link = document.createElement("a");
+        link.href = url;
+        link.download = `${safeName}.ics`;
+        link.click();
+        URL.revokeObjectURL(url);
+      }
+      setActionResult({ title: "Termin als ICS gespeichert", summary: `„${target.title || "Ohne Titel"}“ kann jetzt in einem Kalenderprogramm importiert werden.`, tone: "success" });
+    } catch (error) {
+      setActionResult({ title: "ICS-Datei konnte nicht erstellt werden", summary: String(error), tone: "error" });
+    } finally {
+      setEventContextMenu(null);
+    }
+  };
+
   const saveEvent = () => {
     if (!editingEvent) return;
     const matchingCategory = categories.find((category) => category.name === editingEvent.category.trim());
@@ -1157,7 +1367,7 @@ export function CalendarPage({ advancedMode, onAdvancedModeChange, onNavigate }:
               <button type="button" onClick={() => { setShowActionsMenu(false); onNavigate("import"); }}><Upload size={18} /> Termine importieren</button>
               <button type="button" onClick={() => { setShowActionsMenu(false); onNavigate("export"); }}><Download size={18} /> Termine exportieren</button>
               <button type="button" onClick={() => { setShowActionsMenu(false); void openReconciliation(); }}><RefreshCw size={18} /> Kalender erneut abgleichen</button>
-              <button type="button" onClick={() => { setShowActionsMenu(false); setShowCategoryDialog(true); }}><Plus size={18} /> Kategorie erstellen</button>
+              <button type="button" onClick={() => void openCategoryManager()}><Tag size={18} /> Kategorien verwalten</button>
               <button type="button" onClick={() => { setShowActionsMenu(false); reviewExactDuplicates(); }}><ListChecks size={18} /> Duplikate prüfen</button>
               {duplicateCleanupBackup && <button type="button" onClick={() => { setShowActionsMenu(false); undoDuplicateCleanup(); }}><Undo2 size={18} /> Bereinigung rückgängig</button>}
               <span className="calendar-actions-separator" />
@@ -1177,30 +1387,66 @@ export function CalendarPage({ advancedMode, onAdvancedModeChange, onNavigate }:
       {m365SyncDialogOpen && <Microsoft365SyncDialog context="calendar" onClose={() => setM365SyncDialogOpen(false)} />}
 
       {showCategoryDialog && (
-        <div className="modal-backdrop" role="dialog" aria-modal="true" aria-label="Kategorie erstellen">
+        <div className="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="calendar-category-manager-title">
           <div className="modal-card calendar-category-dialog">
-            <section className="form-panel">
+            <section className="form-panel calendar-category-manager">
               <div className="panel-heading">
-                <h3>Kategorie erstellen</h3>
+                <div>
+                  <h3 id="calendar-category-manager-title">Kategorien verwalten</h3>
+                  <p>Farben werden bei verbundener Microsoft-365-Anmeldung direkt mit Exchange abgeglichen.</p>
+                </div>
                 <button className="icon-only" type="button" aria-label="Schließen" onClick={() => setShowCategoryDialog(false)}>
                   <X size={22} />
                 </button>
               </div>
-              <div className="form-grid">
-                <label className="field">
-                  <span>Name</span>
-                  <input value={newCategoryName} onChange={(event) => setNewCategoryName(event.target.value)} placeholder="z. B. Sitzung" autoFocus />
-                </label>
-                <label className="field">
-                  <span>Farbe</span>
-                  <select value={newCategoryColor} onChange={(event) => setNewCategoryColor(event.target.value)}>
-                    {calendarColorOptions.map((color) => <option value={color.value} key={color.value}>{color.label}</option>)}
-                  </select>
-                </label>
-              </div>
+              <section className="calendar-category-manager-card">
+                <div className="calendar-category-card-heading">
+                  <div><h4>Neue Kategorie</h4><p>Zum Beispiel „Vortrag“ oder „Dienstbesprechung“.</p></div>
+                </div>
+                <div className="form-grid">
+                  <label className="field">
+                    <span>Name</span>
+                    <input value={newCategoryName} onChange={(event) => setNewCategoryName(event.target.value)} placeholder="z. B. Sitzung" autoFocus />
+                  </label>
+                  <label className="field">
+                    <span>Farbe</span>
+                    <select value={newCategoryColor} onChange={(event) => setNewCategoryColor(event.target.value)}>
+                      {calendarColorOptions.map((color) => <option value={color.value} key={color.value}>{color.label}</option>)}
+                    </select>
+                  </label>
+                </div>
+                <div className="button-row">
+                  <button className="primary" type="button" onClick={() => void createCategory()} disabled={categorySaving}>{categorySaving ? "Wird gespeichert …" : "Kategorie anlegen"}</button>
+                </div>
+              </section>
+              <section className="calendar-category-manager-card">
+                <div className="calendar-category-card-heading">
+                  <div><h4>Bestehende Kategorien</h4><p>Die Farbänderung gilt auch für passende Kategorien in Outlook, Teams und weiteren Exchange-Apps.</p></div>
+                  <button type="button" className="icon-only" aria-label="Exchange-Kategorien neu laden" title="Exchange-Kategorien neu laden" onClick={() => void openCategoryManager()} disabled={categoryManagerLoading}>
+                    <RefreshCw size={18} className={categoryManagerLoading ? "is-spinning" : ""} />
+                  </button>
+                </div>
+                {categories.length === 0 ? <p className="calendar-category-empty">Noch keine Kategorien angelegt.</p> : (
+                  <ul className="calendar-category-list">
+                    {categories.map((category) => {
+                      const option = calendarColorOptions.find((color) => color.value === calendarColorValue(category.color)) ?? calendarColorOptions[0];
+                      return <li key={category.name}>
+                        <span className="calendar-category-swatch" style={{ background: option.border }} aria-hidden="true" />
+                        <strong>{category.name}</strong>
+                        <label>
+                          <span className="sr-only">Farbe für {category.name}</span>
+                          <select value={calendarColorValue(category.color)} disabled={categorySaving} onChange={(event) => void updateCategoryColor(category, event.target.value)}>
+                            {calendarColorOptions.map((color) => <option value={color.value} key={color.value}>{color.label}</option>)}
+                          </select>
+                        </label>
+                      </li>;
+                    })}
+                  </ul>
+                )}
+                <p className="calendar-category-safety">Kategorien werden hier nicht gelöscht: Sie können in Exchange auch E-Mails, Kontakte oder Aufgaben kennzeichnen.</p>
+              </section>
               <div className="button-row">
-                <button className="primary" type="button" onClick={createCategory}>Speichern</button>
-                <button type="button" onClick={() => setShowCategoryDialog(false)}>Abbrechen</button>
+                <button type="button" onClick={() => setShowCategoryDialog(false)}>Schließen</button>
               </div>
             </section>
           </div>
@@ -1392,6 +1638,7 @@ export function CalendarPage({ advancedMode, onAdvancedModeChange, onNavigate }:
                       title={`${event.title} - ${event.location}${canDrag ? "\nZum Verschieben ziehen" : ""}`}
                       key={event.id}
                       onClick={(click) => openEventFromClick(click, event)}
+                      onContextMenu={(contextEvent) => openEventContextMenu(contextEvent, event)}
                       onPointerDown={(pointerEvent) => canDrag && beginEventPointerDrag(pointerEvent, event.id)}
                       onPointerMove={(pointerEvent) => canDrag && updateEventPointerDrag(pointerEvent)}
                       onPointerUp={(pointerEvent) => canDrag && finishEventPointerDrag(pointerEvent)}
@@ -1418,7 +1665,7 @@ export function CalendarPage({ advancedMode, onAdvancedModeChange, onNavigate }:
                 </button>
               ))}
             </div>
-            <AllDayEventStrip days={weekDays} events={sortedEvents} onOpen={openEvent} />
+            <AllDayEventStrip days={weekDays} events={sortedEvents} onOpen={openEvent} onContextMenu={openEventContextMenu} />
             <div
               className="calendar-week-timeline"
               style={{ "--calendar-days": weekDays.length, "--calendar-hour-height": `${advancedMode ? advancedSettings.hourHeight : compactCalendarHourHeight}px`, "--calendar-half-hour-height": `${(advancedMode ? advancedSettings.hourHeight : compactCalendarHourHeight) / 2}px`, height: `${(advancedMode ? advancedSettings.hourHeight : compactCalendarHourHeight) * 24}px` } as CSSProperties}
@@ -1473,6 +1720,7 @@ export function CalendarPage({ advancedMode, onAdvancedModeChange, onNavigate }:
                             key={layout.event.id}
                             title={`${layout.event.title}\n${eventTimeRange(layout.event)}${layout.event.location ? `\n${layout.event.location}` : ""}${canDrag ? "\nZum Verschieben ziehen" : ""}`}
                             onClick={(event) => openEventFromClick(event, layout.event)}
+                            onContextMenu={(event) => openEventContextMenu(event, layout.event)}
                             onPointerDown={(event) => canDrag && beginEventPointerDrag(event, layout.event.id)}
                             onPointerMove={(event) => canDrag && updateEventPointerDrag(event)}
                             onPointerUp={(event) => canDrag && finishEventPointerDrag(event)}
@@ -1505,7 +1753,7 @@ export function CalendarPage({ advancedMode, onAdvancedModeChange, onNavigate }:
                 <small>{new Intl.DateTimeFormat("de-DE", { month: "long", year: "numeric" }).format(cursor)}</small>
               </div>
             </div>
-            <AllDayEventStrip days={[cursor]} events={sortedEvents} onOpen={openEvent} />
+            <AllDayEventStrip days={[cursor]} events={sortedEvents} onOpen={openEvent} onContextMenu={openEventContextMenu} />
             <div
               className="calendar-day-timeline"
               style={{ "--calendar-hour-height": `${advancedMode ? advancedSettings.hourHeight : compactCalendarHourHeight}px`, "--calendar-half-hour-height": `${(advancedMode ? advancedSettings.hourHeight : compactCalendarHourHeight) / 2}px`, height: `${(advancedMode ? advancedSettings.hourHeight : compactCalendarHourHeight) * 24}px` } as CSSProperties}
@@ -1558,6 +1806,7 @@ export function CalendarPage({ advancedMode, onAdvancedModeChange, onNavigate }:
                       key={layout.event.id}
                       title={`${layout.event.title}\n${eventTimeRange(layout.event)}${layout.event.location ? `\n${layout.event.location}` : ""}${canDrag ? "\nZum Verschieben ziehen" : ""}`}
                       onClick={(event) => openEventFromClick(event, layout.event)}
+                      onContextMenu={(event) => openEventContextMenu(event, layout.event)}
                       onPointerDown={(event) => canDrag && beginEventPointerDrag(event, layout.event.id)}
                       onPointerMove={(event) => canDrag && updateEventPointerDrag(event)}
                       onPointerUp={(event) => canDrag && finishEventPointerDrag(event)}
@@ -1577,6 +1826,65 @@ export function CalendarPage({ advancedMode, onAdvancedModeChange, onNavigate }:
         </section>
       )}
       </div></section>}
+
+      {eventContextMenu && (() => {
+        const target = normalizeEvent(contextMenuMaster(eventContextMenu.event));
+        const meeting = target.meeting ?? blankEvent().meeting!;
+        const toggleSubmenu = (submenu: Exclude<CalendarEventContextSubmenu, null>) => {
+          setEventContextMenu((current) => current ? { ...current, submenu: current.submenu === submenu ? null : submenu } : null);
+        };
+        const availabilityOptions: Array<{ value: CalendarAvailability; label: string }> = [
+          { value: "free", label: "Frei" },
+          { value: "tentative", label: "Mit Vorbehalt" },
+          { value: "busy", label: "Beschäftigt" },
+          { value: "oof", label: "Abwesend" },
+          { value: "workingElsewhere", label: "Anderswo arbeiten" }
+        ];
+        return <div
+          className="calendar-event-context-menu"
+          role="menu"
+          aria-label={`Aktionen für ${target.title || "Termin"}`}
+          style={{ left: eventContextMenu.x, top: eventContextMenu.y }}
+          onPointerDown={(event) => event.stopPropagation()}
+          onContextMenu={(event) => event.preventDefault()}
+        >
+          <button type="button" role="menuitem" onClick={() => { setEventContextMenu(null); setEventToPrint(target); }}><Printer size={17} /> Drucken</button>
+          <button type="button" role="menuitem" onClick={() => { setEventContextMenu(null); openEvent(target); }}><ExternalLink size={17} /> Öffnen</button>
+          <button type="button" role="menuitem" onClick={() => void forwardContextMenuEvent(target)}><Forward size={17} /> Weiterleiten</button>
+          <span className="calendar-event-context-separator" />
+          <button type="button" role="menuitem" aria-expanded={eventContextMenu.submenu === "symbol"} onClick={() => toggleSubmenu("symbol")}><Palette size={17} /> Symbol <ChevronRight size={16} /></button>
+          {eventContextMenu.submenu === "symbol" && <div className="calendar-event-context-submenu" role="group" aria-label="Symbol auswählen">
+            {calendarColorOptions.map((color) => <button className={target.color === color.value ? "selected" : ""} type="button" key={color.value} onClick={() => updateContextMenuEvent(target, { color: color.value })}><i style={{ background: color.border }} /> {color.label}</button>)}
+          </div>}
+          <button type="button" role="menuitem" aria-expanded={eventContextMenu.submenu === "availability"} onClick={() => toggleSubmenu("availability")}><Eye size={17} /> Anzeigen als <ChevronRight size={16} /></button>
+          {eventContextMenu.submenu === "availability" && <div className="calendar-event-context-submenu" role="group" aria-label="Verfügbarkeit auswählen">
+            {availabilityOptions.map((option) => <button className={meeting.showAs === option.value ? "selected" : ""} type="button" key={option.value} onClick={() => updateContextMenuEvent(target, { meeting: { ...meeting, showAs: option.value } })}>{option.label}</button>)}
+          </div>}
+          <button type="button" role="menuitem" aria-expanded={eventContextMenu.submenu === "category"} onClick={() => toggleSubmenu("category")}><Tag size={17} /> Kategorisieren <ChevronRight size={16} /></button>
+          {eventContextMenu.submenu === "category" && <div className="calendar-event-context-submenu" role="group" aria-label="Kategorie auswählen">
+            <button className={!target.category ? "selected" : ""} type="button" onClick={() => updateContextMenuEvent(target, { category: "" })}>Keine Kategorie</button>
+            {categoryOptions.map((category) => <button className={target.category === category ? "selected" : ""} type="button" key={category} onClick={() => updateContextMenuEvent(target, { category })}>{category}</button>)}
+          </div>}
+          <button type="button" role="menuitemcheckbox" aria-checked={meeting.isPrivate} onClick={() => updateContextMenuEvent(target, { meeting: { ...meeting, isPrivate: !meeting.isPrivate } })}><Lock size={17} /> Privat {meeting.isPrivate && <span className="calendar-event-context-check">✓</span>}</button>
+          <span className="calendar-event-context-separator" />
+          <button type="button" role="menuitem" onClick={() => duplicateContextMenuEvent(target)}><Copy size={17} /> Ereignis duplizieren</button>
+          <button type="button" role="menuitem" onClick={() => void exportContextMenuEvent(target)}><Download size={17} /> Als .ics speichern</button>
+          <span className="calendar-event-context-separator" />
+          <button className="danger" type="button" role="menuitem" onClick={() => { setEventContextMenu(null); deleteEvent(target); }}><Trash2 size={17} /> Löschen</button>
+        </div>;
+      })()}
+
+      {eventToPrint && <section className="calendar-event-print-sheet" aria-hidden="true">
+        <p>DMH Backup · Kalender</p>
+        <h1>{eventToPrint.title || "Ohne Titel"}</h1>
+        <dl>
+          <div><dt>Datum</dt><dd>{formatCalendarDate(eventToPrint.startsAt)}</dd></div>
+          <div><dt>Uhrzeit</dt><dd>{eventToPrint.isAllDay ? "Ganztägig" : eventTimeRange(eventToPrint)}</dd></div>
+          {eventToPrint.location && <div><dt>Ort</dt><dd>{eventToPrint.location}</dd></div>}
+          {eventToPrint.category && <div><dt>Kategorie</dt><dd>{eventToPrint.category}</dd></div>}
+        </dl>
+        {eventToPrint.description && <p className="calendar-event-print-description">{eventToPrint.description}</p>}
+      </section>}
 
       <EasyImportDialog
         kind="calendar"

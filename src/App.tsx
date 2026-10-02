@@ -33,6 +33,7 @@ import {
   calendarChangedEventName,
   calendarStorageUpdatedEventName,
   m365DataUpdatedEventName,
+  m365SafeImportTestMode,
   recordMicrosoft365SynchronizationError,
   runAutomaticCalendarSync as performAutomaticCalendarSync,
   type CalendarAutomaticSyncStatus
@@ -81,7 +82,7 @@ export default function App() {
   const backupGeneration = useRef(0);
   const documentSyncPromise = useRef<Promise<void> | null>(null);
   const calendarSyncPromise = useRef<Promise<"success" | "error" | "skipped"> | null>(null);
-  const queuedCalendarSyncTrigger = useRef<"open" | "change" | "poll" | null>(null);
+  const queuedCalendarSyncTrigger = useRef<"open" | "change" | "poll" | "calendar-poll" | null>(null);
   const navigationBlockerRef = useRef<NavigationBlocker | null>(null);
   const closing = useRef(false);
   const settingsAreaOpen = page === "settings" || page === "feature-development" || page === "backup" || page === "synchronizations" || page === "m365" || page === "recovery";
@@ -174,6 +175,7 @@ export default function App() {
 
   const runDocumentSync = useCallback(async (): Promise<void> => {
     if (!("__TAURI_INTERNALS__" in window)) return;
+    if (m365SafeImportTestMode) return;
     if (documentSyncPromise.current) return documentSyncPromise.current;
     const promise = syncOfflineDocuments().then(() => undefined);
     documentSyncPromise.current = promise;
@@ -181,15 +183,18 @@ export default function App() {
     finally { if (documentSyncPromise.current === promise) documentSyncPromise.current = null; }
   }, []);
 
-  const runCalendarSync = useCallback(async (trigger: "open" | "change" | "poll"): Promise<"success" | "error" | "skipped"> => {
+  const runCalendarSync = useCallback(async (trigger: "open" | "change" | "poll" | "calendar-poll"): Promise<"success" | "error" | "skipped"> => {
     if (!("__TAURI_INTERNALS__" in window)) return "skipped";
     if (calendarSyncPromise.current) {
-      if (trigger === "change" || queuedCalendarSyncTrigger.current === null) queuedCalendarSyncTrigger.current = trigger;
+      if (trigger === "change" || queuedCalendarSyncTrigger.current === null
+        || (trigger === "poll" && queuedCalendarSyncTrigger.current === "calendar-poll")) {
+        queuedCalendarSyncTrigger.current = trigger;
+      }
       return calendarSyncPromise.current;
     }
     const promise = (async () => {
       let outcome: "success" | "error" | "skipped" = "skipped";
-      let nextTrigger: "open" | "change" | "poll" | null = trigger;
+      let nextTrigger: "open" | "change" | "poll" | "calendar-poll" | null = trigger;
       while (nextTrigger) {
         const currentTrigger = nextTrigger;
         queuedCalendarSyncTrigger.current = null;
@@ -197,7 +202,12 @@ export default function App() {
           const status = await performAutomaticCalendarSync(currentTrigger);
           if (status) {
             outcome = status.state;
-            window.dispatchEvent(new CustomEvent<CalendarAutomaticSyncStatus>(calendarAutomaticSyncStatusEventName, { detail: status }));
+            // A healthy 25-second poll is silent. Otherwise it would keep
+            // replacing the calendar's useful message with "already synced".
+            if (currentTrigger !== "calendar-poll" || status.state !== "success"
+              || status.message !== "Microsoft 365 ist bereits synchron.") {
+              window.dispatchEvent(new CustomEvent<CalendarAutomaticSyncStatus>(calendarAutomaticSyncStatusEventName, { detail: status }));
+            }
           }
         } catch (error) {
           outcome = "error";
@@ -264,13 +274,31 @@ export default function App() {
       failedPollingCycles = outcome === "error" ? Math.min(failedPollingCycles + 1, 3) : 0;
       schedulePolling();
     };
+    // A lightweight calendar-only delta pass keeps changes made in Teams or
+    // Exchange responsive without fetching every contact folder every 25 s.
+    const calendarPollInterval = window.setInterval(() => {
+      void runCalendarSync("calendar-poll");
+    }, 25_000);
 
     void getMicrosoft365ConnectionStatus()
       .then(async (status) => {
         if (status.connected) {
-          await enableCompleteAutomaticMicrosoft365Sync(false);
-          const outcome = await runCalendarSync("open");
-          failedPollingCycles = outcome === "error" ? 1 : 0;
+          // A contact-folder problem must not prevent the first calendar read.
+          if (!m365SafeImportTestMode) {
+            try {
+              await enableCompleteAutomaticMicrosoft365Sync(false);
+            } catch (error) {
+              await recordMicrosoft365SynchronizationError(error).catch(() => undefined);
+              window.dispatchEvent(new CustomEvent<CalendarAutomaticSyncStatus>(calendarAutomaticSyncStatusEventName, {
+                detail: { state: "error", message: `Microsoft-365-Einrichtung konnte nicht abgeschlossen werden: ${error}` }
+              }));
+            }
+          }
+          await runCalendarSync("calendar-poll");
+          if (!m365SafeImportTestMode) {
+            const outcome = await runCalendarSync("open");
+            failedPollingCycles = outcome === "error" ? 1 : 0;
+          }
         }
         schedulePolling();
       })
@@ -299,6 +327,7 @@ export default function App() {
       document.removeEventListener("visibilitychange", syncWhenVisible);
       disposed = true;
       clearPollingTimer();
+      window.clearInterval(calendarPollInterval);
       if (debounceTimer !== undefined) window.clearTimeout(debounceTimer);
     };
   }, [runCalendarSync]);

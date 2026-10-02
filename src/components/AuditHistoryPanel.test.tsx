@@ -15,6 +15,27 @@ const records: AuditLogEntry[] = [
 ];
 
 describe("AuditHistoryPanel", () => {
+  it("kennzeichnet eine automatische Exchange-Verknüpfung statt einer Löschung", async () => {
+    listAuditLogMock.mockReset();
+    listAuditLogMock.mockResolvedValue({
+      entries: [{
+        id: 4,
+        occurredAt: "2026-10-02T09:42:00Z",
+        actor: "Automatische Microsoft-365-Synchronisierung",
+        source: "m365",
+        action: "linked",
+        entityKind: "calendar",
+        entityId: "m365:calendar:remote-dentist",
+        summary: "Termin mit Microsoft 365 verknüpft: Praxis Sanos (technischer ID-Wechsel; kein Termin gelöscht)"
+      } satisfies AuditLogEntry],
+      hasMore: false
+    });
+    render(<AuditHistoryPanel />);
+
+    expect(await screen.findByText("Mit Microsoft 365 verknüpft")).toBeVisible();
+    expect(screen.getByText(/technischer ID-Wechsel; kein Termin gelöscht/)).toBeVisible();
+  });
+
   it("lädt ältere Einträge und sucht mit Aktionsfilter im ganzen Protokoll", async () => {
     listAuditLogMock.mockReset();
     listAuditLogMock.mockImplementation(async (filter: AuditLogFilter) => {

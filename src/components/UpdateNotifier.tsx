@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import { isTauri } from "@tauri-apps/api/core";
 import { check } from "@tauri-apps/plugin-updater";
 import { restartApp } from "../services/db";
+import { m365SafeImportTestMode } from "../utils/automaticCalendarSync";
 
 type AvailableUpdate = NonNullable<Awaited<ReturnType<typeof check>>>;
 type UpdateStatus = "available" | "downloading" | "installing" | "installed" | "error";
@@ -38,7 +39,7 @@ export function UpdateNotifier() {
   useEffect(() => {
     // The updater is available only in the installed desktop app. Do not show
     // a false warning while EDV tests the Vite preview in a browser.
-    if (!isTauri()) {
+    if (!isTauri() || m365SafeImportTestMode) {
       return;
     }
 

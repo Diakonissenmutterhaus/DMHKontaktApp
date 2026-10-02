@@ -3,7 +3,7 @@ use base64::{
     engine::general_purpose::{STANDARD as BASE64_STANDARD, URL_SAFE_NO_PAD},
     Engine as _,
 };
-use chrono::{Duration as ChronoDuration, Utc};
+use chrono::{Datelike, Duration as ChronoDuration, Utc};
 use rand::{Rng, RngCore};
 use rusqlite::{params, OptionalExtension};
 use serde::{Deserialize, Serialize};
@@ -20,18 +20,35 @@ use zeroize::Zeroize;
 
 const TOKEN_SETTING_KEY: &str = "m365_token_bundle_v1";
 const PROFILE_SETTING_KEY: &str = "m365_connection_profile_v1";
+const CALENDAR_COLOR_CATEGORY_MIGRATION_KEY_PREFIX: &str = "m365_calendar_color_categories_v2";
 const DPAPI_ENTROPY: &[u8] = b"de.dmh.agendakontakte.m365.v1";
 const GRAPH_PROFILE_URL: &str =
     "https://graph.microsoft.com/v1.0/me?$select=id,displayName,mail,userPrincipalName";
-const LOGIN_SCOPES: &str = "openid profile offline_access User.Read Contacts.ReadWrite Contacts.ReadWrite.Shared Calendars.ReadWrite Calendars.ReadWrite.Shared Calendars.Read.Shared MailboxSettings.Read Files.ReadWrite.All Sites.Read.All";
+const LOGIN_SCOPES: &str = "openid profile offline_access User.Read Contacts.ReadWrite Contacts.ReadWrite.Shared Calendars.ReadWrite Calendars.ReadWrite.Shared Calendars.Read.Shared MailboxSettings.ReadWrite Files.ReadWrite.All Sites.Read.All";
 const INTERACTIVE_LOGIN_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 const GRAPH_MAX_ATTEMPTS: usize = 5;
 const GRAPH_MAX_PAGES: usize = 100_000;
 // Large enough to drain a 200k-event first import in roughly 40 bounded
 // transactions, while keeping each WebView/SQLite hand-off manageable.
 const CALENDAR_DELTA_BATCH_SIZE: usize = 5_000;
-const CALENDAR_DELTA_WINDOW_START: &str = "1900-01-01T00:00:00Z";
-const CALENDAR_DELTA_WINDOW_END: &str = "2100-01-01T00:00:00Z";
+// Opt-in diagnostic mode for a local development run. It is intentionally
+// enforced in Rust as well as the WebView so no UI path can write to Graph.
+fn m365_read_only_test_mode() -> bool {
+    std::env::var("DMH_M365_READ_ONLY_TEST").as_deref() == Ok("1")
+}
+
+#[tauri::command]
+pub fn get_m365_read_only_test_mode() -> bool {
+    m365_read_only_test_mode()
+}
+// v1.0 calendarView/delta needs a bounded date range. A 200-year calendarView
+// expands recurring series and can fail before it ever reaches a delta token.
+fn calendar_delta_window(year: i32) -> (String, String) {
+    (
+        format!("{:04}-01-01T00:00:00Z", year - 1),
+        format!("{:04}-01-01T00:00:00Z", year + 3),
+    )
+}
 
 #[derive(Default)]
 pub struct Microsoft365Runtime {
@@ -207,6 +224,8 @@ pub struct Microsoft365SyncApplyRequest {
     pub decisions: HashMap<String, String>,
     #[serde(default)]
     pub backup: Option<crate::BackupData>,
+    #[serde(default)]
+    pub allow_partial_sources: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -675,6 +694,16 @@ fn read_account(app: &AppHandle) -> Result<Option<Microsoft365Account>, String> 
         .transpose()
 }
 
+fn calendar_color_category_migration_keys(app: &AppHandle) -> Result<(String, String), String> {
+    let account =
+        read_account(app)?.ok_or_else(|| "Microsoft-365-Konto ist nicht verbunden.".to_string())?;
+    let digest = Sha256::digest(account.id.as_bytes());
+    let account_key = URL_SAFE_NO_PAD.encode(&digest[..12]);
+    let progress_key = format!("{CALENDAR_COLOR_CATEGORY_MIGRATION_KEY_PREFIX}_{account_key}");
+    let cursor_key = format!("{progress_key}_cursor");
+    Ok((progress_key, cursor_key))
+}
+
 fn save_connection(
     app: &AppHandle,
     account: &Microsoft365Account,
@@ -795,7 +824,7 @@ fn graph_retry_delay(
     headers: &reqwest::header::HeaderMap,
     attempt: usize,
 ) -> Option<Duration> {
-    if !matches!(status.as_u16(), 429 | 502 | 503 | 504) {
+    if !matches!(status.as_u16(), 429 | 500 | 502 | 503 | 504) {
         return None;
     }
     let retry_after = headers
@@ -907,16 +936,6 @@ struct CalendarDeltaBatch {
     removed_ids: HashSet<String>,
 }
 
-fn calendar_delta_queue_count(app: &AppHandle, source_id: &str) -> Result<usize, String> {
-    open_db(app)?
-        .query_row(
-            "SELECT COUNT(*) FROM m365_calendar_delta_changes WHERE source_id = ?1",
-            [source_id],
-            |row| row.get(0),
-        )
-        .map_err(|error| error.to_string())
-}
-
 fn clear_calendar_delta_state(app: &AppHandle, source_id: &str) -> Result<(), String> {
     let mut conn = open_db(app)?;
     let tx = conn.transaction().map_err(|error| error.to_string())?;
@@ -934,15 +953,12 @@ fn clear_calendar_delta_state(app: &AppHandle, source_id: &str) -> Result<(), St
 }
 
 fn calendar_delta_link(app: &AppHandle, source_id: &str) -> Result<Option<String>, String> {
+    let (window_start, window_end) = calendar_delta_window(Utc::now().year());
     open_db(app)?
         .query_row(
             "SELECT delta_link FROM m365_calendar_delta_state
              WHERE source_id = ?1 AND window_start = ?2 AND window_end = ?3",
-            params![
-                source_id,
-                CALENDAR_DELTA_WINDOW_START,
-                CALENDAR_DELTA_WINDOW_END
-            ],
+            params![source_id, window_start, window_end],
             |row| row.get(0),
         )
         .optional()
@@ -997,6 +1013,7 @@ fn save_calendar_delta_link(
     source_id: &str,
     delta_link: &str,
 ) -> Result<(), String> {
+    let (window_start, window_end) = calendar_delta_window(Utc::now().year());
     let conn = open_db(app)?;
     conn.execute(
         "INSERT INTO m365_calendar_delta_state
@@ -1010,8 +1027,8 @@ fn save_calendar_delta_link(
         params![
             source_id,
             delta_link,
-            CALENDAR_DELTA_WINDOW_START,
-            CALENDAR_DELTA_WINDOW_END,
+            window_start,
+            window_end,
             Utc::now().to_rfc3339()
         ],
     )
@@ -1024,17 +1041,17 @@ async fn refresh_calendar_delta_queue(
     access_token: &str,
     source: &Microsoft365SyncSource,
 ) -> Result<(), String> {
-    if calendar_delta_queue_count(app, &source.id)? > 0 {
-        return Ok(());
-    }
-
+    // Keep fetching newer deltas even if an older change is still pending.
+    // One conflicting or temporarily unwritable event must not stop every
+    // later edit made in Teams from reaching the app.
     let mut reset_attempted = false;
     loop {
+        let (window_start, window_end) = calendar_delta_window(Utc::now().year());
         let saved_link = calendar_delta_link(app, &source.id)?;
         let mut next_url = Some(saved_link.clone().unwrap_or_else(|| {
             format!(
                 "{}/calendarView/delta?startDateTime={}&endDateTime={}",
-                source.resource_path, CALENDAR_DELTA_WINDOW_START, CALENDAR_DELTA_WINDOW_END
+                source.resource_path, window_start, window_end
             )
         }));
         let mut pages = 0usize;
@@ -1060,7 +1077,33 @@ async fn refresh_calendar_delta_queue(
                 Err(error) => return Err(error),
             };
             if let Some(values) = page.get("value").and_then(Value::as_array) {
-                queue_calendar_delta_page(app, &source.id, values)?;
+                let mut resolved = Vec::with_capacity(values.len());
+                for value in values {
+                    if value.get("@removed").is_none() {
+                        resolved.push(value.clone());
+                        continue;
+                    }
+                    let remote_id = value_text(value, "id");
+                    if remote_id.is_empty() {
+                        continue;
+                    }
+                    // Graph also emits @removed when an appointment moves out
+                    // of the calendarView range. Fetch it by ID before treating
+                    // the marker as an actual deletion.
+                    let event_url = format!(
+                        "{}/events/{}",
+                        source.resource_path,
+                        encode_graph_path_segment(remote_id)
+                    );
+                    match graph_json(access_token, &event_url).await {
+                        Ok(current) => resolved.push(current),
+                        Err(error) if error.contains("HTTP 404") || error.contains("HTTP 410") => {
+                            resolved.push(value.clone());
+                        }
+                        Err(error) => return Err(error),
+                    }
+                }
+                queue_calendar_delta_page(app, &source.id, &resolved)?;
             }
             next_url = page
                 .get("@odata.nextLink")
@@ -1195,23 +1238,44 @@ pub async fn list_m365_sync_sources(
     app: AppHandle,
     shared_mailbox_addresses: Option<Vec<String>>,
 ) -> Result<Microsoft365SyncSources, String> {
+    list_m365_sync_sources_filtered(app, shared_mailbox_addresses, true, true).await
+}
+
+async fn list_m365_sync_sources_filtered(
+    app: AppHandle,
+    shared_mailbox_addresses: Option<Vec<String>>,
+    include_contacts: bool,
+    include_calendars: bool,
+) -> Result<Microsoft365SyncSources, String> {
     let access_token = refreshed_access_token(&app).await?;
-    let contact_folders = graph_collection(
+    let contact_folders = if include_contacts {
+        graph_collection(
         &access_token,
         "https://graph.microsoft.com/v1.0/me/contactFolders?$select=id,displayName,parentFolderId&$top=100",
     )
-    .await?;
-    let calendars = graph_collection(
-        &access_token,
-        "https://graph.microsoft.com/v1.0/me/calendars?$select=id,name,canEdit,owner&$top=100",
-    )
-    .await?;
-    let calendar_groups = graph_collection(
-        &access_token,
-        "https://graph.microsoft.com/v1.0/me/calendarGroups?$select=id,name&$top=100",
-    )
-    .await
-    .unwrap_or_default();
+    .await?
+    } else {
+        Vec::new()
+    };
+    let calendars = if include_calendars {
+        graph_collection(
+            &access_token,
+            "https://graph.microsoft.com/v1.0/me/calendars?$select=id,name,canEdit,owner&$top=100",
+        )
+        .await?
+    } else {
+        Vec::new()
+    };
+    let calendar_groups = if include_calendars {
+        graph_collection(
+            &access_token,
+            "https://graph.microsoft.com/v1.0/me/calendarGroups?$select=id,name&$top=100",
+        )
+        .await
+        .unwrap_or_default()
+    } else {
+        Vec::new()
+    };
 
     let mut calendar_sources: Vec<Microsoft365SyncSource> = calendars
         .iter()
@@ -1268,18 +1332,20 @@ pub async fn list_m365_sync_sources(
             )
         })
         .collect();
-    contact_sources.insert(
-        0,
-        Microsoft365SyncSource {
-            id: "me:default-contacts".to_string(),
-            name: "Kontakte".to_string(),
-            kind: "contactFolder".to_string(),
-            editable: true,
-            shared: false,
-            resource_path: "https://graph.microsoft.com/v1.0/me/contacts".to_string(),
-            mailbox: None,
-        },
-    );
+    if include_contacts {
+        contact_sources.insert(
+            0,
+            Microsoft365SyncSource {
+                id: "me:default-contacts".to_string(),
+                name: "Kontakte".to_string(),
+                kind: "contactFolder".to_string(),
+                editable: true,
+                shared: false,
+                resource_path: "https://graph.microsoft.com/v1.0/me/contacts".to_string(),
+                mailbox: None,
+            },
+        );
+    }
     let mut shared_mailboxes = Vec::new();
 
     for address in shared_mailbox_addresses
@@ -1290,45 +1356,70 @@ pub async fn list_m365_sync_sources(
         .collect::<Vec<_>>()
     {
         let encoded_address = encode_graph_path_segment(&address);
-        let mailbox_calendars = graph_collection(
+        let mailbox_calendars = if include_calendars {
+            graph_collection(
             &access_token,
             &format!(
                 "https://graph.microsoft.com/v1.0/users/{encoded_address}/calendars?$select=id,name,canEdit,owner&$top=100"
             ),
         )
-        .await;
-        let mailbox_contacts = graph_collection(
+        .await
+        } else {
+            Ok(Vec::new())
+        };
+        let mailbox_contacts = if include_contacts {
+            graph_collection(
             &access_token,
             &format!(
                 "https://graph.microsoft.com/v1.0/users/{encoded_address}/contactFolders?$select=id,displayName,parentFolderId&$top=100"
             ),
         )
-        .await;
-        let mailbox_default_contacts = graph_collection(
+        .await
+        } else {
+            Ok(Vec::new())
+        };
+        let mailbox_default_contacts = if include_contacts {
+            graph_collection(
             &access_token,
             &format!(
                 "https://graph.microsoft.com/v1.0/users/{encoded_address}/contacts?$select=id&$top=1"
             ),
         )
-        .await;
-        let mailbox_access_error = if mailbox_calendars.is_err()
+        .await
+        } else {
+            Ok(Vec::new())
+        };
+        let mailbox_access_error = if include_calendars
+            && mailbox_calendars.is_err()
+            && (!include_contacts
+                || (mailbox_contacts.is_err() && mailbox_default_contacts.is_err()))
+        {
+            let mut message = format!("Kalender: {}", mailbox_calendars.as_ref().err().unwrap());
+            if include_contacts {
+                message.push_str(&format!(
+                    " Kontakte: {}",
+                    mailbox_contacts
+                        .as_ref()
+                        .err()
+                        .or_else(|| mailbox_default_contacts.as_ref().err())
+                        .unwrap()
+                ));
+            }
+            Some(message)
+        } else if !include_calendars
+            && include_contacts
             && mailbox_contacts.is_err()
             && mailbox_default_contacts.is_err()
         {
             Some(format!(
-                "Kalender: {} Kontakte: {}",
-                mailbox_calendars.as_ref().err().unwrap(),
-                mailbox_contacts
-                    .as_ref()
-                    .err()
-                    .or_else(|| mailbox_default_contacts.as_ref().err())
-                    .unwrap()
+                "Kontakte: {}",
+                mailbox_contacts.as_ref().err().unwrap()
             ))
         } else {
             None
         };
 
-        if mailbox_default_contacts.is_ok() {
+        if include_contacts && mailbox_default_contacts.is_ok() {
             contact_sources.push(synthetic_sync_source(
                 format!("{address}:default-contacts"),
                 format!("{address} · Kontakte"),
@@ -1338,8 +1429,9 @@ pub async fn list_m365_sync_sources(
             ));
         }
 
-        if let Ok(values) = &mailbox_contacts {
-            contact_sources.extend(values.iter().filter_map(|value| {
+        if include_contacts {
+            if let Ok(values) = &mailbox_contacts {
+                contact_sources.extend(values.iter().filter_map(|value| {
                 let id = value.get("id").and_then(Value::as_str)?;
                 let mut source = sync_source(
                     value,
@@ -1353,6 +1445,7 @@ pub async fn list_m365_sync_sources(
                 source.name = format!("{address} · {}", source.name);
                 Some(source)
             }));
+            }
         }
         if let Ok(values) = &mailbox_calendars {
             calendar_sources.extend(values.iter().filter_map(|value| {
@@ -1375,7 +1468,7 @@ pub async fn list_m365_sync_sources(
             display_name: address.clone(),
             available: mailbox_access_error.is_none(),
             contact_folder_count: mailbox_contacts.as_ref().map(Vec::len).unwrap_or(0)
-                + usize::from(mailbox_default_contacts.is_ok()),
+                + usize::from(include_contacts && mailbox_default_contacts.is_ok()),
             calendar_count: mailbox_calendars.as_ref().map(Vec::len).unwrap_or(0),
             error: mailbox_access_error,
         });
@@ -1958,6 +2051,159 @@ fn outlook_category_color(value: &str) -> &'static str {
     }
 }
 
+fn outlook_category_has_color(value: &str) -> bool {
+    let Some(number) = value
+        .trim()
+        .to_ascii_lowercase()
+        .strip_prefix("preset")
+        .and_then(|number| number.parse::<u8>().ok())
+    else {
+        return false;
+    };
+    number <= 24 && !(10..=14).contains(&number)
+}
+
+fn dmh_category_for_calendar_color(value: &str) -> (&'static str, &'static str) {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "red" => ("DMH Farbe: Rot", "preset0"),
+        "green" => ("DMH Farbe: Grün", "preset4"),
+        "yellow" => ("DMH Farbe: Gelb", "preset1"),
+        "purple" => ("DMH Farbe: Lila", "preset8"),
+        // A gray local/imported value must never create a gray category in
+        // Exchange. Use the default blue category instead.
+        "gray" | "grey" => ("DMH Farbe: Blau", "preset7"),
+        _ => ("DMH Farbe: Blau", "preset7"),
+    }
+}
+
+fn graph_category_for_event(event: &crate::CalendarEvent) -> String {
+    let existing = event.category.trim();
+    if existing.eq_ignore_ascii_case("DMH Farbe: Grau") {
+        return "DMH Farbe: Blau".to_string();
+    }
+    if !existing.is_empty() {
+        return existing.to_string();
+    }
+    dmh_category_for_calendar_color(&event.color).0.to_string()
+}
+
+fn master_category_for_event(
+    event: &crate::CalendarEvent,
+    names: &HashMap<String, String>,
+) -> String {
+    let requested = graph_category_for_event(event);
+    names
+        .get(&requested.to_lowercase())
+        .cloned()
+        .unwrap_or(requested)
+}
+
+async fn ensure_m365_calendar_categories(
+    access_token: &str,
+    categories: impl IntoIterator<Item = (String, String)>,
+) -> Result<HashMap<String, String>, String> {
+    let existing = graph_collection(
+        access_token,
+        "https://graph.microsoft.com/v1.0/me/outlook/masterCategories?$select=id,displayName,color",
+    )
+    .await?
+    .into_iter()
+    .filter_map(|category| {
+        let name = value_text(&category, "displayName").trim().to_lowercase();
+        (!name.is_empty()).then_some((name, category))
+    })
+    .collect::<HashMap<_, _>>();
+    let mut needed = HashMap::<String, (String, &'static str)>::new();
+    for (name, local_color) in categories {
+        let color = dmh_category_for_calendar_color(&local_color).1;
+        needed.entry(name.to_lowercase()).or_insert((name, color));
+    }
+    // Repair categories created by earlier app versions, including the old
+    // gray default, even when no local event still refers to that category.
+    for (key, category) in &existing {
+        if outlook_category_has_color(value_text(category, "color")) {
+            continue;
+        }
+        let app_color = match key.as_str() {
+            "dmh farbe: rot" => Some("preset0"),
+            "dmh farbe: grün" => Some("preset4"),
+            "dmh farbe: gelb" => Some("preset1"),
+            "dmh farbe: lila" => Some("preset8"),
+            "dmh farbe: grau" | "dmh farbe: blau" => Some("preset7"),
+            _ => None,
+        };
+        if let Some(color) = app_color {
+            needed.insert(
+                key.clone(),
+                (
+                    value_text(category, "displayName").trim().to_string(),
+                    color,
+                ),
+            );
+        }
+    }
+    let mut changed = false;
+    for (key, (name, color)) in &needed {
+        let write = match existing.get(key) {
+            Some(category) if outlook_category_has_color(value_text(category, "color")) => {
+                continue;
+            }
+            Some(category) => {
+                let id = value_text(category, "id").trim();
+                if id.is_empty() {
+                    return Err(format!("Die Exchange-Kategorie „{name}“ hat keine Kennung und konnte nicht eingefärbt werden."));
+                }
+                graph_write(
+                    access_token,
+                    reqwest::Method::PATCH,
+                    &format!(
+                        "https://graph.microsoft.com/v1.0/me/outlook/masterCategories/{}",
+                        encode_graph_path_segment(id)
+                    ),
+                    &json!({ "color": color }),
+                )
+                .await
+            }
+            None => {
+                graph_write(
+                    access_token,
+                    reqwest::Method::POST,
+                    "https://graph.microsoft.com/v1.0/me/outlook/masterCategories",
+                    &json!({ "displayName": name, "color": color }),
+                )
+                .await
+            }
+        };
+        write.map_err(|error| format!(
+            "Die Exchange-Kategorie „{name}“ konnte nicht mit einer Farbe gespeichert werden: {error}. Bitte verbinden Sie Microsoft 365 erneut, falls die Kategorie-Berechtigung fehlt."
+        ))?;
+        changed = true;
+    }
+    let verified_categories = if changed {
+        graph_collection(
+            access_token,
+            "https://graph.microsoft.com/v1.0/me/outlook/masterCategories?$select=displayName,color",
+        )
+        .await?
+    } else {
+        existing.into_values().collect()
+    };
+    let verified = verified_categories
+        .into_iter()
+        .filter(|category| outlook_category_has_color(value_text(category, "color")))
+        .filter_map(|category| {
+            let name = value_text(&category, "displayName").trim().to_string();
+            (!name.is_empty()).then(|| (name.to_lowercase(), name))
+        })
+        .collect::<HashMap<_, _>>();
+    if let Some((_, (name, _))) = needed.iter().find(|(key, _)| !verified.contains_key(*key)) {
+        return Err(format!(
+                "Die Exchange-Kategorie „{name}“ hat noch keine bestätigte Farbe. Der Termin wird später erneut synchronisiert."
+            ));
+    }
+    Ok(verified)
+}
+
 async fn m365_master_categories(
     access_token: &str,
 ) -> Result<Vec<Microsoft365CalendarCategory>, String> {
@@ -1979,6 +2225,14 @@ async fn m365_master_categories(
             })
         })
         .collect())
+}
+
+fn m365_master_category_from_value(value: &Value) -> Option<Microsoft365CalendarCategory> {
+    let name = value_text(value, "displayName").trim();
+    (!name.is_empty()).then(|| Microsoft365CalendarCategory {
+        name: name.to_string(),
+        color: outlook_category_color(value_text(value, "color")).to_string(),
+    })
 }
 
 async fn m365_master_category_colors(access_token: &str) -> HashMap<String, String> {
@@ -2204,12 +2458,22 @@ fn merge_event(
     merged
 }
 
+fn normalized_event_for_graph(event: &crate::CalendarEvent) -> crate::CalendarEvent {
+    let mut normalized = event.clone();
+    let start = normalized.starts_at.trim().to_string();
+    let end = normalized.ends_at.trim().to_string();
+    if !start.is_empty() && !end.is_empty() && end < start {
+        // Microsoft Graph rejects an end before the start. Preserve the
+        // original duration and metadata by placing the two values in order.
+        normalized.starts_at = end;
+        normalized.ends_at = start;
+    }
+    normalized
+}
+
 fn graph_event_payload(event: &crate::CalendarEvent) -> Value {
-    let categories = if event.category.trim().is_empty() {
-        Vec::<String>::new()
-    } else {
-        vec![event.category.trim().to_string()]
-    };
+    let event = normalized_event_for_graph(event);
+    let categories = vec![graph_category_for_event(&event)];
     let attendees = event
         .meeting
         .required_attendees
@@ -2243,6 +2507,15 @@ fn graph_event_payload(event: &crate::CalendarEvent) -> Value {
         payload["isOnlineMeeting"] = Value::Bool(true);
         payload["onlineMeetingProvider"] = Value::String("teamsForBusiness".to_string());
     }
+    payload
+}
+
+fn graph_event_payload_for_master(
+    event: &crate::CalendarEvent,
+    names: &HashMap<String, String>,
+) -> Value {
+    let mut payload = graph_event_payload(event);
+    payload["categories"] = json!([master_category_for_event(event, names)]);
     payload
 }
 
@@ -2514,6 +2787,7 @@ struct Microsoft365SyncPlan {
     operations: Vec<PlannedOperation>,
     delta_operation_acks: HashMap<String, (String, String)>,
     delta_noop_acks: Vec<(String, String)>,
+    source_errors: Vec<String>,
 }
 
 const MAX_CONTACT_OPERATIONS_PER_SYNC: usize = 250;
@@ -2583,9 +2857,15 @@ async fn build_m365_sync_plan(
     app: &AppHandle,
     access_token: &str,
     request: &Microsoft365SyncPreviewRequest,
+    allow_partial_sources: bool,
 ) -> Result<Microsoft365SyncPlan, String> {
-    let sources =
-        list_m365_sync_sources(app.clone(), Some(request.shared_mailbox_addresses.clone())).await?;
+    let sources = list_m365_sync_sources_filtered(
+        app.clone(),
+        Some(request.shared_mailbox_addresses.clone()),
+        request.contacts,
+        request.calendars,
+    )
+    .await?;
     let selected_contacts: HashSet<&str> = request
         .selected_contact_source_ids
         .iter()
@@ -2596,6 +2876,23 @@ async fn build_m365_sync_plan(
         .iter()
         .map(String::as_str)
         .collect();
+    let mut source_errors = Vec::new();
+    if request.calendars {
+        let missing = request
+            .selected_calendar_source_ids
+            .iter()
+            .filter(|id| !sources.calendars.iter().any(|source| &source.id == *id))
+            .count();
+        if missing > 0 {
+            let message = format!(
+                "{missing} ausgewählte Microsoft-365-Kalender sind momentan nicht erreichbar. Kalenderauswahl oder Exchange-Verbindung prüfen."
+            );
+            if !allow_partial_sources {
+                return Err(message);
+            }
+            source_errors.push(message);
+        }
+    }
     let has_contact_export_target = request.contacts
         && sources.contacts.iter().any(|source| {
             contact_source_selected(request, &selected_contacts, source)
@@ -2635,6 +2932,11 @@ async fn build_m365_sync_plan(
         calendar_export_target_id(request, &sources.calendars, &selected_calendars);
     let duplicate_calendar_event_ids =
         duplicate_calendar_event_ids(&local_events, &sources.calendars, calendar_export_target_id);
+    let pending_calendar_content_ids = if request.calendars {
+        crate::pending_calendar_content_sync_ids(app)?
+    } else {
+        HashSet::new()
+    };
     let master_category_colors = if request.calendars {
         m365_master_category_colors(access_token).await
     } else {
@@ -3019,7 +3321,13 @@ async fn build_m365_sync_plan(
             let direction = source_direction(request, &source.id);
             let use_delta = direction == "import";
             let (mut values, removed_ids) = if use_delta {
-                refresh_calendar_delta_queue(app, access_token, source).await?;
+                if let Err(error) = refresh_calendar_delta_queue(app, access_token, source).await {
+                    if !allow_partial_sources {
+                        return Err(error);
+                    }
+                    source_errors.push(format!("{}: {error}", source.name));
+                    continue;
+                }
                 let batch = read_calendar_delta_batch(app, &source.id)?;
                 let mut ids = batch.removed_ids.clone();
                 ids.extend(
@@ -3049,6 +3357,7 @@ async fn build_m365_sync_plan(
                 .collect();
             let local_keys: HashSet<String> = local_events.iter().map(local_event_key).collect();
             let mut matched_remote_ids = HashSet::new();
+            let mut deferred_remote_ids = HashSet::new();
 
             for local in local_events.iter().filter(|event| {
                 !use_delta
@@ -3106,6 +3415,12 @@ async fn build_m365_sync_plan(
                 ) {
                     continue;
                 }
+                if use_delta && pending_calendar_content_ids.contains(&local.id) {
+                    if let Some(remote_id) = linked_calendar_remote_id(local, &source.id) {
+                        deferred_remote_ids.insert(remote_id.to_string());
+                    }
+                    continue;
+                }
                 let linked_id = linked_calendar_remote_id(local, &source.id);
                 if use_delta
                     && !linked_id
@@ -3143,6 +3458,12 @@ async fn build_m365_sync_plan(
                             _ => "updateLocal",
                         }
                     };
+                    if action == "conflict" && use_delta {
+                        // Preserve both records, but do not replay this same
+                        // ambiguity forever. The manual full-sync preview can
+                        // still show and resolve it explicitly.
+                        delta_noop_acks.push((source.id.clone(), remote_id.to_string()));
+                    }
                     push_operation(
                         &mut operations,
                         PlannedOperation {
@@ -3261,6 +3582,7 @@ async fn build_m365_sync_plan(
             if direction != "export" {
                 for remote in &values {
                     if matched_remote_ids.contains(value_text(remote, "id"))
+                        || deferred_remote_ids.contains(value_text(remote, "id"))
                         || local_keys.contains(&remote_event_key(remote))
                     {
                         continue;
@@ -3382,6 +3704,7 @@ async fn build_m365_sync_plan(
         operations,
         delta_operation_acks,
         delta_noop_acks,
+        source_errors,
     })
 }
 
@@ -3391,6 +3714,11 @@ async fn graph_write(
     url: &str,
     body: &Value,
 ) -> Result<Value, String> {
+    if m365_read_only_test_mode() {
+        return Err(
+            "Der sichere M365-Testmodus sperrt jede Änderung an Microsoft 365.".to_string(),
+        );
+    }
     let mut last_network_error = None;
     let idempotent = method != reqwest::Method::POST;
     for attempt in 0..GRAPH_MAX_ATTEMPTS {
@@ -3413,6 +3741,11 @@ async fn graph_write(
             }
         };
         let status = response.status();
+        if method == reqwest::Method::DELETE && status == reqwest::StatusCode::NOT_FOUND {
+            // A deletion already made in Teams is an idempotent success for
+            // the local outbox, not a permanent retry failure.
+            return Ok(Value::Null);
+        }
         if status.is_success() {
             if status.as_u16() == 204 {
                 return Ok(Value::Null);
@@ -3580,6 +3913,9 @@ pub async fn flush_m365_contact_outbox(
     app: AppHandle,
     request: ContactOutboxSyncRequest,
 ) -> Result<ContactOutboxSyncResult, String> {
+    if m365_read_only_test_mode() {
+        return Err("Der sichere M365-Testmodus sperrt ausgehende Änderungen.".to_string());
+    }
     let state = app.state::<crate::AppState>();
     let _sync_guard = state.m365.sync_gate.lock().await;
     let access_token = refreshed_access_token(&app).await?;
@@ -3593,8 +3929,13 @@ pub async fn flush_m365_contact_outbox(
         .filter(|group| group.deleted_at.is_none())
         .map(|group| group.name.trim().to_lowercase())
         .collect::<HashSet<_>>();
-    let sources =
-        list_m365_sync_sources(app.clone(), Some(request.shared_mailbox_addresses.clone())).await?;
+    let sources = list_m365_sync_sources_filtered(
+        app.clone(),
+        Some(request.shared_mailbox_addresses.clone()),
+        true,
+        false,
+    )
+    .await?;
     let export_sources = sources
         .contacts
         .iter()
@@ -3797,6 +4138,7 @@ async fn find_matching_exchange_event_for_outbox(
     source: &Microsoft365SyncSource,
     event: &crate::CalendarEvent,
 ) -> Result<Option<Value>, String> {
+    let event = normalized_event_for_graph(event);
     let start = encode_graph_path_segment(event.starts_at.trim());
     let end = encode_graph_path_segment(event.ends_at.trim());
     let url = format!(
@@ -3806,7 +4148,7 @@ async fn find_matching_exchange_event_for_outbox(
     let values = graph_collection(access_token, &url).await?;
     Ok(values
         .into_iter()
-        .find(|remote| remote_event_key(remote) == local_event_key(event)))
+        .find(|remote| remote_event_key(remote) == local_event_key(&event)))
 }
 
 #[tauri::command]
@@ -3814,6 +4156,9 @@ pub async fn flush_m365_calendar_outbox(
     app: AppHandle,
     request: CalendarOutboxSyncRequest,
 ) -> Result<CalendarOutboxSyncResult, String> {
+    if m365_read_only_test_mode() {
+        return Err("Der sichere M365-Testmodus sperrt ausgehende Änderungen.".to_string());
+    }
     // The runtime is owned by the application's shared state.  Looking it up
     // as a separately managed Tauri state panics at runtime because it is not
     // registered independently.  Keep the guard on the actual AppState so a
@@ -3821,18 +4166,58 @@ pub async fn flush_m365_calendar_outbox(
     let state = app.state::<crate::AppState>();
     let _sync_guard = state.m365.sync_gate.lock().await;
     let access_token = refreshed_access_token(&app).await?;
-    let sources =
-        list_m365_sync_sources(app.clone(), Some(request.shared_mailbox_addresses.clone())).await?;
+    let sources = list_m365_sync_sources_filtered(
+        app.clone(),
+        Some(request.shared_mailbox_addresses.clone()),
+        false,
+        true,
+    )
+    .await?;
     let has_export_target = sources.calendars.iter().any(|source| {
         outbox_source_is_available(&request, source)
             && outbox_source_direction(&request, &source.id) != "import"
     });
-    // Upgrade path: appointments created before the outbox existed are fed
-    // through the same safe, duplicate-aware queue in small batches.
-    if has_export_target && crate::calendar_sync_outbox_count(&app)? == 0 {
+    // Upgrade existing appointments through the normal outbox in bounded,
+    // cursor-based batches. An existing remote event receives only a category
+    // PATCH, so this migration does not overwrite its other meeting fields.
+    let (migration_key, cursor_key) = calendar_color_category_migration_keys(&app)?;
+    let color_category_migration_complete =
+        get_setting(&app, &migration_key)?.as_deref() == Some("complete");
+    let outbox_count = crate::calendar_sync_outbox_count(&app)?;
+    if has_export_target && !color_category_migration_complete && outbox_count == 0 {
+        let cursor = get_setting(&app, &cursor_key)?.unwrap_or_default();
+        if let Some(last_id) = crate::enqueue_active_calendar_events_for_exchange(
+            &app,
+            CALENDAR_OUTBOX_BATCH_SIZE,
+            &cursor,
+        )? {
+            set_setting(&app, &cursor_key, &last_id)?;
+        } else {
+            set_setting(&app, &migration_key, "complete")?;
+        }
+    } else if has_export_target && crate::calendar_sync_outbox_count(&app)? == 0 {
+        // Existing upgrade path: appointments created before the outbox existed
+        // are fed through the same safe, duplicate-aware queue in small batches.
         crate::enqueue_unlinked_calendar_events_for_exchange(&app, CALENDAR_OUTBOX_BATCH_SIZE)?;
     }
     let entries = crate::read_calendar_sync_outbox(&app, CALENDAR_OUTBOX_BATCH_SIZE)?;
+    let master_category_names = if has_export_target {
+        ensure_m365_calendar_categories(
+            &access_token,
+            entries
+                .iter()
+                .filter(|entry| entry.action != "delete")
+                .map(|entry| {
+                    (
+                        graph_category_for_event(&entry.event),
+                        entry.event.color.clone(),
+                    )
+                }),
+        )
+        .await?
+    } else {
+        HashMap::new()
+    };
     let mut result = CalendarOutboxSyncResult {
         processed: 0,
         created: 0,
@@ -3867,6 +4252,11 @@ pub async fn flush_m365_calendar_outbox(
                 Some(_) | None => Ok("ignored"),
             }
         } else {
+            let update_payload = if entry.action == "category" {
+                json!({ "categories": [master_category_for_event(&event, &master_category_names)] })
+            } else {
+                graph_event_payload_for_master(&event, &master_category_names)
+            };
             match linked_source {
                 Some((source, remote_id))
                     if outbox_source_direction(&request, &source.id) != "import" =>
@@ -3876,14 +4266,9 @@ pub async fn flush_m365_calendar_outbox(
                         source.resource_path,
                         encode_graph_path_segment(&remote_id)
                     );
-                    graph_write(
-                        &access_token,
-                        reqwest::Method::PATCH,
-                        &url,
-                        &graph_event_payload(&event),
-                    )
-                    .await
-                    .map(|_| "updated")
+                    graph_write(&access_token, reqwest::Method::PATCH, &url, &update_payload)
+                        .await
+                        .map(|_| "updated")
                 }
                 Some(_) => Ok("ignored"),
                 None => {
@@ -3906,7 +4291,7 @@ pub async fn flush_m365_calendar_outbox(
                                     &access_token,
                                     reqwest::Method::PATCH,
                                     &url,
-                                    &graph_event_payload(&event),
+                                    &update_payload,
                                 )
                                 .await
                                 {
@@ -3928,7 +4313,7 @@ pub async fn flush_m365_calendar_outbox(
                                     &access_token,
                                     reqwest::Method::POST,
                                     &url,
-                                    &graph_event_payload(&event),
+                                    &graph_event_payload_for_master(&event, &master_category_names),
                                 )
                                 .await
                                 {
@@ -4020,7 +4405,7 @@ pub async fn preview_m365_sync(
     request: Microsoft365SyncPreviewRequest,
 ) -> Result<Microsoft365SyncPreview, String> {
     let access_token = refreshed_access_token(&app).await?;
-    Ok(build_m365_sync_plan(&app, &access_token, &request)
+    Ok(build_m365_sync_plan(&app, &access_token, &request, false)
         .await?
         .preview)
 }
@@ -4030,6 +4415,20 @@ pub async fn apply_m365_sync(
     app: AppHandle,
     request: Microsoft365SyncApplyRequest,
 ) -> Result<Microsoft365SyncResult, String> {
+    if m365_read_only_test_mode()
+        && (!request.calendars
+            || request.contacts
+            || request.selected_calendar_source_ids.is_empty()
+            || request
+                .selected_calendar_source_ids
+                .iter()
+                .any(|id| request.source_directions.get(id).map(String::as_str) != Some("import")))
+    {
+        return Err(
+            "Der sichere M365-Testmodus erlaubt nur den Kalenderimport ohne ausgehende Änderungen."
+                .to_string(),
+        );
+    }
     // A manual sync can overlap the automatic change/poll sync. Building the
     // second plan only after the first write is visible lets the remote-key
     // matching relink the event instead of creating it a second time.
@@ -4057,7 +4456,57 @@ pub async fn apply_m365_sync(
         source_directions: request.source_directions,
         backup,
     };
-    let plan = build_m365_sync_plan(&app, &access_token, &preview_request).await?;
+    let plan = build_m365_sync_plan(
+        &app,
+        &access_token,
+        &preview_request,
+        request.allow_partial_sources,
+    )
+    .await?;
+    let needs_calendar_write_categories = request.calendars
+        && (request
+            .decisions
+            .values()
+            .any(|decision| matches!(decision.as_str(), "keepApp" | "merge"))
+            || plan.operations.iter().any(|operation| {
+                operation.change.kind == "Kalender"
+                    && matches!(
+                        operation.change.action.as_str(),
+                        "createRemote" | "updateRemote" | "keepApp" | "merge"
+                    )
+            }));
+    let master_category_names = if needs_calendar_write_categories {
+        let categories = plan.operations.iter().flat_map(|operation| {
+            let mut names = Vec::with_capacity(2);
+            if let PlannedPayload::Calendar { local, remote } = &operation.payload {
+                if let Some(event) = local {
+                    names.push((graph_category_for_event(event), event.color.clone()));
+                }
+                if let Some(event) = remote {
+                    let name = event
+                        .get("categories")
+                        .and_then(Value::as_array)
+                        .and_then(|categories| categories.first())
+                        .and_then(Value::as_str)
+                        .unwrap_or("")
+                        .trim();
+                    let color = value_text(event, "_dmhCategoryColor");
+                    names.push((
+                        if name.is_empty() {
+                            dmh_category_for_calendar_color(color).0.to_string()
+                        } else {
+                            name.to_string()
+                        },
+                        color.to_string(),
+                    ));
+                }
+            }
+            names
+        });
+        ensure_m365_calendar_categories(&access_token, categories).await?
+    } else {
+        HashMap::new()
+    };
     let conflicts = plan.preview.conflicts;
     let mut delta_acks_to_commit = plan.delta_noop_acks;
     let delta_operation_acks = plan.delta_operation_acks;
@@ -4069,8 +4518,8 @@ pub async fn apply_m365_sync(
         deleted: 0,
         ignored: 0,
         conflicts,
-        errors: 0,
-        error_messages: Vec::new(),
+        errors: plan.source_errors.len(),
+        error_messages: plan.source_errors,
         calendar_upserts: Vec::new(),
         calendar_deletes: Vec::new(),
     };
@@ -4308,7 +4757,7 @@ pub async fn apply_m365_sync(
                     &access_token,
                     reqwest::Method::POST,
                     &url,
-                    &graph_event_payload(local),
+                    &graph_event_payload_for_master(local, &master_category_names),
                 )
                 .await
                 {
@@ -4318,12 +4767,13 @@ pub async fn apply_m365_sync(
                         } else {
                             let linked =
                                 remote_event_to_local(&remote, &operation.source, Some(local));
-                            if linked.id != local.id {
-                                result.calendar_deletes.push(local.id.clone());
-                            }
-                            result.calendar_upserts.push(linked);
-                            result.created += 1;
-                            Ok(())
+                            crate::link_calendar_event_after_exchange_create(
+                                &app, &local.id, &linked,
+                            )
+                            .map(|linked| {
+                                result.calendar_upserts.push(linked);
+                                result.created += 1;
+                            })
                         }
                     }
                     Err(error) => Err(error),
@@ -4351,15 +4801,16 @@ pub async fn apply_m365_sync(
                 },
                 "link",
             ) => {
-                // Calendar links are encoded in the local event ID. Replacing the
-                // local copy with that linked ID performs no Microsoft Graph write.
+                // Calendar links are encoded in the local event ID. Remap the
+                // existing row in place; never send a technical ID change to
+                // the trash as if the user had deleted the appointment.
                 let linked = remote_event_to_local(remote, &operation.source, Some(local));
-                if linked.id != local.id {
-                    result.calendar_deletes.push(local.id.clone());
-                }
-                result.calendar_upserts.push(linked);
-                result.ignored += 1;
-                Ok(())
+                crate::link_calendar_event_after_exchange_create(&app, &local.id, &linked).map(
+                    |linked| {
+                        result.calendar_upserts.push(linked);
+                        result.ignored += 1;
+                    },
+                )
             }
             (
                 PlannedPayload::Calendar {
@@ -4377,7 +4828,7 @@ pub async fn apply_m365_sync(
                     &access_token,
                     reqwest::Method::PATCH,
                     &url,
-                    &graph_event_payload(local),
+                    &graph_event_payload_for_master(local, &master_category_names),
                 )
                 .await
                 .map(|_| {
@@ -4416,7 +4867,7 @@ pub async fn apply_m365_sync(
                     &access_token,
                     reqwest::Method::PATCH,
                     &url,
-                    &graph_event_payload(&merged),
+                    &graph_event_payload_for_master(&merged, &master_category_names),
                 )
                 .await
                 {
@@ -4454,8 +4905,14 @@ pub async fn apply_m365_sync(
                 },
                 "deleteLocal",
             ) => {
-                result.calendar_deletes.push(local.id.clone());
-                result.deleted += 1;
+                if m365_read_only_test_mode() {
+                    // A diagnostic import must never remove a local event on
+                    // the strength of a Graph @removed marker.
+                    result.ignored += 1;
+                } else {
+                    result.calendar_deletes.push(local.id.clone());
+                    result.deleted += 1;
+                }
                 Ok(())
             }
             _ => {
@@ -4581,6 +5038,76 @@ pub async fn list_m365_master_categories(
     let categories = m365_master_categories(&access_token).await;
     access_token.zeroize();
     categories
+}
+
+/// Creates a mailbox category or changes its Outlook colour. Categories are
+/// deliberately not deleted here: an Outlook category can also label mail,
+/// contacts and tasks, not only calendar events.
+#[tauri::command]
+pub async fn save_m365_master_category(
+    app: AppHandle,
+    name: String,
+    color: String,
+) -> Result<Microsoft365CalendarCategory, String> {
+    let name = name.trim();
+    if name.is_empty() {
+        return Err("Bitte geben Sie einen Kategorienamen ein.".to_string());
+    }
+    if name.chars().count() > 255 {
+        return Err("Der Kategoriename darf höchstens 255 Zeichen lang sein.".to_string());
+    }
+
+    let (_, outlook_color) = dmh_category_for_calendar_color(&color);
+    let mut access_token = refreshed_access_token(&app).await?;
+    let result = async {
+        let existing = graph_collection(
+            &access_token,
+            "https://graph.microsoft.com/v1.0/me/outlook/masterCategories?$select=id,displayName,color",
+        )
+        .await?
+        .into_iter()
+        .find(|category| value_text(category, "displayName").trim().eq_ignore_ascii_case(name));
+
+        if let Some(category) = existing {
+            let id = value_text(&category, "id").trim();
+            if id.is_empty() {
+                return Err("Microsoft 365 hat die vorhandene Kategorie ohne Kennung geliefert.".to_string());
+            }
+            graph_write(
+                &access_token,
+                reqwest::Method::PATCH,
+                &format!(
+                    "https://graph.microsoft.com/v1.0/me/outlook/masterCategories/{}",
+                    encode_graph_path_segment(id)
+                ),
+                &json!({ "color": outlook_color }),
+            )
+            .await?;
+        } else {
+            graph_write(
+                &access_token,
+                reqwest::Method::POST,
+                "https://graph.microsoft.com/v1.0/me/outlook/masterCategories",
+                &json!({ "displayName": name, "color": outlook_color }),
+            )
+            .await?;
+        }
+
+        let saved = graph_collection(
+            &access_token,
+            "https://graph.microsoft.com/v1.0/me/outlook/masterCategories?$select=displayName,color",
+        )
+        .await?
+        .into_iter()
+        .find(|category| value_text(category, "displayName").trim().eq_ignore_ascii_case(name))
+        .filter(|category| value_text(category, "color").eq_ignore_ascii_case(outlook_color))
+        .ok_or_else(|| "Microsoft 365 hat die neue Kategorienfarbe noch nicht bestätigt. Bitte versuchen Sie es erneut.".to_string())?;
+        m365_master_category_from_value(&saved)
+            .ok_or_else(|| "Microsoft 365 hat die Kategorie unvollständig zurückgegeben.".to_string())
+    }
+    .await;
+    access_token.zeroize();
+    result
 }
 
 #[tauri::command]
@@ -4980,7 +5507,22 @@ mod tests {
             .expect("429 must be retried");
         assert!(delay >= Duration::from_secs(7));
         assert!(delay < Duration::from_secs(8));
+        assert!(
+            graph_retry_delay(reqwest::StatusCode::INTERNAL_SERVER_ERROR, &headers, 0).is_some()
+        );
         assert!(graph_retry_delay(reqwest::StatusCode::BAD_REQUEST, &headers, 0).is_none());
+    }
+
+    #[test]
+    fn calendar_delta_uses_a_bounded_rolling_window() {
+        assert_eq!(
+            calendar_delta_window(2026),
+            (
+                "2025-01-01T00:00:00Z".to_string(),
+                "2029-01-01T00:00:00Z".to_string()
+            )
+        );
+        assert_eq!(calendar_delta_window(2027).0, "2026-01-01T00:00:00Z");
     }
 
     fn contact_for_identity(name: &str, email: &str, phone: &str) -> crate::Contact {
@@ -5241,7 +5783,7 @@ mod tests {
     fn form_values_are_encoded_without_losing_scopes() {
         assert_eq!(
             form_body(&[("scope", LOGIN_SCOPES)]),
-            "scope=openid+profile+offline_access+User.Read+Contacts.ReadWrite+Contacts.ReadWrite.Shared+Calendars.ReadWrite+Calendars.ReadWrite.Shared+Calendars.Read.Shared+MailboxSettings.Read+Files.ReadWrite.All+Sites.Read.All"
+            "scope=openid+profile+offline_access+User.Read+Contacts.ReadWrite+Contacts.ReadWrite.Shared+Calendars.ReadWrite+Calendars.ReadWrite.Shared+Calendars.Read.Shared+MailboxSettings.ReadWrite+Files.ReadWrite.All+Sites.Read.All"
         );
     }
 
@@ -5342,6 +5884,48 @@ mod tests {
         assert_eq!(
             graph_event_payload(&local)["body"]["content"],
             "Lokaler Text"
+        );
+    }
+
+    #[test]
+    fn swaps_reversed_calendar_times_before_sending_to_graph() {
+        let mut event = calendar_event("reversed-times");
+        event.starts_at = "2026-10-02T15:00:00".to_string();
+        event.ends_at = "2026-10-02T09:00:00".to_string();
+
+        let payload = graph_event_payload(&event);
+
+        assert_eq!(payload["start"]["dateTime"], "2026-10-02T09:00:00");
+        assert_eq!(payload["end"]["dateTime"], "2026-10-02T15:00:00");
+    }
+
+    #[test]
+    fn sends_a_color_category_for_local_calendar_events() {
+        let mut event = calendar_event("category-color");
+        event.color = "green".to_string();
+
+        assert_eq!(
+            graph_event_payload(&event)["categories"][0],
+            "DMH Farbe: Grün"
+        );
+
+        event.category = "Ausgangskalender".to_string();
+        assert_eq!(
+            graph_event_payload(&event)["categories"][0],
+            "Ausgangskalender"
+        );
+
+        event.category.clear();
+        event.color = "gray".to_string();
+        assert_eq!(
+            graph_event_payload(&event)["categories"][0],
+            "DMH Farbe: Blau"
+        );
+
+        event.category = "DMH Farbe: Grau".to_string();
+        assert_eq!(
+            graph_event_payload(&event)["categories"][0],
+            "DMH Farbe: Blau"
         );
     }
 
@@ -5640,5 +6224,41 @@ mod tests {
         assert_eq!(outlook_category_color("preset8"), "purple");
         assert_eq!(outlook_category_color("preset12"), "gray");
         assert_eq!(outlook_category_color("preset18"), "yellow");
+    }
+
+    #[test]
+    fn treats_uncolored_and_gray_exchange_categories_as_needing_repair() {
+        for value in [
+            "None", "preset10", "preset11", "preset12", "preset13", "preset14", "",
+        ] {
+            assert!(
+                !outlook_category_has_color(value),
+                "{value} should be repaired"
+            );
+        }
+        for value in [
+            "preset0", "preset1", "preset4", "preset7", "preset8", "preset24",
+        ] {
+            assert!(
+                outlook_category_has_color(value),
+                "{value} has a visible color"
+            );
+        }
+        assert_eq!(
+            dmh_category_for_calendar_color("gray"),
+            ("DMH Farbe: Blau", "preset7")
+        );
+    }
+
+    #[test]
+    fn uses_the_exact_exchange_category_name_for_a_calendar_event() {
+        let mut event = calendar_event("category-name");
+        event.category = "vortrag".to_string();
+        let names = HashMap::from([("vortrag".to_string(), "Vortrag".to_string())]);
+        assert_eq!(master_category_for_event(&event, &names), "Vortrag");
+        assert_eq!(
+            graph_event_payload_for_master(&event, &names)["categories"][0],
+            "Vortrag"
+        );
     }
 }

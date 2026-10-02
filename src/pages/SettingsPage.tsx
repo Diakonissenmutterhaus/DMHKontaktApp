@@ -22,6 +22,7 @@ import {
 } from "../services/db";
 import type { MailAccount, OutlookAccountCandidate } from "../types/mail";
 import { deletionConfirmationSettingKey } from "../utils/settings";
+import { m365SafeImportTestMode } from "../utils/automaticCalendarSync";
 
 interface SettingsPageProps {
   activityCenterEnabled: boolean;
@@ -476,9 +477,9 @@ export function SettingsPage({
               <span className="settings-overview-icon"><Download size={27} aria-hidden="true" /></span>
               <div>
                 <h3>App-Aktualisierung</h3>
-                <p>Neue Versionen werden automatisch angezeigt. Die EDV kann hier zusätzlich manuell prüfen.</p>
+                <p>{m365SafeImportTestMode ? "Im geschützten M365-Test deaktiviert." : "Neue Versionen werden automatisch angezeigt. Die EDV kann hier zusätzlich manuell prüfen."}</p>
               </div>
-              <button type="button" onClick={() => void checkForAppUpdate()} disabled={busyAction !== null}>
+              <button type="button" onClick={() => void checkForAppUpdate()} disabled={busyAction !== null || m365SafeImportTestMode}>
                 <RefreshCw size={19} className={busyAction === "app-update" ? "spin" : ""} />
                 {busyAction === "app-update" ? "Wird geprüft …" : "Nach Updates suchen"}
               </button>

@@ -1,0 +1,18 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "identifier": "de.dmh.agendakontakte.calendar-safe",
+  "productName": "DMH Backup Calendar Safe Test",
+  "app": {
+    "windows": [
+      {
+        "additionalBrowserArgs": "--disable-background-timer-throttling --disable-renderer-backgrounding",
+        "height": 780,
+        "maximized": true,
+        "minHeight": 600,
+        "minWidth": 760,
+        "title": "DMH Backup [M365 TEST – NUR LESEN]",
+        "width": 1180
+      }
+    ]
+  }
+}

@@ -333,8 +333,16 @@ export function getMicrosoft365ConnectionStatus(): Promise<Microsoft365Connectio
   return invoke("get_m365_connection_status");
 }
 
+export function getMicrosoft365ReadOnlyTestMode(): Promise<boolean> {
+  return invoke("get_m365_read_only_test_mode");
+}
+
 export function listMicrosoft365MasterCategories(): Promise<Microsoft365CalendarCategory[]> {
   return invoke("list_m365_master_categories");
+}
+
+export function saveMicrosoft365MasterCategory(category: Microsoft365CalendarCategory): Promise<Microsoft365CalendarCategory> {
+  return invoke("save_m365_master_category", { name: category.name, color: category.color });
 }
 
 export function connectMicrosoft365Interactively(): Promise<import("../types/m365").Microsoft365Account> {
@@ -400,6 +408,7 @@ export function applyMicrosoft365Sync(request: {
   sourceDirections: Record<string, string>;
   decisions: Record<string, Microsoft365ConflictDecision>;
   backup?: BackupData;
+  allowPartialSources?: boolean;
 }): Promise<Microsoft365SyncResult> {
   return invoke("apply_m365_sync", { request });
 }

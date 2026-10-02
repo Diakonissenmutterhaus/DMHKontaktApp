@@ -4,6 +4,7 @@ import {
   flushMicrosoft365ContactOutbox,
   getAppSetting,
   getMicrosoft365ConnectionStatus,
+  getMicrosoft365ReadOnlyTestMode,
   setAppSetting
 } from "../services/db";
 import type { CalendarEvent } from "../types/calendar";
@@ -14,10 +15,12 @@ import { mergeImportedCalendarCategories } from "./calendar";
 export const synchronizationConfigKey = "synchronization_config_v1";
 export const synchronizationHistoryKey = "synchronization_history_v1";
 export const synchronizationRuntimeStatusKey = "synchronization_runtime_status_v1";
+export const synchronizationRuntimeStatusUpdatedEventName = "dmh:synchronization-runtime-status-updated";
 export const calendarChangedEventName = "dmh:calendar-changed";
 export const calendarStorageUpdatedEventName = "dmh:calendar-storage-updated";
 export const calendarAutomaticSyncStatusEventName = "dmh:calendar-automatic-sync-status";
 export const m365DataUpdatedEventName = "dmh:m365-data-updated";
+export const m365SafeImportTestMode = import.meta.env.VITE_DMH_M365_SAFE_IMPORT === "true";
 
 export interface CalendarAutomaticSyncStatus {
   state: "success" | "error";
@@ -54,6 +57,7 @@ export function parseSynchronizationRuntimeStatus(raw: string | null): Microsoft
 
 async function saveRuntimeStatus(status: Microsoft365SynchronizationRuntimeStatus): Promise<void> {
   await setAppSetting(synchronizationRuntimeStatusKey, JSON.stringify(status));
+  window.dispatchEvent(new Event(synchronizationRuntimeStatusUpdatedEventName));
 }
 
 export async function recordMicrosoft365SynchronizationError(error: unknown): Promise<void> {
@@ -65,7 +69,11 @@ export async function recordMicrosoft365SynchronizationError(error: unknown): Pr
   });
 }
 
-export async function recordMicrosoft365SynchronizationSuccess(config: SyncConfig, result: Microsoft365SyncResult): Promise<void> {
+export async function recordMicrosoft365SynchronizationSuccess(
+  config: SyncConfig,
+  result: Microsoft365SyncResult,
+  checked = { contacts: config.contacts, calendars: config.calendars }
+): Promise<void> {
   const previous = parseSynchronizationRuntimeStatus(await getAppSetting(synchronizationRuntimeStatusKey));
   const exchangeCount = result.created + result.updated + result.deleted;
   const successful = result.errors === 0;
@@ -74,8 +82,8 @@ export async function recordMicrosoft365SynchronizationSuccess(config: SyncConfi
     lastAttemptAt: result.finishedAt,
     lastSuccessAt: successful ? result.finishedAt : previous.lastSuccessAt,
     lastExchangeAt: successful && exchangeCount > 0 ? result.finishedAt : previous.lastExchangeAt,
-    contactsLastCheckedAt: successful && config.contacts ? result.finishedAt : previous.contactsLastCheckedAt,
-    calendarsLastCheckedAt: successful && config.calendars ? result.finishedAt : previous.calendarsLastCheckedAt,
+    contactsLastCheckedAt: successful && checked.contacts ? result.finishedAt : previous.contactsLastCheckedAt,
+    calendarsLastCheckedAt: successful && checked.calendars ? result.finishedAt : previous.calendarsLastCheckedAt,
     lastError: successful ? null : result.errorMessages.join(" · ") || `${result.errors} Fehler`
   });
 }
@@ -98,11 +106,18 @@ function announceCalendarChanges(calendarUpserts: CalendarEvent[], calendarDelet
   window.dispatchEvent(new Event(calendarStorageUpdatedEventName));
 }
 
-export async function runAutomaticCalendarSync(trigger: "open" | "change" | "poll"): Promise<CalendarAutomaticSyncStatus | null> {
+export async function runAutomaticCalendarSync(trigger: "open" | "change" | "poll" | "calendar-poll"): Promise<CalendarAutomaticSyncStatus | null> {
   if (!("__TAURI_INTERNALS__" in window)) return null;
+  if (m365SafeImportTestMode && trigger === "change") return null;
+  if (m365SafeImportTestMode && !(await getMicrosoft365ReadOnlyTestMode())) {
+    return { state: "error", message: "Sicherer Kalender-Test wurde abgebrochen: Das Schreibverbot in der nativen App ist nicht aktiv." };
+  }
   const config = parseSyncConfig(await getAppSetting(synchronizationConfigKey));
   if (!config.enabled || config.paused || !config.providers.m365 || (!config.calendars && !config.contacts)) return null;
   if (trigger === "open" && !config.runOnOpen) return null;
+  const fastCalendarPoll = m365SafeImportTestMode || trigger === "calendar-poll";
+  if (fastCalendarPoll && (!config.calendars || !config.selectedCalendarSourceIds.some((sourceId) =>
+    (config.sourceDirections[sourceId] ?? config.direction) !== "export"))) return null;
   if (config.calendars && config.selectedCalendarSourceIds.length === 0) {
     const message = "Automatische Synchronisierung ist aktiviert, aber es wurde kein Microsoft-365-Kalender ausgewählt.";
     await recordMicrosoft365SynchronizationError(message);
@@ -127,7 +142,8 @@ export async function runAutomaticCalendarSync(trigger: "open" | "change" | "pol
   // and are only removed after Microsoft Graph confirms the write. This avoids
   // re-scanning a 50,000-item calendar before a newly saved appointment can
   // leave the app.
-  const queued = await flushMicrosoft365CalendarOutbox({
+  const emptyOutbox = { processed: 0, created: 0, updated: 0, deleted: 0, pending: 0, errors: 0, errorMessages: [] as string[] };
+  const queued = fastCalendarPoll ? emptyOutbox : await flushMicrosoft365CalendarOutbox({
     direction: config.direction,
     selectedCalendarSourceIds: config.selectedCalendarSourceIds,
     sourceDirections: config.sourceDirections,
@@ -137,7 +153,7 @@ export async function runAutomaticCalendarSync(trigger: "open" | "change" | "pol
   const queuedExchangeCount = queued.created + queued.updated + queued.deleted;
   if (queued.created > 0) window.dispatchEvent(new Event(calendarStorageUpdatedEventName));
 
-  const queuedContacts = config.contacts
+  const queuedContacts = config.contacts && !fastCalendarPoll
     ? await flushMicrosoft365ContactOutbox({
         direction: config.direction,
         contactGroups: config.contactGroups,
@@ -146,7 +162,7 @@ export async function runAutomaticCalendarSync(trigger: "open" | "change" | "pol
         sharedMailboxes: config.sharedMailboxes,
         sharedMailboxAddresses: config.sharedMailboxAddresses
       })
-    : { processed: 0, created: 0, updated: 0, deleted: 0, pending: 0, errors: 0, errorMessages: [] as string[] };
+    : emptyOutbox;
   const queuedContactCount = queuedContacts.created + queuedContacts.updated + queuedContacts.deleted;
 
   // Outbound calendar writes and inbound reconciliation are two independent
@@ -161,7 +177,7 @@ export async function runAutomaticCalendarSync(trigger: "open" | "change" | "pol
     : [];
   const reconciliationSourceDirections = { ...config.sourceDirections };
   for (const sourceId of inboundCalendarSourceIds) reconciliationSourceDirections[sourceId] = "import";
-  const inboundContactSourceIds = config.contacts
+  const inboundContactSourceIds = config.contacts && !fastCalendarPoll
     ? selectedContactSourceIds.filter((sourceId) =>
         (config.sourceDirections[sourceId] ?? config.direction) !== "export")
     : [];
@@ -202,12 +218,13 @@ export async function runAutomaticCalendarSync(trigger: "open" | "change" | "pol
     contactGroups: config.contactGroups,
     calendars: inboundCalendarSourceIds.length > 0,
     sharedCalendars: config.sharedCalendars,
-    sharedMailboxes: false,
-    sharedMailboxAddresses: [],
+    sharedMailboxes: config.sharedMailboxes,
+    sharedMailboxAddresses: config.sharedMailboxAddresses,
     selectedContactSourceIds: inboundContactSourceIds,
     selectedCalendarSourceIds: inboundCalendarSourceIds,
     sourceDirections: reconciliationSourceDirections,
-    decisions: {}
+    decisions: {},
+    allowPartialSources: true
   });
 
   announceCalendarChanges(result.calendarUpserts, result.calendarDeletes);
@@ -222,23 +239,28 @@ export async function runAutomaticCalendarSync(trigger: "open" | "change" | "pol
     errors: result.errors + queued.errors + queuedContacts.errors,
     errorMessages: [...queued.errorMessages, ...queuedContacts.errorMessages, ...result.errorMessages]
   };
-  const history = parseHistory(await getAppSetting(synchronizationHistoryKey));
-  const entry: Microsoft365SyncHistoryEntry = {
-    id: `${combinedResult.startedAt}-${Date.now()}`,
-    startedAt: combinedResult.startedAt,
-    finishedAt: combinedResult.finishedAt,
-    created: combinedResult.created,
-    updated: combinedResult.updated,
-    deleted: combinedResult.deleted,
-    ignored: combinedResult.ignored,
-    conflicts: combinedResult.conflicts,
-    errors: combinedResult.errors,
-    errorMessages: combinedResult.errorMessages
-  };
-  await setAppSetting(synchronizationHistoryKey, JSON.stringify([entry, ...history].slice(0, 30)));
+  if (combinedResult.created + combinedResult.updated + combinedResult.deleted + combinedResult.conflicts + combinedResult.errors > 0) {
+    const history = parseHistory(await getAppSetting(synchronizationHistoryKey));
+    const entry: Microsoft365SyncHistoryEntry = {
+      id: `${combinedResult.startedAt}-${Date.now()}`,
+      startedAt: combinedResult.startedAt,
+      finishedAt: combinedResult.finishedAt,
+      created: combinedResult.created,
+      updated: combinedResult.updated,
+      deleted: combinedResult.deleted,
+      ignored: combinedResult.ignored,
+      conflicts: combinedResult.conflicts,
+      errors: combinedResult.errors,
+      errorMessages: combinedResult.errorMessages
+    };
+    await setAppSetting(synchronizationHistoryKey, JSON.stringify([entry, ...history].slice(0, 30)));
+  }
 
   const exchangeCount = combinedResult.created + combinedResult.updated + combinedResult.deleted;
-  await recordMicrosoft365SynchronizationSuccess(config, combinedResult);
+  await recordMicrosoft365SynchronizationSuccess(config, combinedResult, {
+    contacts: inboundContactSourceIds.length > 0,
+    calendars: inboundCalendarSourceIds.length > 0
+  });
 
   if (combinedResult.errors > 0) {
     return { state: "error", message: `Microsoft-365-Synchronisierung mit ${combinedResult.errors} Fehler(n) abgeschlossen.` };

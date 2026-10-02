@@ -21,12 +21,12 @@ import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { StatusMessage } from "../components/StatusMessage";
 import type { SettingsSection } from "../components/SettingsSubtabs";
 import type { Page } from "../components/Sidebar";
-import { applyMicrosoft365Sync, cancelMicrosoft365Connection, connectMicrosoft365Interactively, createAutomaticSafetyBackup, disconnectMicrosoft365Account, getAppSetting, getMicrosoft365ConnectionStatus, getSyncBackupData, listMicrosoft365SyncSources, openMicrosoft365SignIn, pollMicrosoft365Connection, previewMicrosoft365Sync, setAppSetting, startMicrosoft365Connection, testMicrosoft365Connection } from "../services/db";
+import { applyMicrosoft365Sync, cancelMicrosoft365Connection, connectMicrosoft365Interactively, createAutomaticSafetyBackup, disconnectMicrosoft365Account, getAppSetting, getMicrosoft365ConnectionStatus, getMicrosoft365ReadOnlyTestMode, getSyncBackupData, listMicrosoft365SyncSources, openMicrosoft365SignIn, pollMicrosoft365Connection, previewMicrosoft365Sync, setAppSetting, startMicrosoft365Connection, testMicrosoft365Connection } from "../services/db";
 import type { Microsoft365ConflictDecision, Microsoft365ConnectionStatus, Microsoft365DeviceCode, Microsoft365PollResult, Microsoft365SyncHistoryEntry, Microsoft365SyncPreview, Microsoft365SyncSource, Microsoft365SyncSources } from "../types/m365";
 import { defaultSyncConfig, parseSyncConfig, type SyncConfig, type SyncDirection } from "../types/sync";
 import { captureBrowserStorage } from "../utils/backup";
 import { mergeImportedCalendarCategories } from "../utils/calendar";
-import { calendarChangedEventName, calendarStorageUpdatedEventName, recordMicrosoft365SynchronizationError, recordMicrosoft365SynchronizationSuccess, synchronizationConfigKey as syncConfigKey, synchronizationHistoryKey as syncHistoryKey } from "../utils/automaticCalendarSync";
+import { calendarChangedEventName, calendarStorageUpdatedEventName, emptyMicrosoft365SynchronizationRuntimeStatus, m365SafeImportTestMode, parseSynchronizationRuntimeStatus, recordMicrosoft365SynchronizationError, recordMicrosoft365SynchronizationSuccess, synchronizationConfigKey as syncConfigKey, synchronizationHistoryKey as syncHistoryKey, synchronizationRuntimeStatusKey, synchronizationRuntimeStatusUpdatedEventName, type Microsoft365SynchronizationRuntimeStatus } from "../utils/automaticCalendarSync";
 import { initializeMicrosoft365SourceSelection, isTechnicalMicrosoft365Source } from "../utils/microsoft365SyncConfig";
 
 interface SynchronizationsPageProps {
@@ -62,10 +62,29 @@ export function SynchronizationsPage({ onNavigate, embedded = false, onClose }: 
   const [sharedMailboxAddress, setSharedMailboxAddress] = useState("");
   const [conflictDecisions, setConflictDecisions] = useState<Record<string, Microsoft365ConflictDecision>>({});
   const [history, setHistory] = useState<Microsoft365SyncHistoryEntry[]>([]);
+  const [runtimeStatus, setRuntimeStatus] = useState<Microsoft365SynchronizationRuntimeStatus>(emptyMicrosoft365SynchronizationRuntimeStatus);
+  const [nativeReadOnlyConfirmed, setNativeReadOnlyConfirmed] = useState(false);
   const [openProvider, setOpenProvider] = useState<"m365" | null>("m365");
   const [deviceCode, setDeviceCode] = useState<Microsoft365DeviceCode | null>(null);
   const [showCodeFallback, setShowCodeFallback] = useState(false);
   const pollingRef = useRef(false);
+
+  useEffect(() => {
+    if (m365SafeImportTestMode) {
+      void getMicrosoft365ReadOnlyTestMode().then(setNativeReadOnlyConfirmed).catch(() => setNativeReadOnlyConfirmed(false));
+    }
+  }, []);
+
+  useEffect(() => {
+    const refreshRuntimeStatus = () => {
+      void getAppSetting(synchronizationRuntimeStatusKey)
+        .then((raw) => setRuntimeStatus(parseSynchronizationRuntimeStatus(raw)))
+        .catch(() => setRuntimeStatus(emptyMicrosoft365SynchronizationRuntimeStatus));
+    };
+    refreshRuntimeStatus();
+    window.addEventListener(synchronizationRuntimeStatusUpdatedEventName, refreshRuntimeStatus);
+    return () => window.removeEventListener(synchronizationRuntimeStatusUpdatedEventName, refreshRuntimeStatus);
+  }, []);
 
   useEffect(() => {
     void getAppSetting(syncHistoryKey).then((raw) => setHistory(parseHistory(raw))).catch(() => setHistory([]));
@@ -77,7 +96,7 @@ export function SynchronizationsPage({ onNavigate, embedded = false, onClose }: 
         if (status.connected) {
           return listMicrosoft365SyncSources(nextConfig.sharedMailboxAddresses).then((sources) => {
             setM365Sources(sources);
-            const initialized = initializeSourceSelection(nextConfig, sources);
+            const initialized = m365SafeImportTestMode ? nextConfig : initializeSourceSelection(nextConfig, sources);
             setConfig(initialized);
             if (JSON.stringify(initialized) !== JSON.stringify(nextConfig)) {
               void setAppSetting(syncConfigKey, JSON.stringify(initialized));
@@ -443,6 +462,9 @@ export function SynchronizationsPage({ onNavigate, embedded = false, onClose }: 
         </div>
       </header>}
 
+      {m365SafeImportTestMode && <StatusMessage message={nativeReadOnlyConfirmed
+        ? "Sicherer Kalendertest: Microsoft 365 ist schreibgeschützt. Nur Termine aus Exchange werden in die App übernommen; ausgehende Änderungen und Löschungen sind gesperrt."
+        : "Sicherer Kalendertest ist nicht bestätigt. Keine Synchronisierung ausführen."} type={nativeReadOnlyConfirmed ? "info" : "error"} />}
       <StatusMessage message={message} type={messageType} />
 
       <section className="sync-provider-list" aria-label="Verfügbare Synchronisierungen">
@@ -505,7 +527,7 @@ export function SynchronizationsPage({ onNavigate, embedded = false, onClose }: 
                   </div>
                 </section>}
                 <section className="sync-quick-settings" aria-label="Grundlegende Einstellungen">
-                  <label title="Kontakte und Kalender werden alle 30 Sekunden geprüft – auch wenn das Fenster geschlossen ist."><span><strong>Automatisch</strong><small>Alle 30 Sekunden · auch im Hintergrund</small></span><input type="checkbox" checked={config.enabled} onChange={(event) => updateConfig("enabled", event.target.checked)} /></label>
+                  <label title="Bei laufender App prüft der Kalender etwa alle 25 Sekunden auf Änderungen aus Microsoft 365. Kontakte werden in größeren Abständen geprüft; bei geschlossenem App-Fenster läuft keine Synchronisierung."><span><strong>Automatisch</strong><small>Kalender ca. alle 25 Sekunden · bei laufender App</small></span><input type="checkbox" checked={config.enabled} onChange={(event) => updateConfig("enabled", event.target.checked)} /></label>
                   <label title="Kontakte zwischen der App und Microsoft 365 berücksichtigen."><ContactRound size={19} /><span><strong>Kontakte</strong></span><input type="checkbox" checked={config.contacts} onChange={(event) => updateConfig("contacts", event.target.checked)} /></label>
                   <label title="Termine zwischen der App und Microsoft 365 berücksichtigen."><CalendarDays size={19} /><span><strong>Kalender</strong></span><input type="checkbox" checked={config.calendars} onChange={(event) => updateConfig("calendars", event.target.checked)} /></label>
                 </section>
@@ -522,7 +544,9 @@ export function SynchronizationsPage({ onNavigate, embedded = false, onClose }: 
 
                 <div className="sync-source-compact">
                   <span><strong>{selectedSourceCount}</strong> Quellen ausgewählt</span>
-                  <span>{history[0] ? `Zuletzt ${new Date(history[0].finishedAt).toLocaleString("de-DE")}` : "Noch nicht synchronisiert"}</span>
+                  <span title={runtimeStatus.lastError ?? undefined}>{runtimeStatus.calendarsLastCheckedAt
+                    ? `Kalender geprüft ${new Date(runtimeStatus.calendarsLastCheckedAt).toLocaleString("de-DE")}`
+                    : runtimeStatus.lastError ? "Kalender noch nicht erfolgreich geprüft" : "Kalender noch nicht geprüft"}{runtimeStatus.lastError ? " · Letzter Versuch fehlgeschlagen" : ""}</span>
                   <button type="button" onClick={refreshM365Sources} disabled={busy}>Aktualisieren</button>
                 </div>
 
@@ -538,7 +562,7 @@ export function SynchronizationsPage({ onNavigate, embedded = false, onClose }: 
                     </article>)}
                   </div>}
                   {preview.changes.length > 0 && <details><summary>Änderungen anzeigen</summary><ul>{preview.changes.slice(0, 100).map((change) => <li key={change.id}><strong>{change.action === "createRemote" || change.action === "updateRemote" ? "→" : change.action === "conflict" ? "↔" : "←"} {change.kind}: {change.title}</strong><span>{change.detail}</span></li>)}</ul></details>}
-                  <div className="synchronization-apply-row"><span>{unresolvedConflicts > 0 ? `Noch ${unresolvedConflicts} Konflikt(e) entscheiden.` : "Bereit."}</span><button className="primary" type="button" onClick={applySync} disabled={busy || preview.changes.length === 0 || unresolvedConflicts > 0}>Jetzt synchronisieren</button></div>
+                  <div className="synchronization-apply-row"><span>{unresolvedConflicts > 0 ? `Noch ${unresolvedConflicts} Konflikt(e) entscheiden.` : "Bereit."}</span><button className="primary" type="button" onClick={applySync} disabled={busy || m365SafeImportTestMode || preview.changes.length === 0 || unresolvedConflicts > 0}>Jetzt synchronisieren</button></div>
                 </div>}
 
                 <details className="sync-card-details">

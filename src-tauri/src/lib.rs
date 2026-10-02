@@ -1075,7 +1075,8 @@ fn init_db(app: &AppHandle) -> Result<(), String> {
             printf('Termin erstellt: %s', COALESCE(NULLIF(trim(json_extract(NEW.event_json, '$.title')), ''), 'Ohne Titel')));
         END;
         CREATE TRIGGER audit_calendar_changed AFTER UPDATE ON calendar_events
-          WHEN OLD.deleted_at IS NEW.deleted_at AND NEW.deleted_at IS NULL BEGIN
+          WHEN OLD.deleted_at IS NEW.deleted_at AND NEW.deleted_at IS NULL
+            AND (SELECT source FROM audit_context WHERE id = 1) != 'm365-link' BEGIN
           INSERT INTO audit_log(occurred_at, actor, action, entity_kind, entity_id, summary)
           VALUES(strftime('%Y-%m-%dT%H:%M:%fZ','now'), (SELECT actor FROM audit_context WHERE id = 1), 'updated', 'calendar', NEW.id,
             printf('Termin geändert: %s', COALESCE(NULLIF(trim(json_extract(NEW.event_json, '$.title')), ''), 'Ohne Titel')));
@@ -1084,7 +1085,11 @@ fn init_db(app: &AppHandle) -> Result<(), String> {
           WHEN OLD.deleted_at IS NULL AND NEW.deleted_at IS NOT NULL BEGIN
           INSERT INTO audit_log(occurred_at, actor, action, entity_kind, entity_id, summary)
           VALUES(strftime('%Y-%m-%dT%H:%M:%fZ','now'), (SELECT actor FROM audit_context WHERE id = 1), 'deleted', 'calendar', NEW.id,
-            printf('Termin in Papierkorb verschoben: %s', COALESCE(NULLIF(trim(json_extract(NEW.event_json, '$.title')), ''), 'Ohne Titel')));
+            printf('Termin in Papierkorb verschoben: %s (%s)',
+              COALESCE(NULLIF(trim(json_extract(NEW.event_json, '$.title')), ''), 'Ohne Titel'),
+              CASE WHEN (SELECT source FROM audit_context WHERE id = 1) = 'm365'
+                THEN 'Löschung aus Microsoft 365 übernommen'
+                ELSE 'Löschung in der App ausgelöst' END));
         END;
         CREATE TRIGGER audit_calendar_restored AFTER UPDATE OF deleted_at ON calendar_events
           WHEN OLD.deleted_at IS NOT NULL AND NEW.deleted_at IS NULL BEGIN
@@ -1095,7 +1100,13 @@ fn init_db(app: &AppHandle) -> Result<(), String> {
         CREATE TRIGGER audit_calendar_purged BEFORE DELETE ON calendar_events BEGIN
           INSERT INTO audit_log(occurred_at, actor, action, entity_kind, entity_id, summary)
           VALUES(strftime('%Y-%m-%dT%H:%M:%fZ','now'), (SELECT actor FROM audit_context WHERE id = 1), 'purged', 'calendar', OLD.id,
-            printf('Termin endgültig gelöscht: %s', COALESCE(NULLIF(trim(json_extract(OLD.event_json, '$.title')), ''), 'Ohne Titel')));
+            printf('Termin endgültig gelöscht: %s (%s)',
+              COALESCE(NULLIF(trim(json_extract(OLD.event_json, '$.title')), ''), 'Ohne Titel'),
+              CASE WHEN (SELECT source FROM audit_context WHERE id = 1) = 'm365-link'
+                THEN 'technischer ID-Wechsel mit Microsoft 365'
+                WHEN OLD.deleted_at IS NULL
+                THEN 'lokaler Datenbestand ersetzt oder zurückgesetzt'
+                ELSE 'aus dem Papierkorb entfernt' END));
         END;
         CREATE TRIGGER IF NOT EXISTS audit_imports_insert AFTER INSERT ON import_history BEGIN
           INSERT INTO audit_log(occurred_at, actor, action, entity_kind, entity_id, summary)
@@ -1504,7 +1515,9 @@ fn write_calendar_events_in_transaction(
                    duplicate_key = excluded.duplicate_key,
                    event_json = excluded.event_json,
                    updated_at = excluded.updated_at,
-                   deleted_at = excluded.deleted_at",
+                   deleted_at = excluded.deleted_at
+                 WHERE calendar_events.event_json IS NOT excluded.event_json
+                    OR calendar_events.deleted_at IS NOT excluded.deleted_at",
             )
             .map_err(|error| error.to_string())?;
         let mut outbox_statement = if queue_for_exchange {
@@ -2033,6 +2046,23 @@ pub fn calendar_sync_outbox_count(app: &AppHandle) -> Result<usize, String> {
         .map_err(|error| error.to_string())
 }
 
+pub fn pending_calendar_content_sync_ids(app: &AppHandle) -> Result<HashSet<String>, String> {
+    let conn = open_db(app)?;
+    pending_calendar_content_sync_ids_in_db(&conn)
+}
+
+fn pending_calendar_content_sync_ids_in_db(conn: &Connection) -> Result<HashSet<String>, String> {
+    let mut statement = conn
+        .prepare("SELECT event_id FROM calendar_sync_outbox WHERE action IN ('upsert', 'delete')")
+        .map_err(|error| error.to_string())?;
+    let ids = statement
+        .query_map([], |row| row.get::<_, String>(0))
+        .map_err(|error| error.to_string())?
+        .collect::<Result<HashSet<_>, _>>()
+        .map_err(|error| error.to_string())?;
+    Ok(ids)
+}
+
 pub fn enqueue_unlinked_calendar_events_for_exchange(
     app: &AppHandle,
     limit: usize,
@@ -2075,6 +2105,54 @@ pub fn enqueue_unlinked_calendar_events_for_exchange(
     Ok(ids.len())
 }
 
+/// Queues existing linked and unlinked calendar events for a bounded metadata
+/// upgrade.  It never changes the event itself; the normal Exchange outbox
+/// still performs the write and keeps its retry/error handling.
+fn active_calendar_event_ids_after(
+    conn: &Connection,
+    limit: usize,
+    after_id: &str,
+) -> Result<Vec<String>, String> {
+    let mut statement = conn
+        .prepare(
+            "SELECT id FROM calendar_events
+             WHERE deleted_at IS NULL AND id > ?1
+             ORDER BY id LIMIT ?2",
+        )
+        .map_err(|error| error.to_string())?;
+    let ids = statement
+        .query_map(params![after_id, limit as i64], |row| {
+            row.get::<_, String>(0)
+        })
+        .map_err(|error| error.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| error.to_string())?;
+    Ok(ids)
+}
+
+pub fn enqueue_active_calendar_events_for_exchange(
+    app: &AppHandle,
+    limit: usize,
+    after_id: &str,
+) -> Result<Option<String>, String> {
+    let mut conn = open_db(app)?;
+    let transaction = conn.transaction().map_err(|error| error.to_string())?;
+    let ids = active_calendar_event_ids_after(&transaction, limit, after_id)?;
+    let last_id = ids.last().cloned();
+    for id in ids {
+        transaction
+            .execute(
+                "INSERT OR IGNORE INTO calendar_sync_outbox
+                 (event_id, action, queued_at, attempts, last_error)
+                 VALUES (?1, 'category', ?2, 0, NULL)",
+                params![id, now()],
+            )
+            .map_err(|error| error.to_string())?;
+    }
+    transaction.commit().map_err(|error| error.to_string())?;
+    Ok(last_id)
+}
+
 pub fn record_calendar_sync_outbox_error(
     app: &AppHandle,
     event_id: &str,
@@ -2100,39 +2178,92 @@ pub fn link_calendar_event_after_exchange_create(
     app: &AppHandle,
     previous_id: &str,
     event: &CalendarEvent,
-) -> Result<(), String> {
+) -> Result<CalendarEvent, String> {
     let conn = open_db(app)?;
+    link_calendar_event_after_exchange_create_in_db(&conn, previous_id, event)
+}
+
+fn link_calendar_event_after_exchange_create_in_db(
+    conn: &Connection,
+    previous_id: &str,
+    event: &CalendarEvent,
+) -> Result<CalendarEvent, String> {
+    if previous_id.trim().is_empty() || event.id.trim().is_empty() {
+        return Err("Der Termin konnte nicht mit einer leeren ID verknüpft werden.".to_string());
+    }
     let transaction = conn
         .unchecked_transaction()
         .map_err(|error| error.to_string())?;
-    let json = serde_json::to_string(event).map_err(|error| error.to_string())?;
-    transaction
+    let previous_json: String = transaction
+        .query_row(
+            "SELECT event_json FROM calendar_events WHERE id = ?1 AND deleted_at IS NULL",
+            params![previous_id],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|error| error.to_string())?
+        .ok_or_else(|| {
+            "Der lokale Termin wurde nicht gefunden; die Verknüpfung wurde nicht übernommen."
+                .to_string()
+        })?;
+    let previous: CalendarEvent =
+        serde_json::from_str(&previous_json).map_err(|error| error.to_string())?;
+    if event.id != previous_id {
+        let destination_exists = transaction
+            .query_row(
+                "SELECT 1 FROM calendar_events WHERE id = ?1",
+                params![&event.id],
+                |_| Ok(()),
+            )
+            .optional()
+            .map_err(|error| error.to_string())?
+            .is_some();
+        if destination_exists {
+            return Err("Der Exchange-Termin ist bereits lokal vorhanden. Beide Termine wurden beibehalten; eine automatische Zusammenführung ist nicht sicher.".to_string());
+        }
+    }
+    // Linking is only a technical ID change, not permission for a Graph
+    // response with missing fields to replace the user's appointment data.
+    // Normal inbound sync can apply the full Exchange version afterward.
+    let mut linked = previous.clone();
+    linked.id = event.id.clone();
+    if !event.updated_at.trim().is_empty() {
+        linked.updated_at = event.updated_at.clone();
+    }
+    if !event.source.trim().is_empty() {
+        linked.source = event.source.clone();
+    }
+    if !event.meeting.online_meeting_url.trim().is_empty() {
+        linked.meeting.online_meeting_url = event.meeting.online_meeting_url.clone();
+    }
+    linked.meeting.is_online_meeting |= event.meeting.is_online_meeting;
+    linked.deleted_at = None;
+    let json = serde_json::to_string(&linked).map_err(|error| error.to_string())?;
+    set_audit_source(&transaction, "m365-link")?;
+    let updated = transaction
         .execute(
-            "INSERT INTO calendar_events (id, starts_at, duplicate_key, event_json, updated_at, deleted_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6)
-             ON CONFLICT(id) DO UPDATE SET
-               starts_at = excluded.starts_at,
-               duplicate_key = excluded.duplicate_key,
-               event_json = excluded.event_json,
-               updated_at = excluded.updated_at,
-               deleted_at = excluded.deleted_at",
+            "UPDATE calendar_events
+             SET id = ?1, starts_at = ?2, duplicate_key = ?3, event_json = ?4,
+                 updated_at = ?5, deleted_at = NULL
+             WHERE id = ?6 AND deleted_at IS NULL",
             params![
-                event.id,
-                event.starts_at,
-                normalized_calendar_duplicate_key(event),
+                &linked.id,
+                &linked.starts_at,
+                normalized_calendar_duplicate_key(&linked),
                 json,
-                if event.updated_at.trim().is_empty() { now() } else { event.updated_at.clone() },
-                event.deleted_at,
+                if linked.updated_at.trim().is_empty() {
+                    now()
+                } else {
+                    linked.updated_at.clone()
+                },
+                previous_id,
             ],
         )
         .map_err(|error| error.to_string())?;
-    if event.id != previous_id {
-        transaction
-            .execute(
-                "DELETE FROM calendar_events WHERE id = ?1",
-                params![previous_id],
-            )
-            .map_err(|error| error.to_string())?;
+    if updated != 1 {
+        return Err(
+            "Der lokale Termin konnte nicht sicher mit Exchange verknüpft werden.".to_string(),
+        );
     }
     transaction
         .execute(
@@ -2140,7 +2271,23 @@ pub fn link_calendar_event_after_exchange_create(
             params![previous_id],
         )
         .map_err(|error| error.to_string())?;
-    transaction.commit().map_err(|error| error.to_string())
+    transaction
+        .execute(
+            "INSERT INTO audit_log(occurred_at, actor, source, action, entity_kind, entity_id, summary)
+             VALUES(strftime('%Y-%m-%dT%H:%M:%fZ','now'),
+                    'Automatische Microsoft-365-Synchronisierung', 'm365', 'linked', 'calendar', ?1, ?2)",
+            params![
+                &linked.id,
+                format!(
+                    "Termin mit Microsoft 365 verknüpft: {} (technischer ID-Wechsel; kein Termin gelöscht)",
+                    if linked.title.trim().is_empty() { "Ohne Titel" } else { linked.title.trim() }
+                ),
+            ],
+        )
+        .map_err(|error| error.to_string())?;
+    set_audit_source(&transaction, "user")?;
+    transaction.commit().map_err(|error| error.to_string())?;
+    Ok(linked)
 }
 
 pub fn read_contact_sync_outbox(
@@ -10356,7 +10503,9 @@ pub fn run() {
             get_app_setting,
             set_app_setting,
             m365::get_m365_connection_status,
+            m365::get_m365_read_only_test_mode,
             m365::list_m365_master_categories,
+            m365::save_m365_master_category,
             m365::start_m365_interactive_connection,
             m365::start_m365_connection,
             m365::poll_m365_connection,
@@ -10444,6 +10593,153 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn inbound_calendar_waits_for_pending_local_content_but_not_category_updates() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE calendar_sync_outbox(event_id TEXT PRIMARY KEY, action TEXT NOT NULL);
+             INSERT INTO calendar_sync_outbox VALUES ('local-edit', 'upsert');
+             INSERT INTO calendar_sync_outbox VALUES ('local-delete', 'delete');
+             INSERT INTO calendar_sync_outbox VALUES ('color-only', 'category');",
+        )
+        .unwrap();
+        assert_eq!(
+            pending_calendar_content_sync_ids_in_db(&conn).unwrap(),
+            HashSet::from(["local-edit".to_string(), "local-delete".to_string()])
+        );
+    }
+
+    #[test]
+    fn exchange_calendar_link_preserves_event_without_a_delete_audit() {
+        let conn = Connection::open_in_memory().expect("in-memory database");
+        conn.execute_batch(
+            "CREATE TABLE audit_context (id INTEGER PRIMARY KEY, actor TEXT NOT NULL, source TEXT NOT NULL);
+             INSERT INTO audit_context(id, actor, source) VALUES (1, 'DOMAIN\\User', 'user');
+             CREATE TABLE audit_log (
+               id INTEGER PRIMARY KEY, occurred_at TEXT NOT NULL, actor TEXT NOT NULL,
+               source TEXT NOT NULL, action TEXT NOT NULL, entity_kind TEXT NOT NULL,
+               entity_id TEXT, summary TEXT NOT NULL
+             );
+             CREATE TABLE calendar_events (
+               id TEXT PRIMARY KEY, starts_at TEXT NOT NULL, duplicate_key TEXT NOT NULL,
+               event_json TEXT NOT NULL, updated_at TEXT NOT NULL, deleted_at TEXT
+             );
+             CREATE TABLE calendar_sync_outbox (event_id TEXT PRIMARY KEY);
+             CREATE TRIGGER audit_calendar_changed AFTER UPDATE ON calendar_events
+               WHEN OLD.deleted_at IS NEW.deleted_at AND NEW.deleted_at IS NULL
+                 AND (SELECT source FROM audit_context WHERE id = 1) != 'm365-link' BEGIN
+               INSERT INTO audit_log(occurred_at, actor, source, action, entity_kind, entity_id, summary)
+               VALUES('2026-10-02T09:00:00Z', 'DOMAIN\\User', 'user', 'updated', 'calendar', NEW.id, 'changed');
+             END;
+             CREATE TRIGGER audit_calendar_purged BEFORE DELETE ON calendar_events BEGIN
+               INSERT INTO audit_log(occurred_at, actor, source, action, entity_kind, entity_id, summary)
+               VALUES('2026-10-02T09:00:00Z', 'DOMAIN\\User', 'user', 'purged', 'calendar', OLD.id, 'deleted');
+             END;",
+        )
+        .expect("calendar audit schema");
+        let local = CalendarEvent {
+            id: "local-dentist".to_string(),
+            updated_at: "2026-10-02T09:00:00Z".to_string(),
+            title: "Praxis Sanos".to_string(),
+            starts_at: "2026-10-15T09:00:00".to_string(),
+            ends_at: "2026-10-15T10:00:00".to_string(),
+            is_all_day: false,
+            location: String::new(),
+            description: "Zahnarzttermin".to_string(),
+            color: "blue".to_string(),
+            category: String::new(),
+            source: "Lokal".to_string(),
+            recurrence: None,
+            excluded_dates: Vec::new(),
+            deleted_at: None,
+            recurrence_master_id: None,
+            recurrence_id: None,
+            meeting: CalendarMeetingOptions::default(),
+        };
+        conn.execute(
+            "INSERT INTO calendar_events(id, starts_at, duplicate_key, event_json, updated_at, deleted_at)
+             VALUES(?1, ?2, ?3, ?4, ?5, NULL)",
+            params![
+                &local.id,
+                &local.starts_at,
+                normalized_calendar_duplicate_key(&local),
+                serde_json::to_string(&local).unwrap(),
+                &local.updated_at,
+            ],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO calendar_sync_outbox(event_id) VALUES(?1)",
+            params![&local.id],
+        )
+        .unwrap();
+
+        let mut remote = local.clone();
+        remote.id = "m365:calendar:remote-dentist".to_string();
+        remote.title.clear(); // Sparse Graph responses must not erase the title.
+        link_calendar_event_after_exchange_create_in_db(&conn, &local.id, &remote)
+            .expect("link existing appointment");
+
+        let (stored_id, stored_json): (String, String) = conn
+            .query_row("SELECT id, event_json FROM calendar_events", [], |row| {
+                Ok((row.get(0)?, row.get(1)?))
+            })
+            .unwrap();
+        let stored: CalendarEvent = serde_json::from_str(&stored_json).unwrap();
+        assert_eq!(stored_id, remote.id);
+        assert_eq!(stored.title, local.title);
+        assert_eq!(stored.description, local.description);
+        assert_eq!(stored.deleted_at, None);
+        let actions: Vec<(String, String)> = conn
+            .prepare("SELECT action, source FROM audit_log ORDER BY id")
+            .unwrap()
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert_eq!(actions, vec![("linked".to_string(), "m365".to_string())]);
+        assert_eq!(
+            conn.query_row("SELECT COUNT(*) FROM calendar_sync_outbox", [], |row| row
+                .get::<_, i64>(
+                0
+            ))
+            .unwrap(),
+            0
+        );
+
+        let another_local = CalendarEvent {
+            id: "another-local".to_string(),
+            ..local
+        };
+        conn.execute(
+            "INSERT INTO calendar_events(id, starts_at, duplicate_key, event_json, updated_at, deleted_at)
+             VALUES(?1, ?2, ?3, ?4, ?5, NULL)",
+            params![
+                &another_local.id,
+                &another_local.starts_at,
+                normalized_calendar_duplicate_key(&another_local),
+                serde_json::to_string(&another_local).unwrap(),
+                &another_local.updated_at,
+            ],
+        )
+        .unwrap();
+        let conflict =
+            link_calendar_event_after_exchange_create_in_db(&conn, &another_local.id, &remote);
+        assert!(conflict.is_err());
+        assert_eq!(
+            conn.query_row("SELECT COUNT(*) FROM calendar_events", [], |row| row
+                .get::<_, i64>(0))
+                .unwrap(),
+            2
+        );
+        assert_eq!(
+            conn.query_row("SELECT COUNT(*) FROM audit_log", [], |row| row
+                .get::<_, i64>(0))
+                .unwrap(),
+            1
+        );
+    }
 
     #[test]
     fn inbound_calendar_delta_is_acknowledged_only_with_committed_local_changes() {
@@ -10966,6 +11262,30 @@ mod tests {
             notes: String::new(),
             group_ids: Vec::new(),
         }
+    }
+
+    #[test]
+    fn calendar_category_upgrade_advances_past_processed_events() {
+        let conn = Connection::open_in_memory().expect("in-memory calendar database");
+        conn.execute_batch(
+            "CREATE TABLE calendar_events (id TEXT PRIMARY KEY, deleted_at TEXT);
+             INSERT INTO calendar_events VALUES ('event-a', NULL);
+             INSERT INTO calendar_events VALUES ('event-b', NULL);
+             INSERT INTO calendar_events VALUES ('event-c', NULL);
+             INSERT INTO calendar_events VALUES ('event-d', '2026-10-02');",
+        )
+        .expect("calendar events");
+        assert_eq!(
+            active_calendar_event_ids_after(&conn, 2, "").unwrap(),
+            vec!["event-a", "event-b"]
+        );
+        assert_eq!(
+            active_calendar_event_ids_after(&conn, 2, "event-b").unwrap(),
+            vec!["event-c"]
+        );
+        assert!(active_calendar_event_ids_after(&conn, 2, "event-c")
+            .unwrap()
+            .is_empty());
     }
 
     #[test]

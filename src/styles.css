@@ -5546,6 +5546,150 @@ table {
   margin: 0.25rem 0.35rem;
 }
 
+.calendar-event-context-menu {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: 0 16px 38px rgba(27, 19, 24, 0.2);
+  display: grid;
+  max-height: calc(100vh - 16px);
+  min-width: 248px;
+  overflow: auto;
+  padding: 0.35rem;
+  position: fixed;
+  z-index: 60;
+}
+
+.calendar-event-context-menu > button,
+.calendar-event-context-submenu button {
+  align-items: center;
+  background: transparent;
+  border: 0;
+  border-radius: 6px;
+  color: var(--text);
+  display: flex;
+  font-size: 0.84rem;
+  gap: 0.6rem;
+  justify-content: flex-start;
+  min-height: 34px;
+  padding: 0.45rem 0.55rem;
+  text-align: left;
+  width: 100%;
+}
+
+.calendar-event-context-menu > button:hover,
+.calendar-event-context-menu > button:focus-visible,
+.calendar-event-context-submenu button:hover,
+.calendar-event-context-submenu button:focus-visible,
+.calendar-event-context-submenu button.selected {
+  background: var(--surface-alt);
+  outline: none;
+}
+
+.calendar-event-context-menu > button > svg:last-child {
+  margin-left: auto;
+}
+
+.calendar-event-context-menu > button.danger {
+  color: var(--danger-text);
+}
+
+.calendar-event-context-separator {
+  background: var(--border);
+  height: 1px;
+  margin: 0.25rem 0.35rem;
+}
+
+.calendar-event-context-submenu {
+  background: color-mix(in srgb, var(--surface-alt) 60%, var(--surface));
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  display: grid;
+  margin: 0 0.2rem 0.25rem 1.9rem;
+  padding: 0.2rem;
+}
+
+.calendar-event-context-submenu button {
+  font-size: 0.78rem;
+  min-height: 30px;
+}
+
+.calendar-event-context-submenu i {
+  border-radius: 999px;
+  display: inline-block;
+  height: 10px;
+  width: 10px;
+}
+
+.calendar-event-context-check {
+  font-weight: 800;
+  margin-left: auto;
+}
+
+.calendar-event-print-sheet {
+  display: none;
+}
+
+@media print {
+  body > * {
+    visibility: hidden !important;
+  }
+
+  .calendar-event-print-sheet,
+  .calendar-event-print-sheet * {
+    visibility: visible !important;
+  }
+
+  .calendar-event-print-sheet {
+    color: #17141a;
+    display: block;
+    font-family: Arial, sans-serif;
+    inset: 0;
+    padding: 24mm;
+    position: fixed;
+  }
+
+  .calendar-event-print-sheet > p:first-child {
+    color: #8b123f;
+    font-size: 11pt;
+    font-weight: 700;
+    margin: 0 0 12mm;
+  }
+
+  .calendar-event-print-sheet h1 {
+    font-size: 24pt;
+    margin: 0 0 10mm;
+  }
+
+  .calendar-event-print-sheet dl {
+    border-top: 1px solid #b9b2b6;
+    margin: 0;
+  }
+
+  .calendar-event-print-sheet dl > div {
+    border-bottom: 1px solid #d8d2d5;
+    display: grid;
+    gap: 10mm;
+    grid-template-columns: 34mm 1fr;
+    padding: 4mm 0;
+  }
+
+  .calendar-event-print-sheet dt {
+    color: #655e63;
+    font-weight: 700;
+  }
+
+  .calendar-event-print-sheet dd {
+    margin: 0;
+  }
+
+  .calendar-event-print-description {
+    line-height: 1.5;
+    margin-top: 10mm;
+    white-space: pre-wrap;
+  }
+}
+
 .calendar-shell {
   background: var(--surface);
   border: 1px solid var(--border);
@@ -8630,7 +8774,80 @@ table {
 }
 
 .calendar-category-dialog {
-  max-width: 560px;
+  max-width: 760px;
+}
+
+.calendar-category-manager {
+  display: grid;
+  gap: 1rem;
+}
+
+.calendar-category-manager-card {
+  background: var(--surface-alt);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  display: grid;
+  gap: 0.85rem;
+  padding: 1rem;
+}
+
+.calendar-category-card-heading {
+  align-items: flex-start;
+  display: flex;
+  gap: 1rem;
+  justify-content: space-between;
+}
+
+.calendar-category-card-heading h4 {
+  margin: 0;
+}
+
+.calendar-category-card-heading p,
+.calendar-category-empty,
+.calendar-category-safety {
+  color: var(--muted);
+  margin: 0.25rem 0 0;
+}
+
+.calendar-category-list {
+  display: grid;
+  gap: 0.5rem;
+  list-style: none;
+  margin: 0;
+  max-height: 290px;
+  overflow: auto;
+  padding: 0;
+}
+
+.calendar-category-list li {
+  align-items: center;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  display: grid;
+  gap: 0.75rem;
+  grid-template-columns: auto minmax(0, 1fr) minmax(120px, 170px);
+  padding: 0.6rem 0.7rem;
+}
+
+.calendar-category-swatch {
+  border-radius: 999px;
+  height: 0.75rem;
+  width: 0.75rem;
+}
+
+.calendar-category-list select {
+  min-height: 36px;
+  width: 100%;
+}
+
+.calendar-category-safety {
+  font-size: 0.82rem;
+  line-height: 1.45;
+}
+
+.is-spinning {
+  animation: spin 0.9s linear infinite;
 }
 
 .calendar-duplicate-dialog {

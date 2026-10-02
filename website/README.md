@@ -23,3 +23,5 @@ Abra `http://localhost:4173`. A versão otimizada do vídeo está em `website/me
 O projeto Vercel `dmh-backup` está vinculado localmente à pasta `website`; o deploy atual foi feito diretamente dessa pasta. A integração automática com o Git não foi ativada. Antes de conectá-la no futuro, defina **`website`** como *Root Directory* do projeto para não publicar arquivos da raiz do aplicativo.
 
 Nenhum dado é enviado pelo site; os passos de envio à EDV e importação acontecem somente dentro do aplicativo DMH Backup.
+
+Os recortes de tela que destacam os botões são feitos em SVG diretamente no HTML, a partir das capturas originais. O texto abaixo do vídeo oferece instruções escritas, mas não substitui legendas sincronizadas. Para adicioná-las sem inventar falas, é necessária uma transcrição revisada do áudio. O bloco de ajuda pode receber um telefone/e-mail da EDV quando houver um contato oficial confirmado.

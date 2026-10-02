@@ -1,0 +1,5 @@
+# Nur die optimierte Webversion des Videos bereitstellen.
+media/dmh-backup-anleitung.mp4
+README.md
+.env*
+.vercel/

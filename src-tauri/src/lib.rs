@@ -18,6 +18,7 @@ use tauri::{
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     AppHandle, Manager,
 };
+use tauri_plugin_deep_link::DeepLinkExt;
 use uuid::Uuid;
 use zeroize::Zeroize;
 
@@ -6490,6 +6491,33 @@ fn open_outlook_classic_email(email: String) -> Result<(), String> {
     }
 }
 
+const EDV_SUPPORT_EMAIL: &str = "edv@dmh-aidlingen.de";
+
+fn outlook_classic_email_from_deep_link(value: &str) -> Option<String> {
+    let url = url::Url::parse(value).ok()?;
+    if url.scheme() != "dmh-backup" || url.host_str() != Some("compose-email") {
+        return None;
+    }
+
+    let recipient = url
+        .query_pairs()
+        .find_map(|(key, value)| (key == "to").then_some(value.into_owned()))?;
+    recipient
+        .eq_ignore_ascii_case(EDV_SUPPORT_EMAIL)
+        .then(|| EDV_SUPPORT_EMAIL.to_string())
+}
+
+fn open_outlook_classic_from_deep_links<'a>(values: impl IntoIterator<Item = &'a str>) {
+    for value in values {
+        let Some(email) = outlook_classic_email_from_deep_link(value) else {
+            continue;
+        };
+        if let Err(error) = open_outlook_classic_email(email) {
+            eprintln!("Outlook-Classic-Link konnte nicht geöffnet werden: {error}");
+        }
+    }
+}
+
 #[tauri::command]
 fn open_new_outlook_email(email: String) -> Result<(), String> {
     let compose_url = format!("ms-outlook://compose?to={}", email.trim());
@@ -10391,9 +10419,11 @@ pub fn run() {
     tauri::Builder::default()
         // This must remain the first registered plugin. A second launch is
         // terminated and the already-running window is brought back instead.
-        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+        .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
             show_main_window(app);
+            open_outlook_classic_from_deep_links(args.iter().map(String::as_str));
         }))
+        .plugin(tauri_plugin_deep_link::init())
         .manage(AppState {
             db_path: Mutex::new(PathBuf::new()),
             vault: Mutex::new(vault::VaultRuntime::default()),
@@ -10408,6 +10438,13 @@ pub fn run() {
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
+            #[cfg(all(debug_assertions, windows))]
+            app.deep_link().register_all()?;
+
+            if let Some(urls) = app.deep_link().get_current()? {
+                open_outlook_classic_from_deep_links(urls.iter().map(|url| url.as_str()));
+            }
+
             init_db(&app.handle())?;
 
             let open_item =
@@ -10602,6 +10639,28 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn support_email_deep_link_only_accepts_the_fixed_edv_recipient() {
+        assert_eq!(
+            outlook_classic_email_from_deep_link(
+                "dmh-backup://compose-email?to=edv%40dmh-aidlingen.de"
+            ),
+            Some("edv@dmh-aidlingen.de".to_string())
+        );
+        assert_eq!(
+            outlook_classic_email_from_deep_link(
+                "dmh-backup://compose-email?to=someone%40example.com"
+            ),
+            None
+        );
+        assert_eq!(
+            outlook_classic_email_from_deep_link(
+                "https://example.com/compose-email?to=edv%40dmh-aidlingen.de"
+            ),
+            None
+        );
+    }
 
     #[test]
     fn inbound_calendar_waits_for_pending_local_content_but_not_category_updates() {

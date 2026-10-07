@@ -46,6 +46,13 @@
   },
   "identifier": "de.dmh.agendakontakte",
   "plugins": {
+    "deep-link": {
+      "desktop": {
+        "schemes": [
+          "dmh-backup"
+        ]
+      }
+    },
     "updater": {
       "endpoints": [
         "https://github.com/Diakonissenmutterhaus/DMHKontaktApp/releases/latest/download/latest.json"

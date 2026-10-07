@@ -4,8 +4,8 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="theme-color" content="#97005b" />
-    <meta name="description" content="Einfache Anleitung für DMH Backup: technische Daten an die EDV senden, Kontakte übernehmen und Kalender übernehmen." />
-    <title>DMH Backup – Anleitung</title>
+    <meta name="description" content="DMH Backup in drei einfachen Schritten: Daten an die EDV senden, Kontakte übernehmen und Kalender übernehmen." />
+    <title>DMH Backup – In 3 Schritten fertig</title>
     <link rel="icon" type="image/png" href="assets/dmh-app-icon.png" />
     <link rel="stylesheet" href="styles.css" />
     <script src="video-config.js" defer></script>
@@ -13,127 +13,128 @@
   </head>
   <body>
     <a class="skip-link" href="#inhalt">Zum Inhalt springen</a>
+
     <header class="site-header">
-      <div class="header-inner">
-        <img src="assets/dmh-app-icon.png" width="48" height="48" alt="" />
-        <div>
-          <p class="organization">Diakonissenmutterhaus Aidlingen e.V.</p>
-          <p class="site-name">DMH Backup <span>· Anleitung</span></p>
-        </div>
-      </div>
+      <a class="brand" href="#inhalt" aria-label="DMH Backup – zur Anleitung">
+        <img src="assets/dmh-app-icon.png" width="44" height="44" alt="" />
+        <span class="brand-copy">
+          <strong>DMH Backup</strong>
+          <small>Kurzanleitung</small>
+        </span>
+      </a>
     </header>
 
     <main id="inhalt">
-      <section class="intro" aria-labelledby="page-title">
-        <h1 id="page-title">So bereiten Sie alles für die E-Mail-Umstellung vor</h1>
-        <p>Bitte erledigen Sie diese drei Schritte in DMH Backup:</p>
-        <ol class="overview">
-          <li>Technische Daten sicher an die EDV senden</li>
-          <li>Kontakte übernehmen</li>
-          <li>Kalender übernehmen</li>
-        </ol>
-        <p class="reassurance"><strong>Keine Sorge:</strong> Ihre Daten in Outlook Classic oder Thunderbird bleiben beim Übernehmen erhalten.</p>
-        <div class="intro-actions">
-          <a class="primary-link" href="#video">▶ Video ansehen</a>
-          <a class="reading-link" href="#schritte">Lieber lesen? Zur Schritt-für-Schritt-Anleitung</a>
+      <section class="hero" aria-labelledby="page-title">
+        <div class="hero-copy">
+          <p class="eyebrow">DMH Backup</p>
+         <!--   <h1 id="page-title">In 3 Schritten fertig.</h1> -->
+         <!--  <p class="hero-time"><span aria-hidden="true">◷</span> Dauer: ca. 2 Minuten</p> -->
         </div>
-      </section>
 
-      <section class="video-section" id="video" aria-labelledby="video-title">
-        <h2 id="video-title">Videoanleitung</h2>
-        <p>Schauen Sie sich den Ablauf an. Sie können das Video jederzeit anhalten. Alle Schritte stehen darunter auch zum Nachlesen.</p>
-        <video id="anleitungs-video" controls playsinline preload="metadata" poster="assets/kurzanleitung.png" aria-label="Videoanleitung für DMH Backup">
-          <source src="media/dmh-backup-anleitung-web.mp4" type="video/mp4" />
-          Ihr Browser unterstützt die Videowiedergabe nicht.
-        </video>
+        <div class="video-wrap" id="video">
+          <video id="anleitungs-video" controls playsinline preload="metadata" poster="assets/kurzanleitung.png" aria-label="Videoanleitung für DMH Backup">
+            <source src="media/dmh-backup-anleitung-web.mp4" type="video/mp4" />
+            Ihr Browser unterstützt die Videowiedergabe nicht.
+          </video>
+          <button class="video-play" id="video-play" type="button" aria-label="Video starten">
+            <span aria-hidden="true">▶</span>
+          </button>
+        </div>
+
+        <p class="written-guide-label">Schriftliche Anleitung unten <span aria-hidden="true">↓</span></p>
         <p class="video-help" id="video-hinweis" role="status" hidden>Das Video ist momentan nicht erreichbar. Bitte wenden Sie sich an Ihre EDV.</p>
       </section>
 
-      <section class="steps-section" id="schritte" aria-labelledby="steps-title">
-        <h2 id="steps-title">Die drei Schritte</h2>
-        <p>Alle Schaltflächen, die Sie dafür brauchen, finden Sie direkt in der App.</p>
-
-        <article class="step" aria-labelledby="step-one-title">
-          <div class="step-heading"><span aria-hidden="true">1.</span><h3 id="step-one-title">Technische Daten sicher an die EDV senden</h3></div>
-          <p class="important">Dabei werden <strong>keine E-Mails, Kontakte, Termine oder Dokumente</strong> an die EDV gesendet.</p>
-          <p>Klicken Sie in DMH Backup auf der Startseite auf <strong>„Sicher an die EDV senden“</strong>. Im nächsten Fenster steht genau, welche technischen Kontodaten gesendet werden. Lesen Sie die Angaben und bestätigen Sie erst dann.</p>
-          <div class="click-example send-example">
-            <p>Im nächsten Fenster: „Sicher an die EDV senden“</p>
-            <svg viewBox="487 356 293 72" role="img" aria-labelledby="send-button-title">
-              <title id="send-button-title">Vergrößerter dunkelroter Button Sicher an die EDV senden</title>
-              <image href="assets/edv-sicher-senden.png" width="835" height="466" />
-            </svg>
+      <section class="steps" aria-label="Schritt-für-Schritt-Anleitung">
+        <article class="step-card step-one-card" id="schritt-1">
+          <div class="step-copy">
+            <span class="step-number">Schritt 1</span>
+            <h2>Daten an die EDV senden</h2>
+            <p class="instruction">Auf der Startseite <strong>„Sicher an die EDV senden“</strong> wählen, Angaben prüfen und bestätigen.</p>
           </div>
+          <figure class="app-shot step-one-visual">
+            <div class="visual-click visual-click-home">
+              <span class="visual-click-number" aria-hidden="true">1</span>
+              <div class="shot-window">
+                <img src="assets/kurzanleitung.png" loading="lazy" alt="Startseite von DMH Backup mit hervorgehobenem Button Sicher an die EDV senden" />
+                <span class="focus-ring" aria-hidden="true"></span>
+                <span class="pointer-label" aria-hidden="true">Hier klicken <b>↓</b></span>
+              </div>
+              <figcaption>Auf der Startseite: „Sicher an die EDV senden“.</figcaption>
+            </div>
+            <div class="visual-connector" aria-hidden="true"><span>Danach</span>↓</div>
+            <div class="visual-click visual-click-confirm">
+              <span class="visual-click-number" aria-hidden="true">2</span>
+              <div class="shot-window">
+                <img src="assets/edv-sicher-senden.png" loading="lazy" alt="Bestätigungsfenster mit hervorgehobenem Button Sicher an die EDV senden" />
+                <span class="focus-ring" aria-hidden="true"></span>
+                <span class="pointer-label" aria-hidden="true">Bestätigen <b>↓</b></span>
+              </div>
+              <figcaption>Angaben prüfen und anschließend sicher absenden.</figcaption>
+            </div>
+          </figure>
         </article>
 
-        <article class="step" aria-labelledby="step-two-title">
-          <div class="step-heading"><span aria-hidden="true">2.</span><h3 id="step-two-title">Kontakte übernehmen</h3></div>
-          <p>Klicken Sie <strong>links auf „Kontakte“</strong>. Klicken Sie danach auf den dunkelroten Button <strong>„Einfach importieren“</strong>.</p>
-          <div class="click-guide" aria-label="Wo Sie für den Kontaktimport klicken">
-            <div class="click-example nav-example">
-              <p>Links: Kontakte</p>
-              <svg viewBox="12 177 225 70" role="img" aria-labelledby="contact-nav-title">
-                <title id="contact-nav-title">Ausschnitt der linken Leiste: Kontakte</title>
-                <image href="assets/kurzanleitung.png" width="1919" height="1032" />
-              </svg>
-            </div>
-            <div class="click-example button-example">
-              <p>Dann: Einfach importieren</p>
-              <svg viewBox="696 309 392 132" role="img" aria-labelledby="contact-button-title">
-                <title id="contact-button-title">Vergrößerter dunkelroter Button Einfach importieren auf der Kontaktseite</title>
-                <image href="assets/kontakte-importieren.png" width="1903" height="1031" />
-              </svg>
+        <article class="step-card stacked-step" id="schritt-2">
+          <div class="step-copy">
+            <span class="step-number">Schritt 2</span>
+            <h2>Kontakte übernehmen</h2>
+            <p class="instruction">Links <strong>„Kontakte“</strong> öffnen und danach <strong>„Einfach importieren“</strong> wählen.</p>
+            <div class="programs" aria-label="Verfügbare Programme">
+<!--               <span><img src="assets/outlook.svg" width="34" height="34" alt="" /><strong>Outlook Classic</strong></span>
+              <span><img src="assets/thunderbird.svg" width="34" height="34" alt="" /><strong>Thunderbird</strong></span> -->
             </div>
           </div>
-          <p>Wählen Sie nun das Programm, das Sie bisher für Ihre E-Mails genutzt haben:</p>
-          <ul class="program-list">
-            <li><img src="assets/outlook.svg" width="48" height="48" loading="lazy" alt="" /><span><strong>Outlook Classic</strong><small>Das blaue Outlook-Symbol</small></span></li>
-            <li><img src="assets/thunderbird.svg" width="48" height="48" loading="lazy" alt="" /><span><strong>Thunderbird</strong><small>Das Thunderbird-Symbol mit dem Vogel</small></span></li>
-          </ul>
-          <p class="small-help">Sie sind nicht sicher, welches Programm Sie nutzen? Fragen Sie bitte die EDV.</p>
+          <figure class="app-shot shot-contacts">
+            <div class="shot-window">
+              <img src="assets/kontakte-importieren.png" loading="lazy" alt="Kontaktseite in DMH Backup mit hervorgehobenem Button Einfach importieren" />
+              <span class="focus-ring" aria-hidden="true"></span>
+              <span class="pointer-label" aria-hidden="true">Einfach importieren <b>↓</b></span>
+            </div>
+            <div class="source-choice">
+              <span>Danach auswählen:</span>
+              <img src="assets/quelle-waehlen.png" loading="lazy" alt="Auswahl zwischen Outlook Classic und Thunderbird" />
+            </div>
+          </figure>
         </article>
 
-        <article class="step" aria-labelledby="step-three-title">
-          <div class="step-heading"><span aria-hidden="true">3.</span><h3 id="step-three-title">Kalender übernehmen</h3></div>
-          <p>Klicken Sie <strong>links auf „Kalender“</strong> und dann auf <strong>„Einfach importieren“</strong>. Wählen Sie wieder Outlook Classic oder Thunderbird – dasselbe Programm, in dem Ihre bisherigen Termine stehen.</p>
-          <div class="click-guide" aria-label="Wo Sie für den Kalenderimport klicken">
-            <div class="click-example nav-example">
-              <p>Links: Kalender</p>
-              <svg viewBox="12 237 225 70" role="img" aria-labelledby="calendar-nav-title">
-                <title id="calendar-nav-title">Ausschnitt der linken Leiste: Kalender</title>
-                <image href="assets/kurzanleitung.png" width="1919" height="1032" />
-              </svg>
-            </div>
-            <div class="click-example button-example">
-              <p>Dann: Einfach importieren</p>
-              <svg viewBox="500 301 392 132" role="img" aria-labelledby="calendar-button-title">
-                <title id="calendar-button-title">Vergrößerter dunkelroter Button Einfach importieren auf der Kalenderseite</title>
-                <image href="assets/kalender-importieren.png" width="1918" height="1028" />
-              </svg>
-            </div>
+        <article class="step-card stacked-step" id="schritt-3">
+          <div class="step-copy">
+            <span class="step-number">Schritt 3</span>
+            <h2>Kalender übernehmen</h2>
+            <p class="instruction">Links <strong>„Kalender“</strong> öffnen und <strong>„Einfach importieren“</strong> wählen.</p>
           </div>
+          <figure class="app-shot shot-calendar">
+            <div class="shot-window">
+              <img src="assets/kalender-importieren.png" loading="lazy" alt="Kalenderseite in DMH Backup mit hervorgehobenem Button Einfach importieren" />
+              <span class="focus-ring" aria-hidden="true"></span>
+              <span class="pointer-label" aria-hidden="true">Einfach importieren <b>↓</b></span>
+            </div>
+            <figcaption>Dasselbe E-Mail-Programm wie bei den Kontakten wählen.</figcaption>
+            <div class="calendar-source-shot">
+              <img src="assets/kalender-quelle-waehlen.png" loading="lazy" alt="Fenster Kalender einfach importieren mit Auswahl zwischen Outlook Classic und Thunderbird" />
+            </div>
+          </figure>
         </article>
-      </section>
-
-      <section class="completion" aria-labelledby="completion-title">
-        <h2 id="completion-title">Wann sind Sie fertig?</h2>
-        <p>Wenn Sie alle drei Punkte erledigt haben, ist Ihre Vorbereitung abgeschlossen:</p>
-        <ol>
-          <li>Technische Daten an die EDV gesendet</li>
-          <li>Kontakte übernommen</li>
-          <li>Kalender übernommen</li>
-        </ol>
-        <p>Vielen Dank für Ihre Unterstützung.</p>
       </section>
 
       <aside class="help" aria-labelledby="help-title">
-        <h2 id="help-title">Sie kommen nicht weiter?</h2>
-        <p>Das ist kein Problem. Wenn eine Fehlermeldung erscheint oder Sie nicht wissen, welches E-Mail-Programm Sie nutzen, wenden Sie sich bitte an Ihre EDV.</p>
+        <div class="help-icon" aria-hidden="true">✉</div>
+        <div>
+          <h2 id="help-title">Bei Fragen schreiben Sie bitte eine E-Mail an:</h2>
+        </div>
+        <a
+          class="help-action"
+          href="dmh-backup://compose-email?to=edv%40dmh-aidlingen.de"
+          aria-label="E-Mail an die EDV in Outlook Classic öffnen"
+          title="In Outlook Classic öffnen"
+        >edv@dmh-aidlingen.de</a>
       </aside>
     </main>
 
     <footer class="site-footer">
-      <p>DMH Backup · Eine Anleitung des Diakonissenmutterhauses Aidlingen e.V.</p>
+      <p>DMH Backup · Diakonissenmutterhaus Aidlingen e.V.</p>
       <a href="https://www.diakonissenmutterhaus-aidlingen.de/">Zur Website des Mutterhauses</a>
     </footer>
   </body>

@@ -17,6 +17,7 @@ export const synchronizationHistoryKey = "synchronization_history_v1";
 export const synchronizationRuntimeStatusKey = "synchronization_runtime_status_v1";
 export const synchronizationRuntimeStatusUpdatedEventName = "dmh:synchronization-runtime-status-updated";
 export const calendarChangedEventName = "dmh:calendar-changed";
+export const contactChangedEventName = "dmh:contact-changed";
 export const calendarStorageUpdatedEventName = "dmh:calendar-storage-updated";
 export const calendarAutomaticSyncStatusEventName = "dmh:calendar-automatic-sync-status";
 export const m365DataUpdatedEventName = "dmh:m365-data-updated";
@@ -58,6 +59,18 @@ export function parseSynchronizationRuntimeStatus(raw: string | null): Microsoft
 async function saveRuntimeStatus(status: Microsoft365SynchronizationRuntimeStatus): Promise<void> {
   await setAppSetting(synchronizationRuntimeStatusKey, JSON.stringify(status));
   window.dispatchEvent(new Event(synchronizationRuntimeStatusUpdatedEventName));
+}
+
+export type AutomaticSyncTrigger = "open" | "change" | "contact-change" | "poll" | "calendar-poll";
+
+export function describeMicrosoft365SyncFailure(errors: number, messages: string[]): string {
+  const detail = messages.find((message) => message.trim())?.trim();
+  if (messages.some((message) => /HTTP (?:429|500|502|503|504)\b|ErrorInternalServerError|ErrorServerBusy/i.test(message))) {
+    return "Microsoft 365 hat einen Serverfehler gemeldet. Lokale Änderungen bleiben gespeichert und werden erneut versucht. Falls der Fehler anhält, prüfen Sie die Verbindung.";
+  }
+  return detail
+    ? `Exchange konnte ${errors} Änderung(en) noch nicht übernehmen: ${detail.slice(0, 300)}`
+    : `Exchange konnte ${errors} Änderung(en) noch nicht übernehmen. Die Änderungen bleiben lokal gespeichert und werden erneut versucht.`;
 }
 
 export async function recordMicrosoft365SynchronizationError(error: unknown): Promise<void> {
@@ -106,9 +119,9 @@ function announceCalendarChanges(calendarUpserts: CalendarEvent[], calendarDelet
   window.dispatchEvent(new Event(calendarStorageUpdatedEventName));
 }
 
-export async function runAutomaticCalendarSync(trigger: "open" | "change" | "poll" | "calendar-poll"): Promise<CalendarAutomaticSyncStatus | null> {
+export async function runAutomaticCalendarSync(trigger: AutomaticSyncTrigger): Promise<CalendarAutomaticSyncStatus | null> {
   if (!("__TAURI_INTERNALS__" in window)) return null;
-  if (m365SafeImportTestMode && trigger === "change") return null;
+  if (m365SafeImportTestMode && (trigger === "change" || trigger === "contact-change")) return null;
   if (m365SafeImportTestMode && !(await getMicrosoft365ReadOnlyTestMode())) {
     return { state: "error", message: "Sicherer Kalender-Test wurde abgebrochen: Das Schreibverbot in der nativen App ist nicht aktiv." };
   }
@@ -118,7 +131,7 @@ export async function runAutomaticCalendarSync(trigger: "open" | "change" | "pol
   const fastCalendarPoll = m365SafeImportTestMode || trigger === "calendar-poll";
   if (fastCalendarPoll && (!config.calendars || !config.selectedCalendarSourceIds.some((sourceId) =>
     (config.sourceDirections[sourceId] ?? config.direction) !== "export"))) return null;
-  if (config.calendars && config.selectedCalendarSourceIds.length === 0) {
+  if (trigger !== "contact-change" && config.calendars && config.selectedCalendarSourceIds.length === 0) {
     const message = "Automatische Synchronisierung ist aktiviert, aber es wurde kein Microsoft-365-Kalender ausgewählt.";
     await recordMicrosoft365SynchronizationError(message);
     return { state: "error", message };
@@ -143,7 +156,7 @@ export async function runAutomaticCalendarSync(trigger: "open" | "change" | "pol
   // re-scanning a 50,000-item calendar before a newly saved appointment can
   // leave the app.
   const emptyOutbox = { processed: 0, created: 0, updated: 0, deleted: 0, pending: 0, errors: 0, errorMessages: [] as string[] };
-  const queued = fastCalendarPoll ? emptyOutbox : await flushMicrosoft365CalendarOutbox({
+  const queued = fastCalendarPoll || trigger === "contact-change" || !config.calendars ? emptyOutbox : await flushMicrosoft365CalendarOutbox({
     direction: config.direction,
     selectedCalendarSourceIds: config.selectedCalendarSourceIds,
     sourceDirections: config.sourceDirections,
@@ -153,7 +166,7 @@ export async function runAutomaticCalendarSync(trigger: "open" | "change" | "pol
   const queuedExchangeCount = queued.created + queued.updated + queued.deleted;
   if (queued.created > 0) window.dispatchEvent(new Event(calendarStorageUpdatedEventName));
 
-  const queuedContacts = config.contacts && !fastCalendarPoll
+  const queuedContacts = config.contacts && !fastCalendarPoll && trigger !== "change"
     ? await flushMicrosoft365ContactOutbox({
         direction: config.direction,
         contactGroups: config.contactGroups,
@@ -185,16 +198,16 @@ export async function runAutomaticCalendarSync(trigger: "open" | "change" | "pol
   // A local change only flushes the durable outboxes above. Rebuilding the full
   // import plan is reserved for opening the app and the periodic background poll.
   // This keeps typing or moving an appointment responsive on slower computers.
-  const shouldRunReconciliation = trigger !== "change"
+  const shouldRunReconciliation = trigger !== "change" && trigger !== "contact-change"
     && (inboundContactSourceIds.length > 0 || inboundCalendarSourceIds.length > 0);
 
   if (!shouldRunReconciliation) {
     const queueErrors = queued.errors + queuedContacts.errors;
     if (queueErrors > 0) {
-      const message = [...queued.errorMessages, ...queuedContacts.errorMessages].join(" · ")
-        || "Die ausstehenden Änderungen werden erneut versucht.";
+      const messages = [...queued.errorMessages, ...queuedContacts.errorMessages];
+      const message = messages.join(" · ") || "Die ausstehenden Änderungen werden erneut versucht.";
       await recordMicrosoft365SynchronizationError(message);
-      return { state: "error", message: `Exchange konnte ${queueErrors} Änderung(en) noch nicht übernehmen: ${message}` };
+      return { state: "error", message: describeMicrosoft365SyncFailure(queueErrors, messages) };
     }
     const processed = queued.processed + queuedContacts.processed;
     const transferred = queuedExchangeCount + queuedContactCount;
@@ -263,7 +276,7 @@ export async function runAutomaticCalendarSync(trigger: "open" | "change" | "pol
   });
 
   if (combinedResult.errors > 0) {
-    return { state: "error", message: `Microsoft-365-Synchronisierung mit ${combinedResult.errors} Fehler(n) abgeschlossen.` };
+    return { state: "error", message: describeMicrosoft365SyncFailure(combinedResult.errors, combinedResult.errorMessages) };
   }
   if (result.conflicts > 0) {
     return {

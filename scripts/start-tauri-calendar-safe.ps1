@@ -6,6 +6,7 @@ $databasePath = Join-Path $env:APPDATA 'de.dmh.agendakontakte\agendakontakte.sql
 $isolatedAppData = Join-Path $env:APPDATA 'de.dmh.agendakontakte.calendar-safe'
 $isolatedDatabasePath = Join-Path $isolatedAppData 'agendakontakte.sqlite'
 $backupScript = Join-Path $PSScriptRoot 'backup-calendar-sync-db.py'
+$accountCheckScript = Join-Path $PSScriptRoot 'check-calendar-safe-account.py'
 $tauriCli = Join-Path $projectRoot 'node_modules\.bin\tauri.cmd'
 $tauriConfig = Join-Path $projectRoot 'src-tauri\tauri.calendar-safe.conf.json'
 
@@ -37,6 +38,7 @@ Write-Host "Lokale Datenbank gesichert: $backupPath"
 
 # Never open the live application's SQLite database during this diagnostic run.
 # A persistent test copy keeps later test edits separate from the installed app.
+$isolatedBackupPath = $null
 if (-not (Test-Path -LiteralPath $isolatedDatabasePath -PathType Leaf)) {
     New-Item -ItemType Directory -Path $isolatedAppData -Force | Out-Null
     Copy-Item -LiteralPath $backupPath -Destination $isolatedDatabasePath -ErrorAction Stop
@@ -49,8 +51,15 @@ if (-not (Test-Path -LiteralPath $isolatedDatabasePath -PathType Leaf)) {
     Write-Host "Isolierte Testdatenbank gesichert: $isolatedBackupPath"
 }
 
+$testSnapshot = if ($isolatedBackupPath) { $isolatedBackupPath } else { $isolatedDatabasePath }
+$expectedAccountHash = (& py -3 $accountCheckScript $backupPath $testSnapshot | Select-Object -Last 1)
+if ($LASTEXITCODE -ne 0 -or $expectedAccountHash -notmatch '^[0-9a-f]{64}$') {
+    throw 'Die sichere Testkopie gehört nicht zum Microsoft-365-Konto der Ausgangsdatenbank. Der Test wurde nicht gestartet.'
+}
+
 $env:CARGO_TARGET_DIR = Join-Path $projectRoot 'src-tauri\target-dev'
 $env:DMH_M365_READ_ONLY_TEST = '1'
+$env:DMH_M365_READ_ONLY_ACCOUNT_SHA256 = $expectedAccountHash
 $env:VITE_DMH_M365_SAFE_IMPORT = 'true'
 
 Push-Location $projectRoot

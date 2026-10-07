@@ -4,6 +4,7 @@ use base64::{
     Engine as _,
 };
 use chrono::{Datelike, Duration as ChronoDuration, Utc};
+use futures_util::{stream, StreamExt};
 use rand::{Rng, RngCore};
 use rusqlite::{params, OptionalExtension};
 use serde::{Deserialize, Serialize};
@@ -31,6 +32,8 @@ const GRAPH_MAX_PAGES: usize = 100_000;
 // Large enough to drain a 200k-event first import in roughly 40 bounded
 // transactions, while keeping each WebView/SQLite hand-off manageable.
 const CALENDAR_DELTA_BATCH_SIZE: usize = 5_000;
+const CALENDAR_TITLE_REPAIR_BATCH_SIZE: usize = 120;
+const CALENDAR_TITLE_REPAIR_CONCURRENCY: usize = 6;
 // Opt-in diagnostic mode for a local development run. It is intentionally
 // enforced in Rust as well as the WebView so no UI path can write to Graph.
 fn m365_read_only_test_mode() -> bool {
@@ -682,6 +685,8 @@ fn delete_connection_settings(app: &AppHandle) -> Result<(), String> {
         .map_err(|error| error.to_string())?;
     tx.execute("DELETE FROM m365_calendar_delta_state", [])
         .map_err(|error| error.to_string())?;
+    tx.execute("DELETE FROM m365_calendar_title_repair_attempts", [])
+        .map_err(|error| error.to_string())?;
     tx.commit().map_err(|error| error.to_string())
 }
 
@@ -692,6 +697,23 @@ fn read_account(app: &AppHandle) -> Result<Option<Microsoft365Account>, String> 
                 .map_err(|_| "Das gespeicherte Microsoft-365-Kontoprofil ist ungültig.".to_string())
         })
         .transpose()
+}
+
+fn ensure_read_only_test_account(app: &AppHandle) -> Result<(), String> {
+    if !m365_read_only_test_mode() {
+        return Ok(());
+    }
+    let expected = std::env::var("DMH_M365_READ_ONLY_ACCOUNT_SHA256").unwrap_or_default();
+    let account = read_account(app)?
+        .ok_or_else(|| "Der sichere M365-Test hat kein verbundenes Konto.".to_string())?;
+    let actual = format!("{:x}", Sha256::digest(account.id.as_bytes()));
+    if expected.len() != 64 || !actual.eq_ignore_ascii_case(&expected) {
+        return Err(
+            "Der sichere M365-Test wurde wegen eines anderen Microsoft-Kontos unterbrochen."
+                .to_string(),
+        );
+    }
+    Ok(())
 }
 
 fn calendar_color_category_migration_keys(app: &AppHandle) -> Result<(String, String), String> {
@@ -1036,6 +1058,156 @@ fn save_calendar_delta_link(
     Ok(())
 }
 
+fn blank_calendar_title_candidates(
+    conn: &rusqlite::Connection,
+    source: &Microsoft365SyncSource,
+    now: &str,
+    limit: usize,
+) -> Result<Vec<String>, String> {
+    let id_prefix = format!("m365:{}:", source.id);
+    let id_upper_bound = format!("{id_prefix}\u{10ffff}");
+    let mut statement = conn
+        .prepare(
+            "WITH blank_events AS (
+                SELECT substr(id, length(?1) + 1) AS remote_id,
+                       starts_at AS event_start, 1 AS priority
+                FROM calendar_events
+                WHERE id >= ?1 AND id < ?5
+                  AND deleted_at IS NULL
+                  AND trim(coalesce(json_extract(event_json, '$.title'), '')) = ''
+                UNION ALL
+                SELECT remote_id, json_extract(payload_json, '$.start.dateTime'), 0
+                FROM m365_calendar_delta_changes
+                WHERE source_id = ?2 AND change_kind = 'upsert'
+                  AND trim(coalesce(json_extract(payload_json, '$.subject'), '')) = ''
+            ), distinct_events AS (
+                SELECT remote_id, min(event_start) AS event_start,
+                       min(priority) AS priority
+                FROM blank_events WHERE remote_id <> '' GROUP BY remote_id
+            )
+            SELECT events.remote_id FROM distinct_events events
+            LEFT JOIN m365_calendar_title_repair_attempts attempts
+              ON attempts.source_id = ?2 AND attempts.remote_id = events.remote_id
+            WHERE attempts.retry_after IS NULL OR attempts.retry_after <= ?3
+            ORDER BY attempts.retry_after IS NOT NULL, events.priority,
+                     coalesce(abs(julianday(substr(events.event_start, 1, 10)) - julianday('now')), 999999),
+                     events.remote_id
+            LIMIT ?4",
+        )
+        .map_err(|error| error.to_string())?;
+    let rows = statement
+        .query_map(
+            params![id_prefix, source.id, now, limit as i64, id_upper_bound],
+            |row| row.get(0),
+        )
+        .map_err(|error| error.to_string())?;
+    rows.collect::<rusqlite::Result<Vec<String>>>()
+        .map_err(|error| error.to_string())
+}
+
+fn defer_calendar_title_repairs(
+    app: &AppHandle,
+    source: &Microsoft365SyncSource,
+    retries: &[(String, String)],
+) -> Result<(), String> {
+    if retries.is_empty() {
+        return Ok(());
+    }
+    let mut conn = open_db(app)?;
+    let tx = conn.transaction().map_err(|error| error.to_string())?;
+    for (remote_id, retry_after) in retries {
+        tx.execute(
+            "INSERT INTO m365_calendar_title_repair_attempts (source_id, remote_id, retry_after)
+             VALUES (?1, ?2, ?3)
+             ON CONFLICT(source_id, remote_id) DO UPDATE SET retry_after = excluded.retry_after",
+            params![source.id, remote_id, retry_after],
+        )
+        .map_err(|error| error.to_string())?;
+    }
+    tx.commit().map_err(|error| error.to_string())
+}
+
+fn normalize_calendar_source_label(
+    conn: &rusqlite::Connection,
+    source: &Microsoft365SyncSource,
+) -> Result<usize, String> {
+    if source.shared || !source.resource_path.contains("/me/calendars/") {
+        return Ok(0);
+    }
+    let id_prefix = format!("m365:{}:", source.id);
+    let id_upper_bound = format!("{id_prefix}\u{10ffff}");
+    let canonical_name = format!("Microsoft 365 · {}", source.name);
+    conn.execute(
+        "UPDATE calendar_events
+         SET event_json = json_set(event_json, '$.source', ?2)
+         WHERE id >= ?1 AND id < ?3 AND deleted_at IS NULL
+           AND coalesce(json_extract(event_json, '$.source'), '') <> ?2",
+        params![id_prefix, canonical_name, id_upper_bound],
+    )
+    .map_err(|error| error.to_string())
+}
+
+async fn repair_blank_calendar_titles(
+    app: &AppHandle,
+    access_token: &str,
+    source: &Microsoft365SyncSource,
+) -> Result<(), String> {
+    // Delta responses can omit a subject. Fetch the full event by ID and only
+    // queue a repair when Graph supplies a real title. A sparse response must
+    // never overwrite an existing local title or other appointment fields.
+    let now = Utc::now();
+    let candidates = {
+        let conn = open_db(app)?;
+        blank_calendar_title_candidates(
+            &conn,
+            source,
+            &now.to_rfc3339(),
+            CALENDAR_TITLE_REPAIR_BATCH_SIZE,
+        )?
+    };
+    if candidates.is_empty() {
+        return Ok(());
+    }
+    let results = stream::iter(candidates.into_iter().map(|remote_id| async move {
+        let event_url = format!(
+            "{}/events/{}",
+            source.resource_path,
+            encode_graph_path_segment(&remote_id)
+        );
+        let response = graph_json(access_token, &event_url).await;
+        (remote_id, response)
+    }))
+    .buffer_unordered(CALENDAR_TITLE_REPAIR_CONCURRENCY)
+    .collect::<Vec<_>>()
+    .await;
+    let mut resolved = Vec::new();
+    let mut retries = Vec::new();
+    for (remote_id, response) in results {
+        match response {
+            Ok(event)
+                if value_text(&event, "id") == remote_id
+                    && !value_text(&event, "subject").trim().is_empty() =>
+            {
+                resolved.push(event);
+            }
+            Ok(_) => retries.push((remote_id, (now + ChronoDuration::hours(6)).to_rfc3339())),
+            Err(error) => {
+                let transient = ["HTTP 429", "HTTP 500", "HTTP 502", "HTTP 503", "HTTP 504"]
+                    .iter()
+                    .any(|status| error.contains(status));
+                let delay = if transient {
+                    ChronoDuration::minutes(2)
+                } else {
+                    ChronoDuration::hours(6)
+                };
+                retries.push((remote_id, (now + delay).to_rfc3339()));
+            }
+        }
+    }
+    queue_calendar_delta_page(app, &source.id, &resolved)?;
+    defer_calendar_title_repairs(app, source, &retries)
+}
+
 async fn refresh_calendar_delta_queue(
     app: &AppHandle,
     access_token: &str,
@@ -1045,6 +1217,7 @@ async fn refresh_calendar_delta_queue(
     // One conflicting or temporarily unwritable event must not stop every
     // later edit made in Teams from reaching the app.
     let mut reset_attempted = false;
+    let mut title_lookups = 0usize;
     loop {
         let (window_start, window_end) = calendar_delta_window(Utc::now().year());
         let saved_link = calendar_delta_link(app, &source.id)?;
@@ -1080,6 +1253,23 @@ async fn refresh_calendar_delta_queue(
                 let mut resolved = Vec::with_capacity(values.len());
                 for value in values {
                     if value.get("@removed").is_none() {
+                        if value_text(value, "subject").trim().is_empty() && title_lookups < 10 {
+                            let remote_id = value_text(value, "id");
+                            if !remote_id.is_empty() {
+                                title_lookups += 1;
+                                let event_url = format!(
+                                    "{}/events/{}",
+                                    source.resource_path,
+                                    encode_graph_path_segment(remote_id)
+                                );
+                                if let Ok(full_event) = graph_json(access_token, &event_url).await {
+                                    if !value_text(&full_event, "subject").trim().is_empty() {
+                                        resolved.push(full_event);
+                                        continue;
+                                    }
+                                }
+                            }
+                        }
                         resolved.push(value.clone());
                         continue;
                     }
@@ -1124,6 +1314,8 @@ async fn refresh_calendar_delta_queue(
                 .to_string()
         })?;
         save_calendar_delta_link(app, &source.id, &delta_link)?;
+        normalize_calendar_source_label(&open_db(app)?, source)?;
+        repair_blank_calendar_titles(app, access_token, source).await?;
         return Ok(());
     }
 }
@@ -1233,6 +1425,18 @@ fn synthetic_sync_source(
     }
 }
 
+fn append_unique_calendar_sources(
+    calendars: &mut Vec<Microsoft365SyncSource>,
+    additions: impl IntoIterator<Item = Microsoft365SyncSource>,
+) {
+    let mut known_ids: HashSet<String> = calendars.iter().map(|source| source.id.clone()).collect();
+    for source in additions {
+        if known_ids.insert(source.id.clone()) {
+            calendars.push(source);
+        }
+    }
+}
+
 #[tauri::command]
 pub async fn list_m365_sync_sources(
     app: AppHandle,
@@ -1302,7 +1506,7 @@ async fn list_m365_sync_sources_filtered(
             "https://graph.microsoft.com/v1.0/me/calendarGroups/{group_id}/calendars?$select=id,name,canEdit,owner&$top=100"
         );
         if let Ok(shared_calendars) = graph_collection(&access_token, &url).await {
-            calendar_sources.extend(shared_calendars.iter().filter_map(|value| {
+            append_unique_calendar_sources(&mut calendar_sources, shared_calendars.iter().filter_map(|value| {
                 let calendar_id = value.get("id").and_then(Value::as_str)?;
                 let mut source = sync_source(
                     value,
@@ -2004,6 +2208,19 @@ fn duplicate_calendar_event_ids(
     duplicate_ids
 }
 
+fn should_plan_calendar_duplicate_cleanup(
+    request: &Microsoft365SyncPreviewRequest,
+    sources: &[Microsoft365SyncSource],
+    selected: &HashSet<&str>,
+) -> bool {
+    // An inbound-only refresh repairs or adds appointments. It must never
+    // remove a second appointment merely because its visible fields match.
+    sources.iter().any(|source| {
+        calendar_source_is_enabled(request, selected, source)
+            && source_direction(request, &source.id) != "import"
+    })
+}
+
 /// The app stores local appointments as `YYYY-MM-DDTHH:MM`, while Microsoft Graph
 /// can return the same instant with seconds and fractional seconds.  A first sync
 /// must compare the human appointment time, not those transport-format details.
@@ -2270,44 +2487,76 @@ fn remote_event_to_local(
     existing: Option<&crate::CalendarEvent>,
 ) -> crate::CalendarEvent {
     let remote_id = value_text(value, "id");
-    let category = value
-        .get("categories")
-        .and_then(Value::as_array)
-        .and_then(|categories| categories.first())
-        .and_then(Value::as_str)
-        .unwrap_or("")
-        .to_string();
+    let category = if value.get("categories").is_some() {
+        value
+            .get("categories")
+            .and_then(Value::as_array)
+            .and_then(|categories| categories.first())
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string()
+    } else {
+        existing
+            .map(|event| event.category.clone())
+            .unwrap_or_default()
+    };
     let imported_color = value_text(value, "_dmhCategoryColor");
     crate::CalendarEvent {
         id: existing
             .filter(|event| linked_calendar_remote_id(event, &source.id).is_some())
             .map(|event| event.id.clone())
             .unwrap_or_else(|| format!("m365:{}:{remote_id}", source.id)),
-        updated_at: value_text(value, "lastModifiedDateTime").to_string(),
-        title: value_text(value, "subject").to_string(),
+        updated_at: value
+            .get("lastModifiedDateTime")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned)
+            .or_else(|| existing.map(|event| event.updated_at.clone()))
+            .unwrap_or_default(),
+        title: if value_text(value, "subject").trim().is_empty() {
+            existing
+                .map(|event| event.title.clone())
+                .unwrap_or_default()
+        } else {
+            value_text(value, "subject").to_string()
+        },
         starts_at: value
             .get("start")
             .and_then(|part| part.get("dateTime"))
             .and_then(Value::as_str)
-            .unwrap_or("")
-            .to_string(),
+            .map(ToOwned::to_owned)
+            .or_else(|| existing.map(|event| event.starts_at.clone()))
+            .unwrap_or_default(),
         ends_at: value
             .get("end")
             .and_then(|part| part.get("dateTime"))
             .and_then(Value::as_str)
-            .unwrap_or("")
-            .to_string(),
+            .map(ToOwned::to_owned)
+            .or_else(|| existing.map(|event| event.ends_at.clone()))
+            .unwrap_or_default(),
         is_all_day: value
             .get("isAllDay")
             .and_then(Value::as_bool)
+            .or_else(|| existing.map(|event| event.is_all_day))
             .unwrap_or(false),
-        location: value
-            .get("location")
-            .and_then(|location| location.get("displayName"))
-            .and_then(Value::as_str)
-            .unwrap_or("")
-            .to_string(),
-        description: remote_event_description(value),
+        location: if value.get("location").is_some() {
+            value
+                .get("location")
+                .and_then(|location| location.get("displayName"))
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string()
+        } else {
+            existing
+                .map(|event| event.location.clone())
+                .unwrap_or_default()
+        },
+        description: if value.get("body").is_some() || value.get("bodyPreview").is_some() {
+            remote_event_description(value)
+        } else {
+            existing
+                .map(|event| event.description.clone())
+                .unwrap_or_default()
+        },
         color: if imported_color.is_empty() {
             existing
                 .map(|event| event.color.clone())
@@ -2325,24 +2574,46 @@ fn remote_event_to_local(
         recurrence_master_id: existing.and_then(|event| event.recurrence_master_id.clone()),
         recurrence_id: existing.and_then(|event| event.recurrence_id.clone()),
         meeting: crate::CalendarMeetingOptions {
-            required_attendees: remote_event_attendees(value, "required"),
-            optional_attendees: remote_event_attendees(value, "optional"),
+            required_attendees: if value.get("attendees").is_some() {
+                remote_event_attendees(value, "required")
+            } else {
+                existing
+                    .map(|event| event.meeting.required_attendees.clone())
+                    .unwrap_or_default()
+            },
+            optional_attendees: if value.get("attendees").is_some() {
+                remote_event_attendees(value, "optional")
+            } else {
+                existing
+                    .map(|event| event.meeting.optional_attendees.clone())
+                    .unwrap_or_default()
+            },
             show_as: {
                 let show_as = value_text(value, "showAs");
                 if show_as.is_empty() {
-                    "busy".to_string()
+                    existing
+                        .map(|event| event.meeting.show_as.clone())
+                        .unwrap_or_else(|| "busy".to_string())
                 } else {
                     show_as.to_string()
                 }
             },
             reminder_minutes: if value.get("isReminderOn").and_then(Value::as_bool) == Some(false) {
                 None
+            } else if value.get("reminderMinutesBeforeStart").is_none()
+                && value.get("isReminderOn").is_none()
+            {
+                existing.and_then(|event| event.meeting.reminder_minutes)
             } else {
                 value
                     .get("reminderMinutesBeforeStart")
                     .and_then(Value::as_i64)
             },
-            is_private: value_text(value, "sensitivity").eq_ignore_ascii_case("private"),
+            is_private: if value.get("sensitivity").is_some() {
+                value_text(value, "sensitivity").eq_ignore_ascii_case("private")
+            } else {
+                existing.is_some_and(|event| event.meeting.is_private)
+            },
             is_online_meeting: value
                 .get("isOnlineMeeting")
                 .and_then(Value::as_bool)
@@ -2351,14 +2622,24 @@ fn remote_event_to_local(
                     .get("onlineMeeting")
                     .and_then(|meeting| meeting.get("joinUrl"))
                     .and_then(Value::as_str)
-                    .is_some(),
+                    .is_some()
+                || (value.get("isOnlineMeeting").is_none()
+                    && value.get("onlineMeeting").is_none()
+                    && value.get("onlineMeetingUrl").is_none()
+                    && existing.is_some_and(|event| event.meeting.is_online_meeting)),
             online_meeting_url: value
                 .get("onlineMeeting")
                 .and_then(|meeting| meeting.get("joinUrl"))
                 .and_then(Value::as_str)
                 .or_else(|| value.get("onlineMeetingUrl").and_then(Value::as_str))
-                .unwrap_or("")
-                .to_string(),
+                .map(ToOwned::to_owned)
+                .or_else(|| {
+                    (value.get("onlineMeeting").is_none()
+                        && value.get("onlineMeetingUrl").is_none())
+                    .then(|| existing.map(|event| event.meeting.online_meeting_url.clone()))
+                    .flatten()
+                })
+                .unwrap_or_default(),
         },
     }
 }
@@ -2931,7 +3212,16 @@ async fn build_m365_sync_plan(
     let calendar_export_target_id =
         calendar_export_target_id(request, &sources.calendars, &selected_calendars);
     let duplicate_calendar_event_ids =
-        duplicate_calendar_event_ids(&local_events, &sources.calendars, calendar_export_target_id);
+        if should_plan_calendar_duplicate_cleanup(request, &sources.calendars, &selected_calendars)
+        {
+            duplicate_calendar_event_ids(
+                &local_events,
+                &sources.calendars,
+                calendar_export_target_id,
+            )
+        } else {
+            HashSet::new()
+        };
     let pending_calendar_content_ids = if request.calendars {
         crate::pending_calendar_content_sync_ids(app)?
     } else {
@@ -4415,6 +4705,7 @@ pub async fn apply_m365_sync(
     app: AppHandle,
     request: Microsoft365SyncApplyRequest,
 ) -> Result<Microsoft365SyncResult, String> {
+    ensure_read_only_test_account(&app)?;
     if m365_read_only_test_mode()
         && (!request.calendars
             || request.contacts
@@ -5652,6 +5943,144 @@ mod tests {
         }
     }
 
+    #[test]
+    fn keeps_the_primary_calendar_instead_of_a_duplicate_group_alias() {
+        let primary = calendar_source("calendar-a");
+        let mut alias = primary.clone();
+        alias.name = "My Calendars · calendar-a".to_string();
+        alias.shared = true;
+        alias.resource_path = "/me/calendarGroups/group/calendars/calendar-a".to_string();
+        let mut calendars = vec![primary.clone()];
+
+        append_unique_calendar_sources(&mut calendars, [alias, calendar_source("calendar-b")]);
+
+        assert_eq!(calendars.len(), 2);
+        assert_eq!(calendars[0].resource_path, primary.resource_path);
+    }
+
+    #[test]
+    fn normalizes_an_old_group_alias_without_changing_the_event() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE calendar_events (
+                id TEXT PRIMARY KEY, event_json TEXT NOT NULL, deleted_at TEXT
+            );",
+        )
+        .unwrap();
+        let source = calendar_source("calendar-a");
+        let original = json!({
+            "title": "Mittagspause",
+            "source": "Microsoft 365 · My Calendars · calendar-a"
+        });
+        conn.execute(
+            "INSERT INTO calendar_events (id, event_json) VALUES (?1, ?2)",
+            params!["m365:calendar-a:event-1", original.to_string()],
+        )
+        .unwrap();
+
+        assert_eq!(normalize_calendar_source_label(&conn, &source).unwrap(), 1);
+        let updated: String = conn
+            .query_row("SELECT event_json FROM calendar_events", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        let updated: Value = serde_json::from_str(&updated).unwrap();
+        assert_eq!(updated["title"], original["title"]);
+        assert_eq!(updated["source"], "Microsoft 365 · calendar-a");
+        assert_eq!(normalize_calendar_source_label(&conn, &source).unwrap(), 0);
+    }
+
+    #[test]
+    fn selects_blank_local_and_pending_titles_without_repeating_deferred_attempts() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE calendar_events (
+                id TEXT PRIMARY KEY, starts_at TEXT NOT NULL,
+                event_json TEXT NOT NULL, deleted_at TEXT
+            );
+            CREATE TABLE m365_calendar_delta_changes (
+                source_id TEXT NOT NULL, remote_id TEXT NOT NULL,
+                change_kind TEXT NOT NULL, payload_json TEXT
+            );
+            CREATE TABLE m365_calendar_title_repair_attempts (
+                source_id TEXT NOT NULL, remote_id TEXT NOT NULL,
+                retry_after TEXT NOT NULL,
+                PRIMARY KEY (source_id, remote_id)
+            );",
+        )
+        .unwrap();
+        let source = calendar_source("calendar-a");
+        conn.execute(
+            "INSERT INTO calendar_events (id, starts_at, event_json) VALUES (?1, ?2, ?3)",
+            params![
+                "m365:calendar-a:event-1",
+                "2026-10-02T12:00:00",
+                json!({"title":"","source":"Microsoft 365 · My Calendars · calendar-a"})
+                    .to_string()
+            ],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO m365_calendar_delta_changes (source_id, remote_id, change_kind, payload_json)
+             VALUES (?1, ?2, 'upsert', ?3)",
+            params!["calendar-a", "event-2", json!({"id":"event-2","subject":""}).to_string()],
+        )
+        .unwrap();
+        assert_eq!(
+            blank_calendar_title_candidates(&conn, &source, "2026-10-02T13:00:00Z", 10).unwrap(),
+            vec!["event-2", "event-1"]
+        );
+        conn.execute(
+            "INSERT INTO m365_calendar_title_repair_attempts VALUES ('calendar-a', 'event-1', '2026-10-02T15:00:00Z')",
+            [],
+        )
+        .unwrap();
+        assert_eq!(
+            blank_calendar_title_candidates(&conn, &source, "2026-10-02T13:00:00Z", 10).unwrap(),
+            vec!["event-2"]
+        );
+        conn.execute(
+            "UPDATE calendar_events SET event_json = ?1 WHERE id = ?2",
+            params![
+                json!({"title":"Mittagspause"}).to_string(),
+                "m365:calendar-a:event-1"
+            ],
+        )
+        .unwrap();
+        assert_eq!(
+            blank_calendar_title_candidates(&conn, &source, "2026-10-02T16:00:00Z", 10).unwrap(),
+            vec!["event-2"]
+        );
+    }
+
+    #[test]
+    fn sparse_graph_events_preserve_existing_details_while_updating_present_fields() {
+        let source = calendar_source("calendar-a");
+        let mut existing = calendar_event("m365:calendar-a:event-1");
+        existing.title = "Mittagspause".to_string();
+        existing.location = "Besprechungsraum".to_string();
+        existing.description = "Wichtige Notizen".to_string();
+        existing.category = "Red category".to_string();
+        existing.meeting.required_attendees = vec!["person@example.org".to_string()];
+        existing.meeting.is_private = true;
+        let incoming = json!({
+            "id": "event-1", "subject": "",
+            "start": {"dateTime":"2026-10-02T12:00:00"},
+            "end": {"dateTime":"2026-10-02T13:00:00"}
+        });
+        let mapped = remote_event_to_local(&incoming, &source, Some(&existing));
+        assert_eq!(mapped.title, "Mittagspause");
+        assert_eq!(mapped.starts_at, "2026-10-02T12:00:00");
+        assert_eq!(mapped.location, existing.location);
+        assert_eq!(mapped.description, existing.description);
+        assert_eq!(mapped.category, existing.category);
+        assert_eq!(
+            mapped.meeting.required_attendees,
+            existing.meeting.required_attendees
+        );
+        assert!(mapped.meeting.is_private);
+    }
+
     fn calendar_sync_request(selected_ids: &[&str]) -> Microsoft365SyncPreviewRequest {
         Microsoft365SyncPreviewRequest {
             direction: "bidirectional".to_string(),
@@ -6027,6 +6456,26 @@ mod tests {
         assert!(duplicate_ids.contains("m365:calendar-c:event-3"));
         assert!(!duplicate_ids.contains("m365:calendar-a:event-1"));
         assert!(!duplicate_ids.contains("m365:calendar-b:event-single"));
+    }
+
+    #[test]
+    fn import_only_calendar_refresh_never_plans_duplicate_cleanup() {
+        let sources = vec![calendar_source("calendar-a")];
+        let mut request = calendar_sync_request(&["calendar-a"]);
+        request
+            .source_directions
+            .insert("calendar-a".to_string(), "import".to_string());
+        let selected = HashSet::from(["calendar-a"]);
+
+        assert!(!should_plan_calendar_duplicate_cleanup(
+            &request, &sources, &selected
+        ));
+        request
+            .source_directions
+            .insert("calendar-a".to_string(), "bidirectional".to_string());
+        assert!(should_plan_calendar_duplicate_cleanup(
+            &request, &sources, &selected
+        ));
     }
 
     #[test]

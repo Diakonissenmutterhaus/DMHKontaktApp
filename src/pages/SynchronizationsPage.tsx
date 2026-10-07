@@ -149,6 +149,9 @@ export function SynchronizationsPage({ onNavigate, embedded = false, onClose }: 
   }, [deviceCode]);
 
   const selectedSourceCount = config.selectedContactSourceIds.length + config.selectedCalendarSourceIds.length;
+  const unavailableCalendarIds = m365Sources
+    ? config.selectedCalendarSourceIds.filter((id) => !m365Sources.calendars.some((source) => source.id === id))
+    : [];
   const conflicts = useMemo(() => preview?.changes.filter((change) => change.action === "conflict") ?? [], [preview]);
   const unresolvedConflicts = conflicts.filter((change) => !conflictDecisions[change.id]).length;
 
@@ -566,9 +569,17 @@ export function SynchronizationsPage({ onNavigate, embedded = false, onClose }: 
                 </div>}
 
                 <details className="sync-card-details">
-                  <summary>Quellen auswählen <small>{selectedSourceCount} aktiv</small></summary>
+                  <summary>Quellen auswählen <small>{selectedSourceCount} aktiv{unavailableCalendarIds.length > 0 ? ` · ${unavailableCalendarIds.length} nicht erreichbar` : ""}</small></summary>
                   <div className="synchronization-source-mapping-list">
                     {!m365Sources && <p>Quellen werden geladen …</p>}
+                    {unavailableCalendarIds.length > 0 && <p className="synchronization-warning">{unavailableCalendarIds.length} früher ausgewählte Kalender sind mit diesem Konto nicht erreichbar. Entfernen Sie nur deren Auswahl; es werden dabei keine Termine gelöscht.</p>}
+                    {unavailableCalendarIds.map((id, index) => <article key={`unavailable-calendar-${id}`} className="selected">
+                      <span className="synchronization-source-choice"><CalendarDays size={18} /><strong>Nicht erreichbarer Kalender {index + 1}</strong></span>
+                      <button type="button" onClick={() => {
+                        setConfig((current) => ({ ...current, selectedCalendarSourceIds: current.selectedCalendarSourceIds.filter((selectedId) => selectedId !== id) }));
+                        setPreview(null);
+                      }}>Auswahl entfernen</button>
+                    </article>)}
                     {m365Sources && [...m365Sources.contacts, ...m365Sources.calendars].map((source) => {
                       const selected = source.kind === "contactFolder" ? config.selectedContactSourceIds.includes(source.id) : config.selectedCalendarSourceIds.includes(source.id);
                       const direction = config.sourceDirections[source.id] ?? config.direction;

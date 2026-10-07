@@ -50,8 +50,8 @@ function mockContact(id: number, firstName: string, lastName: string): MockConta
   };
 }
 
-async function installTauriMock(page: Page, contacts: MockContact[], options: { loadDelayMs?: number } = {}) {
-  await page.addInitScript(({ seedContacts, loadDelayMs }) => {
+async function installTauriMock(page: Page, contacts: MockContact[], options: { loadDelayMs?: number; calendarEvents?: Array<{ id: string; title: string; startsAt: string; endsAt: string; location: string; description: string; color: string; category: string; source: string }> } = {}) {
+  await page.addInitScript(({ seedContacts, seedCalendarEvents, loadDelayMs }) => {
     let callbackId = 0;
     const callbacks = new Map<number, (...args: unknown[]) => void>();
     const invoke = async (command: string) => {
@@ -72,10 +72,10 @@ async function installTauriMock(page: Page, contacts: MockContact[], options: { 
         case "get_app_setting":
           return null;
         case "get_calendar_overview":
-          return { total: 0, sources: [] };
+          return { total: seedCalendarEvents.length, sources: [...new Set(seedCalendarEvents.map((event) => event.source))] };
         case "list_calendar_events_in_range":
         case "list_calendar_events":
-          return [];
+          return seedCalendarEvents;
         case "plugin:event|listen":
           return ++callbackId;
         case "plugin:event|unlisten":
@@ -105,7 +105,7 @@ async function installTauriMock(page: Page, contacts: MockContact[], options: { 
         }
       }
     });
-  }, { seedContacts: contacts, loadDelayMs: options.loadDelayMs ?? 0 });
+  }, { seedContacts: contacts, seedCalendarEvents: options.calendarEvents ?? [], loadDelayMs: options.loadDelayMs ?? 0 });
 }
 
 test("zero contatos abre a página normalmente e só mostra o importador após escolha", async ({ page }) => {
@@ -186,6 +186,60 @@ test("evento de dia inteiro usa a faixa superior e esconde horários", async ({ 
   await expect(page.getByLabel("Endzeit")).toHaveCount(0);
   await expect(page.getByLabel("Ganztägige Termine")).toContainText("Fortbildung");
   await expect(page.getByRole("button", { name: /Speichern/ })).toBeEnabled();
+});
+
+test("menu de contexto mantém os ícones alinhados à esquerda e as setas à direita", async ({ page }, testInfo) => {
+  const today = new Date();
+  const day = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
+  await installTauriMock(page, [], { calendarEvents: [{
+    id: "context-menu-layout-test",
+    title: "Teste visual",
+    startsAt: `${day}T13:00:00`,
+    endsAt: `${day}T14:00:00`,
+    location: "",
+    description: "",
+    color: "blue",
+    category: "",
+    source: "DMH Backup"
+  }] });
+  await page.goto("/");
+  await page.getByRole("button", { name: "Kalender", exact: true }).click();
+  await page.getByLabel("Kalenderansicht").selectOption("month");
+  await page.getByRole("button", { name: /Teste visual/ }).click({ button: "right" });
+
+  const menu = page.getByRole("menu", { name: /Aktionen für Teste visual/ });
+  await expect(menu).toBeVisible();
+  const iconPositions = await menu.locator(":scope > button > svg:first-child").evaluateAll((icons) => icons.map((icon) => icon.getBoundingClientRect().left));
+  expect(iconPositions).toHaveLength(10);
+  expect(Math.max(...iconPositions) - Math.min(...iconPositions)).toBeLessThan(2);
+  const symbol = menu.getByRole("menuitem", { name: "Symbol" });
+  const firstIcon = await symbol.locator("svg:first-child").boundingBox();
+  const chevron = await symbol.locator(".calendar-event-context-chevron").boundingBox();
+  expect(firstIcon).not.toBeNull();
+  expect(chevron).not.toBeNull();
+  expect(chevron!.x).toBeGreaterThan(firstIcon!.x + 150);
+  await page.screenshot({ path: testInfo.outputPath("calendar-context-menu.png") });
+});
+
+test("evento Microsoft 365 sem título não aparece apenas como horário", async ({ page }) => {
+  const today = new Date();
+  const day = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
+  await installTauriMock(page, [], { calendarEvents: [{
+    id: "m365:calendar-a:event-without-subject",
+    title: "",
+    startsAt: `${day}T12:00:00`,
+    endsAt: `${day}T13:00:00`,
+    location: "",
+    description: "",
+    color: "blue",
+    category: "",
+    source: "Microsoft 365 · Calendário"
+  }] });
+  await page.goto("/");
+  await page.getByRole("button", { name: "Kalender", exact: true }).click();
+  await page.getByLabel("Kalenderansicht").selectOption("month");
+
+  await expect(page.getByRole("button", { name: /Titel in Microsoft 365 nicht verfügbar/ })).toBeVisible();
 });
 
 test("o cartão de importação não cobre Neuer Termin em janelas grandes ou pequenas", async ({ page }) => {

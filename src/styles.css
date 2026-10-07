@@ -5553,7 +5553,8 @@ table {
   box-shadow: 0 16px 38px rgba(27, 19, 24, 0.2);
   display: grid;
   max-height: calc(100vh - 16px);
-  min-width: 248px;
+  width: 258px;
+  max-width: calc(100vw - 16px);
   overflow: auto;
   padding: 0.35rem;
   position: fixed;
@@ -5577,6 +5578,14 @@ table {
   width: 100%;
 }
 
+.calendar-event-context-menu > button {
+  white-space: nowrap;
+}
+
+.calendar-event-context-menu > button > svg:first-child {
+  flex-shrink: 0;
+}
+
 .calendar-event-context-menu > button:hover,
 .calendar-event-context-menu > button:focus-visible,
 .calendar-event-context-submenu button:hover,
@@ -5586,7 +5595,8 @@ table {
   outline: none;
 }
 
-.calendar-event-context-menu > button > svg:last-child {
+.calendar-event-context-chevron {
+  flex-shrink: 0;
   margin-left: auto;
 }
 
@@ -5612,6 +5622,7 @@ table {
 .calendar-event-context-submenu button {
   font-size: 0.78rem;
   min-height: 30px;
+  overflow-wrap: anywhere;
 }
 
 .calendar-event-context-submenu i {

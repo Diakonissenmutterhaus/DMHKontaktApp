@@ -1244,6 +1244,12 @@ fn init_db(app: &AppHandle) -> Result<(), String> {
             received_at TEXT NOT NULL,
             PRIMARY KEY (source_id, remote_id)
         );
+        CREATE TABLE IF NOT EXISTS m365_calendar_title_repair_attempts (
+            source_id TEXT NOT NULL,
+            remote_id TEXT NOT NULL,
+            retry_after TEXT NOT NULL,
+            PRIMARY KEY (source_id, remote_id)
+        );
         CREATE TABLE IF NOT EXISTS mail_accounts (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             source TEXT NOT NULL DEFAULT 'outlook-classic',
@@ -6167,6 +6173,8 @@ fn restore_backup(app: AppHandle, backup: BackupData) -> Result<(), String> {
     // same JSON fields, which keeps restores backward compatible.
     tx.execute("DELETE FROM calendar_events", [])
         .map_err(|err| err.to_string())?;
+    tx.execute("DELETE FROM m365_calendar_title_repair_attempts", [])
+        .map_err(|err| err.to_string())?;
     let active_calendar_events =
         parse_calendar_events(&backup.browser_storage, CALENDAR_ACTIVE_STORAGE_KEY);
     let deleted_calendar_events =
@@ -6233,6 +6241,7 @@ fn clear_local_database(conn: &mut Connection) -> Result<(), String> {
             DELETE FROM groups;
             DELETE FROM import_history;
             DELETE FROM calendar_sync_outbox;
+            DELETE FROM m365_calendar_title_repair_attempts;
             DELETE FROM mail_accounts;
             DELETE FROM vault_entries;
             DELETE FROM vault_config;
@@ -11408,6 +11417,10 @@ mod tests {
                 local_contact_id INTEGER NOT NULL REFERENCES contacts(id) ON DELETE CASCADE
             );
             CREATE TABLE calendar_sync_outbox (event_id TEXT PRIMARY KEY);
+            CREATE TABLE m365_calendar_title_repair_attempts (
+                source_id TEXT NOT NULL, remote_id TEXT NOT NULL,
+                retry_after TEXT NOT NULL, PRIMARY KEY (source_id, remote_id)
+            );
             CREATE TABLE import_history (id INTEGER PRIMARY KEY AUTOINCREMENT);
             CREATE TABLE app_settings (key TEXT PRIMARY KEY);
             CREATE TABLE mail_accounts (id INTEGER PRIMARY KEY AUTOINCREMENT);
@@ -11419,6 +11432,7 @@ mod tests {
             INSERT INTO m365_contact_links VALUES (1);
             INSERT INTO contact_sync_outbox VALUES (1);
             INSERT INTO calendar_sync_outbox VALUES ('calendar-1');
+            INSERT INTO m365_calendar_title_repair_attempts VALUES ('calendar-a', 'event-1', '2026-10-03');
             INSERT INTO import_history DEFAULT VALUES;
             INSERT INTO app_settings VALUES ('migration');
             INSERT INTO mail_accounts DEFAULT VALUES;
@@ -11438,6 +11452,7 @@ mod tests {
             "groups",
             "import_history",
             "calendar_sync_outbox",
+            "m365_calendar_title_repair_attempts",
             "app_settings",
             "mail_accounts",
             "vault_entries",

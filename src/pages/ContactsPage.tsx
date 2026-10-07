@@ -38,7 +38,7 @@ import type { Contact, ContactInput, Group } from "../types/contact";
 import { collectedAddressesDeletedAtSettingKey, collectedAddressesHiddenSettingKey, contactEmails, contactUsesAutomaticDisplayName, displayName, emptyContact, primaryContactEmail, saveAutomaticDisplayNamePreference, toContactInput } from "../utils/contact";
 import { findContactDuplicateGroups, type ContactDuplicateGroup } from "../utils/contactDuplicates";
 import { deletionConfirmationSettingKey } from "../utils/settings";
-import { calendarChangedEventName, m365DataUpdatedEventName } from "../utils/automaticCalendarSync";
+import { contactChangedEventName, m365DataUpdatedEventName } from "../utils/automaticCalendarSync";
 import { isValidEmail } from "../utils/validation";
 
 type GroupSelection = "all" | "ungrouped" | number;
@@ -239,7 +239,7 @@ interface ContactsPageProps {
 }
 
 export function ContactsPage({ onNavigate, onRegisterNavigationBlocker }: ContactsPageProps) {
-  const notifyLocalM365Change = () => window.dispatchEvent(new Event(calendarChangedEventName));
+  const notifyLocalM365Change = () => window.dispatchEvent(new Event(contactChangedEventName));
   const [contacts, setContacts] = useState<Contact[]>([]);
   const [totalContactCount, setTotalContactCount] = useState<number | null>(null);
   const [contactsLoaded, setContactsLoaded] = useState(false);

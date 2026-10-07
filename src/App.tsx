@@ -32,10 +32,13 @@ import {
   calendarAutomaticSyncStatusEventName,
   calendarChangedEventName,
   calendarStorageUpdatedEventName,
+  contactChangedEventName,
+  describeMicrosoft365SyncFailure,
   m365DataUpdatedEventName,
   m365SafeImportTestMode,
   recordMicrosoft365SynchronizationError,
   runAutomaticCalendarSync as performAutomaticCalendarSync,
+  type AutomaticSyncTrigger,
   type CalendarAutomaticSyncStatus
 } from "./utils/automaticCalendarSync";
 import { enableCompleteAutomaticMicrosoft365Sync } from "./utils/microsoft365SyncConfig";
@@ -82,7 +85,7 @@ export default function App() {
   const backupGeneration = useRef(0);
   const documentSyncPromise = useRef<Promise<void> | null>(null);
   const calendarSyncPromise = useRef<Promise<"success" | "error" | "skipped"> | null>(null);
-  const queuedCalendarSyncTrigger = useRef<"open" | "change" | "poll" | "calendar-poll" | null>(null);
+  const queuedCalendarSyncTriggers = useRef(new Set<AutomaticSyncTrigger>());
   const navigationBlockerRef = useRef<NavigationBlocker | null>(null);
   const closing = useRef(false);
   const settingsAreaOpen = page === "settings" || page === "feature-development" || page === "backup" || page === "synchronizations" || page === "m365" || page === "recovery";
@@ -183,21 +186,17 @@ export default function App() {
     finally { if (documentSyncPromise.current === promise) documentSyncPromise.current = null; }
   }, []);
 
-  const runCalendarSync = useCallback(async (trigger: "open" | "change" | "poll" | "calendar-poll"): Promise<"success" | "error" | "skipped"> => {
+  const runCalendarSync = useCallback(async (trigger: AutomaticSyncTrigger): Promise<"success" | "error" | "skipped"> => {
     if (!("__TAURI_INTERNALS__" in window)) return "skipped";
     if (calendarSyncPromise.current) {
-      if (trigger === "change" || queuedCalendarSyncTrigger.current === null
-        || (trigger === "poll" && queuedCalendarSyncTrigger.current === "calendar-poll")) {
-        queuedCalendarSyncTrigger.current = trigger;
-      }
+      queuedCalendarSyncTriggers.current.add(trigger);
       return calendarSyncPromise.current;
     }
     const promise = (async () => {
       let outcome: "success" | "error" | "skipped" = "skipped";
-      let nextTrigger: "open" | "change" | "poll" | "calendar-poll" | null = trigger;
+      let nextTrigger: AutomaticSyncTrigger | undefined = trigger;
       while (nextTrigger) {
         const currentTrigger = nextTrigger;
-        queuedCalendarSyncTrigger.current = null;
         try {
           const status = await performAutomaticCalendarSync(currentTrigger);
           if (status) {
@@ -215,11 +214,13 @@ export default function App() {
           window.dispatchEvent(new CustomEvent<CalendarAutomaticSyncStatus>(calendarAutomaticSyncStatusEventName, {
             detail: {
               state: "error",
-              message: `Automatische Microsoft-365-Synchronisierung fehlgeschlagen: ${error}`
+              message: describeMicrosoft365SyncFailure(1, [String(error)])
             }
           }));
         }
-        nextTrigger = queuedCalendarSyncTrigger.current;
+        nextTrigger = (["change", "contact-change", "calendar-poll", "open", "poll"] as AutomaticSyncTrigger[])
+          .find((candidate) => queuedCalendarSyncTriggers.current.has(candidate));
+        if (nextTrigger) queuedCalendarSyncTriggers.current.delete(nextTrigger);
       }
       return outcome;
     })();
@@ -308,9 +309,14 @@ export default function App() {
       });
 
     let debounceTimer: number | undefined;
+    let contactDebounceTimer: number | undefined;
     const queueChangedCalendarSync = () => {
       if (debounceTimer !== undefined) window.clearTimeout(debounceTimer);
       debounceTimer = window.setTimeout(() => void runCalendarSync("change"), 3_000);
+    };
+    const queueChangedContactSync = () => {
+      if (contactDebounceTimer !== undefined) window.clearTimeout(contactDebounceTimer);
+      contactDebounceTimer = window.setTimeout(() => void runCalendarSync("contact-change"), 3_000);
     };
     const syncWhenVisible = () => {
       if (document.hidden) {
@@ -321,14 +327,17 @@ export default function App() {
       void runScheduledPoll();
     };
     window.addEventListener(calendarChangedEventName, queueChangedCalendarSync);
+    window.addEventListener(contactChangedEventName, queueChangedContactSync);
     document.addEventListener("visibilitychange", syncWhenVisible);
     return () => {
       window.removeEventListener(calendarChangedEventName, queueChangedCalendarSync);
+      window.removeEventListener(contactChangedEventName, queueChangedContactSync);
       document.removeEventListener("visibilitychange", syncWhenVisible);
       disposed = true;
       clearPollingTimer();
       window.clearInterval(calendarPollInterval);
       if (debounceTimer !== undefined) window.clearTimeout(debounceTimer);
+      if (contactDebounceTimer !== undefined) window.clearTimeout(contactDebounceTimer);
     };
   }, [runCalendarSync]);
 
@@ -368,6 +377,7 @@ export default function App() {
       }, 3_000);
     };
     window.addEventListener(calendarChangedEventName, markBackupDirty);
+    window.addEventListener(contactChangedEventName, markBackupDirty);
     window.addEventListener(calendarStorageUpdatedEventName, markBackupDirty);
     window.addEventListener(m365DataUpdatedEventName, markBackupDirty);
     window.addEventListener(dataSectionVisibilityChangedEventName, markBackupDirty);
@@ -397,6 +407,7 @@ export default function App() {
       window.clearTimeout(startupBackupTimer);
       if (backupDebounceTimer !== undefined) window.clearTimeout(backupDebounceTimer);
       window.removeEventListener(calendarChangedEventName, markBackupDirty);
+      window.removeEventListener(contactChangedEventName, markBackupDirty);
       window.removeEventListener(calendarStorageUpdatedEventName, markBackupDirty);
       window.removeEventListener(m365DataUpdatedEventName, markBackupDirty);
       window.removeEventListener(dataSectionVisibilityChangedEventName, markBackupDirty);

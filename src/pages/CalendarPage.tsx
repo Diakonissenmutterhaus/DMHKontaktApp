@@ -131,6 +131,10 @@ function eventTime(event: CalendarEvent): string {
   return date ? new Intl.DateTimeFormat("de-DE", { hour: "2-digit", minute: "2-digit" }).format(date) : "";
 }
 
+function calendarEventDisplayTitle(event: CalendarEvent): string {
+  return event.title.trim() || (event.id.startsWith("m365:") ? "Titel in Microsoft 365 nicht verfügbar" : "Ohne Titel");
+}
+
 type CalendarEventContextSubmenu = "symbol" | "availability" | "category" | null;
 
 interface CalendarEventContextMenuState {
@@ -368,12 +372,12 @@ function AllDayEventStrip({ days, events, onOpen, onContextMenu }: { days: Date[
           className="calendar-all-day-event"
           style={{ ...calendarColorStyle(layout.event.color), gridColumn: `${layout.startIndex + 2} / span ${layout.span}`, gridRow: layout.lane + 1 } as CSSProperties}
           type="button"
-          title={`${layout.event.title || "Ohne Titel"}${layout.event.location ? `\n${layout.event.location}` : ""}`}
+          title={`${calendarEventDisplayTitle(layout.event)}${layout.event.location ? `\n${layout.event.location}` : ""}`}
           onClick={() => onOpen(layout.event)}
           onContextMenu={(event) => onContextMenu(event, layout.event)}
           key={`${layout.event.id}-${layout.startIndex}`}
         >
-          <span>{layout.event.title || "Ohne Titel"}</span>
+          <span>{calendarEventDisplayTitle(layout.event)}</span>
           {layout.event.location && <small>{layout.event.location}</small>}
         </button>
       ))}
@@ -1635,7 +1639,7 @@ export function CalendarPage({ advancedMode, onAdvancedModeChange, onNavigate }:
                       className={["calendar-event-chip", canDrag ? "movable" : "", draggedEventId === event.id ? "dragging" : ""].filter(Boolean).join(" ")}
                       style={calendarColorStyle(event.color)}
                       type="button"
-                      title={`${event.title} - ${event.location}${canDrag ? "\nZum Verschieben ziehen" : ""}`}
+                      title={`${calendarEventDisplayTitle(event)} - ${event.location}${canDrag ? "\nZum Verschieben ziehen" : ""}`}
                       key={event.id}
                       onClick={(click) => openEventFromClick(click, event)}
                       onContextMenu={(contextEvent) => openEventContextMenu(contextEvent, event)}
@@ -1643,7 +1647,7 @@ export function CalendarPage({ advancedMode, onAdvancedModeChange, onNavigate }:
                       onPointerMove={(pointerEvent) => canDrag && updateEventPointerDrag(pointerEvent)}
                       onPointerUp={(pointerEvent) => canDrag && finishEventPointerDrag(pointerEvent)}
                       onPointerCancel={(pointerEvent) => canDrag && cancelEventPointerDrag(pointerEvent)}
-                    >{event.isAllDay ? <span className="calendar-event-all-day-label">Ganztägig</span> : <time>{eventTime(event)}</time>} {event.title}</button>;
+                    >{event.isAllDay ? <span className="calendar-event-all-day-label">Ganztägig</span> : <time>{eventTime(event)}</time>} {calendarEventDisplayTitle(event)}</button>;
                   })}
                   {dayEvents.length > 3 && <small>+ {dayEvents.length - 3} weitere</small>}
                 </div>
@@ -1718,7 +1722,7 @@ export function CalendarPage({ advancedMode, onAdvancedModeChange, onNavigate }:
                             style={eventStyle}
                             type="button"
                             key={layout.event.id}
-                            title={`${layout.event.title}\n${eventTimeRange(layout.event)}${layout.event.location ? `\n${layout.event.location}` : ""}${canDrag ? "\nZum Verschieben ziehen" : ""}`}
+                            title={`${calendarEventDisplayTitle(layout.event)}\n${eventTimeRange(layout.event)}${layout.event.location ? `\n${layout.event.location}` : ""}${canDrag ? "\nZum Verschieben ziehen" : ""}`}
                             onClick={(event) => openEventFromClick(event, layout.event)}
                             onContextMenu={(event) => openEventContextMenu(event, layout.event)}
                             onPointerDown={(event) => canDrag && beginEventPointerDrag(event, layout.event.id)}
@@ -1726,7 +1730,7 @@ export function CalendarPage({ advancedMode, onAdvancedModeChange, onNavigate }:
                             onPointerUp={(event) => canDrag && finishEventPointerDrag(event)}
                             onPointerCancel={(event) => canDrag && cancelEventPointerDrag(event)}
                           >
-                            <strong>{layout.event.title || "Ohne Titel"}</strong>
+                            <strong>{calendarEventDisplayTitle(layout.event)}</strong>
                             <time>{eventTimeRange(layout.event)}</time>
                             {layout.event.location && <small>{layout.event.location}</small>}
                           </button>
@@ -1804,7 +1808,7 @@ export function CalendarPage({ advancedMode, onAdvancedModeChange, onNavigate }:
                       style={eventStyle}
                       type="button"
                       key={layout.event.id}
-                      title={`${layout.event.title}\n${eventTimeRange(layout.event)}${layout.event.location ? `\n${layout.event.location}` : ""}${canDrag ? "\nZum Verschieben ziehen" : ""}`}
+                      title={`${calendarEventDisplayTitle(layout.event)}\n${eventTimeRange(layout.event)}${layout.event.location ? `\n${layout.event.location}` : ""}${canDrag ? "\nZum Verschieben ziehen" : ""}`}
                       onClick={(event) => openEventFromClick(event, layout.event)}
                       onContextMenu={(event) => openEventContextMenu(event, layout.event)}
                       onPointerDown={(event) => canDrag && beginEventPointerDrag(event, layout.event.id)}
@@ -1812,7 +1816,7 @@ export function CalendarPage({ advancedMode, onAdvancedModeChange, onNavigate }:
                       onPointerUp={(event) => canDrag && finishEventPointerDrag(event)}
                       onPointerCancel={(event) => canDrag && cancelEventPointerDrag(event)}
                     >
-                      <strong>{layout.event.title || "Ohne Titel"}</strong>
+                      <strong>{calendarEventDisplayTitle(layout.event)}</strong>
                       <time>{eventTimeRange(layout.event)}</time>
                       {layout.event.category && <small>{layout.event.category}</small>}
                       {layout.event.location && <small>{layout.event.location}</small>}
@@ -1852,15 +1856,15 @@ export function CalendarPage({ advancedMode, onAdvancedModeChange, onNavigate }:
           <button type="button" role="menuitem" onClick={() => { setEventContextMenu(null); openEvent(target); }}><ExternalLink size={17} /> Öffnen</button>
           <button type="button" role="menuitem" onClick={() => void forwardContextMenuEvent(target)}><Forward size={17} /> Weiterleiten</button>
           <span className="calendar-event-context-separator" />
-          <button type="button" role="menuitem" aria-expanded={eventContextMenu.submenu === "symbol"} onClick={() => toggleSubmenu("symbol")}><Palette size={17} /> Symbol <ChevronRight size={16} /></button>
+          <button type="button" role="menuitem" aria-expanded={eventContextMenu.submenu === "symbol"} onClick={() => toggleSubmenu("symbol")}><Palette size={17} /> Symbol <ChevronRight className="calendar-event-context-chevron" size={16} /></button>
           {eventContextMenu.submenu === "symbol" && <div className="calendar-event-context-submenu" role="group" aria-label="Symbol auswählen">
             {calendarColorOptions.map((color) => <button className={target.color === color.value ? "selected" : ""} type="button" key={color.value} onClick={() => updateContextMenuEvent(target, { color: color.value })}><i style={{ background: color.border }} /> {color.label}</button>)}
           </div>}
-          <button type="button" role="menuitem" aria-expanded={eventContextMenu.submenu === "availability"} onClick={() => toggleSubmenu("availability")}><Eye size={17} /> Anzeigen als <ChevronRight size={16} /></button>
+          <button type="button" role="menuitem" aria-expanded={eventContextMenu.submenu === "availability"} onClick={() => toggleSubmenu("availability")}><Eye size={17} /> Anzeigen als <ChevronRight className="calendar-event-context-chevron" size={16} /></button>
           {eventContextMenu.submenu === "availability" && <div className="calendar-event-context-submenu" role="group" aria-label="Verfügbarkeit auswählen">
             {availabilityOptions.map((option) => <button className={meeting.showAs === option.value ? "selected" : ""} type="button" key={option.value} onClick={() => updateContextMenuEvent(target, { meeting: { ...meeting, showAs: option.value } })}>{option.label}</button>)}
           </div>}
-          <button type="button" role="menuitem" aria-expanded={eventContextMenu.submenu === "category"} onClick={() => toggleSubmenu("category")}><Tag size={17} /> Kategorisieren <ChevronRight size={16} /></button>
+          <button type="button" role="menuitem" aria-expanded={eventContextMenu.submenu === "category"} onClick={() => toggleSubmenu("category")}><Tag size={17} /> Kategorisieren <ChevronRight className="calendar-event-context-chevron" size={16} /></button>
           {eventContextMenu.submenu === "category" && <div className="calendar-event-context-submenu" role="group" aria-label="Kategorie auswählen">
             <button className={!target.category ? "selected" : ""} type="button" onClick={() => updateContextMenuEvent(target, { category: "" })}>Keine Kategorie</button>
             {categoryOptions.map((category) => <button className={target.category === category ? "selected" : ""} type="button" key={category} onClick={() => updateContextMenuEvent(target, { category })}>{category}</button>)}

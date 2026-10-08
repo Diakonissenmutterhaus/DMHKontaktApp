@@ -27,6 +27,8 @@ import {
   listMicrosoft365MasterCategories,
   mergeCalendarEvents,
   moveCalendarEventsToTrash,
+  previewMicrosoft365CalendarCategoryRepair,
+  repairMicrosoft365CalendarCategories,
   restoreCalendarEvents,
   saveCalendarEvents,
   saveMicrosoft365MasterCategory,
@@ -469,6 +471,7 @@ export function CalendarPage({ advancedMode, onAdvancedModeChange, onNavigate }:
   const [newCategoryColor, setNewCategoryColor] = useState(defaultCalendarColor);
   const [categoryManagerLoading, setCategoryManagerLoading] = useState(false);
   const [categorySaving, setCategorySaving] = useState(false);
+  const [categoryRepairing, setCategoryRepairing] = useState(false);
   const [duplicateCleanupBackup, setDuplicateCleanupBackup] = useState<CalendarDuplicateCleanupBackup | null>(
     () => readDuplicateCleanupBackup()
   );
@@ -942,6 +945,55 @@ export function CalendarPage({ advancedMode, onAdvancedModeChange, onNavigate }:
       setMessage(`Die Farbe von „${category.name}“ wurde lokal gespeichert. Exchange konnte sie noch nicht übernehmen: ${String(error)}`);
     } finally {
       setCategorySaving(false);
+    }
+  };
+
+  const repairExchangeCategoryColors = async () => {
+    setCategoryRepairing(true);
+    try {
+      const preview = await previewMicrosoft365CalendarCategoryRepair();
+      if (preview.linkedEvents === 0) {
+        setActionResult({
+          title: "Keine verknüpften Exchange-Termine gefunden",
+          summary: "Es gibt derzeit keine bereits verknüpften Termine, deren Kategorien isoliert repariert werden können.",
+          tone: "info"
+        });
+        return;
+      }
+      const categorySummary = preview.categoryNames.length > 0
+        ? `\n\nBetroffene Kategorien: ${preview.categoryNames.join(", ")}`
+        : "";
+      const confirmed = window.confirm(
+        `${preview.linkedEvents} bereits verknüpfte Exchange-Termine werden geprüft.\n` +
+        `${preview.categoriesToRepair} Master-Kategorien müssen angelegt oder farblich korrigiert werden.\n\n` +
+        `Die normale Warteschlange mit ${preview.pendingOperations} Vorgängen, darunter ${preview.pendingDeletions} Löschungen, wird NICHT ausgeführt oder verändert.` +
+        `${categorySummary}\n\nJetzt ausschließlich Kategorien und Farben reparieren?`
+      );
+      if (!confirmed) return;
+
+      const result = await repairMicrosoft365CalendarCategories();
+      if (result.errors === 0) {
+        mergeRemoteCategories(await listMicrosoft365MasterCategories());
+      }
+      setActionResult({
+        title: result.errors === 0 ? "Exchange-Farben repariert" : "Exchange-Farben teilweise repariert",
+        summary: `${result.updated} von ${result.scanned} verknüpften Terminen wurden ausschließlich bei der Kategorie aktualisiert.`,
+        details: [
+          `Die ${preview.pendingOperations} ausstehenden Synchronisierungsvorgänge wurden nicht ausgeführt oder verändert.`,
+          "Titel, Uhrzeit, Teilnehmer und Inhalte der Termine blieben unverändert.",
+          ...result.errorMessages
+        ],
+        tone: result.errors === 0 ? "success" : "error"
+      });
+    } catch (error) {
+      setActionResult({
+        title: "Exchange-Farben konnten nicht repariert werden",
+        summary: String(error),
+        details: ["Falls die Berechtigung für Kategorien fehlt, verbinden Sie Microsoft 365 einmal neu und versuchen Sie es erneut."],
+        tone: "error"
+      });
+    } finally {
+      setCategoryRepairing(false);
     }
   };
 
@@ -1447,6 +1499,15 @@ export function CalendarPage({ advancedMode, onAdvancedModeChange, onNavigate }:
                     })}
                   </ul>
                 )}
+                <div className="calendar-category-repair">
+                  <div>
+                    <strong>Exchange-Farben sicher reparieren</strong>
+                    <p>Prüft zuerst eine Vorschau und ändert danach ausschließlich Kategorien bereits verknüpfter Termine. Die normale Synchronisierungswarteschlange bleibt unberührt.</p>
+                  </div>
+                  <button className="primary" type="button" onClick={() => void repairExchangeCategoryColors()} disabled={categoryRepairing || categorySaving}>
+                    <Palette size={18} /> {categoryRepairing ? "Farben werden geprüft …" : "Farben prüfen und reparieren"}
+                  </button>
+                </div>
                 <p className="calendar-category-safety">Kategorien werden hier nicht gelöscht: Sie können in Exchange auch E-Mails, Kontakte oder Aufgaben kennzeichnen.</p>
               </section>
               <div className="button-row">

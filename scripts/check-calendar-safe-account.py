@@ -14,7 +14,10 @@ def account_id(database_path: str) -> str:
             "SELECT value FROM app_settings WHERE key = 'm365_connection_profile_v1'"
         ).fetchone()
     if row is None:
-        raise ValueError("A cópia de teste não possui uma conta Microsoft 365 conectada.")
+        # A machine without a connected account is safe as long as both the
+        # source and isolated databases agree. Any later account write remains
+        # blocked by DMH_M365_READ_ONLY_TEST in the Rust layer.
+        return ""
     identifier = json.loads(row[0]).get("id", "")
     if not isinstance(identifier, str) or not identifier.strip():
         raise ValueError("O perfil Microsoft 365 da cópia de teste é inválido.")

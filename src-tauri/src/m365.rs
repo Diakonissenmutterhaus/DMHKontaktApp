@@ -107,6 +107,25 @@ pub struct Microsoft365CalendarCategory {
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct Microsoft365CalendarCategoryRepairPreview {
+    linked_events: usize,
+    category_names: Vec<String>,
+    categories_to_repair: usize,
+    pending_operations: usize,
+    pending_deletions: usize,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Microsoft365CalendarCategoryRepairResult {
+    scanned: usize,
+    updated: usize,
+    errors: usize,
+    error_messages: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Microsoft365DeviceCode {
     user_code: String,
     verification_uri: String,
@@ -2315,6 +2334,61 @@ fn master_category_for_event(
         .unwrap_or(requested)
 }
 
+#[derive(Debug, Clone)]
+struct CalendarCategoryRepairTarget {
+    title: String,
+    url: String,
+    category: String,
+    color: String,
+}
+
+fn calendar_category_repair_targets(
+    events: &[crate::CalendarEvent],
+    sources: &[Microsoft365SyncSource],
+) -> Vec<CalendarCategoryRepairTarget> {
+    events
+        .iter()
+        .filter_map(|event| {
+            let source = sources.iter().find(|source| {
+                source.editable && linked_calendar_remote_id(event, &source.id).is_some()
+            })?;
+            let remote_id = linked_calendar_remote_id(event, &source.id)?;
+            Some(CalendarCategoryRepairTarget {
+                title: event.title.clone(),
+                url: format!(
+                    "{}/events/{}",
+                    source.resource_path,
+                    encode_graph_path_segment(remote_id)
+                ),
+                category: graph_category_for_event(event),
+                color: event.color.clone(),
+            })
+        })
+        .collect()
+}
+
+fn required_calendar_category_colors(
+    targets: &[CalendarCategoryRepairTarget],
+) -> HashMap<String, (String, &'static str)> {
+    let mut required = HashMap::new();
+    for target in targets {
+        let key = target.category.to_lowercase();
+        required.entry(key).or_insert_with(|| {
+            (
+                target.category.clone(),
+                dmh_category_for_calendar_color(&target.color).1,
+            )
+        });
+    }
+    required
+}
+
+fn category_needs_repair(name: &str, actual: &str, expected: &str) -> bool {
+    !outlook_category_has_color(actual)
+        || (name.to_ascii_lowercase().starts_with("dmh farbe:")
+            && !actual.eq_ignore_ascii_case(expected))
+}
+
 async fn ensure_m365_calendar_categories(
     access_token: &str,
     categories: impl IntoIterator<Item = (String, String)>,
@@ -2362,7 +2436,7 @@ async fn ensure_m365_calendar_categories(
     let mut changed = false;
     for (key, (name, color)) in &needed {
         let write = match existing.get(key) {
-            Some(category) if outlook_category_has_color(value_text(category, "color")) => {
+            Some(category) if !category_needs_repair(key, value_text(category, "color"), color) => {
                 continue;
             }
             Some(category) => {
@@ -5331,6 +5405,152 @@ pub async fn list_m365_master_categories(
     categories
 }
 
+fn calendar_outbox_repair_counts(app: &AppHandle) -> Result<(usize, usize), String> {
+    open_db(app)?
+        .query_row(
+            "SELECT COUNT(*), COALESCE(SUM(CASE WHEN action = 'delete' THEN 1 ELSE 0 END), 0)
+             FROM calendar_sync_outbox",
+            [],
+            |row| Ok((row.get::<_, usize>(0)?, row.get::<_, usize>(1)?)),
+        )
+        .map_err(|error| error.to_string())
+}
+
+async fn calendar_category_repair_context(
+    app: &AppHandle,
+) -> Result<(String, Vec<CalendarCategoryRepairTarget>), String> {
+    ensure_read_only_test_account(app)?;
+    let access_token = refreshed_access_token(app).await?;
+    let sources =
+        list_m365_sync_sources_filtered(app.clone(), Some(Vec::new()), false, true).await?;
+    let events = crate::read_calendar_events(&open_db(app)?, false)?;
+    let targets = calendar_category_repair_targets(&events, &sources.calendars);
+    Ok((access_token, targets))
+}
+
+/// Read-only inspection for the isolated colour repair. It deliberately does
+/// not enqueue, complete or otherwise touch the regular calendar outbox.
+#[tauri::command]
+pub async fn preview_m365_calendar_category_repair(
+    app: AppHandle,
+) -> Result<Microsoft365CalendarCategoryRepairPreview, String> {
+    let (mut access_token, targets) = calendar_category_repair_context(&app).await?;
+    let preview = async {
+        let existing = graph_collection(
+            &access_token,
+            "https://graph.microsoft.com/v1.0/me/outlook/masterCategories?$select=displayName,color",
+        )
+        .await?
+        .into_iter()
+        .filter_map(|category| {
+            let name = value_text(&category, "displayName").trim().to_lowercase();
+            (!name.is_empty()).then(|| (name, value_text(&category, "color").to_string()))
+        })
+        .collect::<HashMap<_, _>>();
+        let required = required_calendar_category_colors(&targets);
+        let categories_to_repair = required
+            .iter()
+            .filter(|(key, (_, expected))| {
+                existing
+                    .get(*key)
+                    .map(|actual| category_needs_repair(key, actual, expected))
+                    .unwrap_or(true)
+            })
+            .count();
+        let mut category_names = required
+            .into_values()
+            .map(|(name, _)| name)
+            .collect::<Vec<_>>();
+        category_names.sort_by(|left, right| left.to_lowercase().cmp(&right.to_lowercase()));
+        let (pending_operations, pending_deletions) = calendar_outbox_repair_counts(&app)?;
+        Ok::<_, String>(Microsoft365CalendarCategoryRepairPreview {
+            linked_events: targets.len(),
+            category_names,
+            categories_to_repair,
+            pending_operations,
+            pending_deletions,
+        })
+    }
+    .await;
+    access_token.zeroize();
+    preview
+}
+
+/// Repairs only Exchange master-category colours and the `categories` field of
+/// already linked appointments. It never creates/deletes appointments and does
+/// not consume the normal outbox, so unrelated pending work remains untouched.
+#[tauri::command]
+pub async fn repair_m365_calendar_categories(
+    app: AppHandle,
+) -> Result<Microsoft365CalendarCategoryRepairResult, String> {
+    if m365_read_only_test_mode() {
+        return Err("Der sichere M365-Testmodus sperrt ausgehende Änderungen.".to_string());
+    }
+    let state = app.state::<crate::AppState>();
+    let _sync_guard = state.m365.sync_gate.lock().await;
+    let (mut access_token, targets) = calendar_category_repair_context(&app).await?;
+    let result = async {
+        let master_category_names = ensure_m365_calendar_categories(
+            &access_token,
+            targets
+                .iter()
+                .map(|target| (target.category.clone(), target.color.clone())),
+        )
+        .await?;
+        let scanned = targets.len();
+        let writes = stream::iter(targets.into_iter().map(|target| {
+            let access_token = &access_token;
+            let category = master_category_names
+                .get(&target.category.to_lowercase())
+                .cloned()
+                .unwrap_or(target.category.clone());
+            async move {
+                let outcome = graph_write(
+                    access_token,
+                    reqwest::Method::PATCH,
+                    &target.url,
+                    &json!({ "categories": [category] }),
+                )
+                .await;
+                (target.title, outcome)
+            }
+        }))
+        .buffer_unordered(4)
+        .collect::<Vec<_>>()
+        .await;
+        let mut updated = 0;
+        let mut errors = 0;
+        let mut error_messages = Vec::new();
+        for (title, outcome) in writes {
+            match outcome {
+                Ok(_) => updated += 1,
+                Err(error) => {
+                    errors += 1;
+                    if error_messages.len() < 10 {
+                        error_messages.push(format!(
+                            "{}: {error}",
+                            if title.trim().is_empty() {
+                                "Ohne Titel"
+                            } else {
+                                title.trim()
+                            }
+                        ));
+                    }
+                }
+            }
+        }
+        Ok::<_, String>(Microsoft365CalendarCategoryRepairResult {
+            scanned,
+            updated,
+            errors,
+            error_messages,
+        })
+    }
+    .await;
+    access_token.zeroize();
+    result
+}
+
 /// Creates a mailbox category or changes its Outlook colour. Categories are
 /// deliberately not deleted here: an Outlook category can also label mail,
 /// contacts and tasks, not only calendar events.
@@ -6697,6 +6917,47 @@ mod tests {
             dmh_category_for_calendar_color("gray"),
             ("DMH Farbe: Blau", "preset7")
         );
+        assert!(category_needs_repair(
+            "DMH Farbe: Blau",
+            "preset12",
+            "preset7"
+        ));
+        assert!(category_needs_repair(
+            "DMH Farbe: Blau",
+            "preset0",
+            "preset7"
+        ));
+        assert!(!category_needs_repair(
+            "DMH Farbe: Blau",
+            "preset7",
+            "preset7"
+        ));
+        assert!(!category_needs_repair(
+            "Eigene Kategorie",
+            "preset0",
+            "preset7"
+        ));
+    }
+
+    #[test]
+    fn isolated_category_repair_only_targets_linked_editable_events() {
+        let mut editable = calendar_source("calendar-a");
+        editable.resource_path = "/me/calendars/calendar-a".to_string();
+        let mut read_only = calendar_source("calendar-b");
+        read_only.editable = false;
+        let linked = calendar_event("m365:calendar-a:event-1");
+        let read_only_link = calendar_event("m365:calendar-b:event-2");
+        let local_only = calendar_event("local-event");
+
+        let targets = calendar_category_repair_targets(
+            &[linked, read_only_link, local_only],
+            &[editable, read_only],
+        );
+
+        assert_eq!(targets.len(), 1);
+        assert_eq!(targets[0].url, "/me/calendars/calendar-a/events/event-1");
+        assert_eq!(targets[0].category, "DMH Farbe: Blau");
+        assert_eq!(targets[0].color, "blue");
     }
 
     #[test]

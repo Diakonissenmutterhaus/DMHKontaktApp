@@ -1526,8 +1526,14 @@ export function ContactsPage({ onNavigate, onRegisterNavigationBlocker }: Contac
           <aside className="groups-panel group-folder-pane" onContextMenu={(event) => openGroupContextMenu(event, null)}>
             <div className="groups-panel-heading">
               <h3>Gruppen</h3>
-              <button className="group-new-button primary" type="button" onClick={openGroupCreate}>
-                <Plus size={17} /> Neue Gruppe
+              <button
+                aria-label="Neue Gruppe"
+                className="group-new-button primary"
+                title="Neue Gruppe"
+                type="button"
+                onClick={openGroupCreate}
+              >
+                <Plus size={17} /> <span>Neue Gruppe</span>
               </button>
             </div>
             <label className="group-list-search">
@@ -1712,8 +1718,14 @@ export function ContactsPage({ onNavigate, onRegisterNavigationBlocker }: Contac
                     </div>
                   )}
                 </div>
-                <button className="primary contact-new-button" type="button" onClick={startNew}>
-                  <Plus size={17} /> {t.newContact}
+                <button
+                  aria-label={t.newContact}
+                  className="primary contact-new-button"
+                  title={t.newContact}
+                  type="button"
+                  onClick={startNew}
+                >
+                  <Plus size={17} /> <span>{t.newContact}</span>
                 </button>
               </div>
             </header>

@@ -345,6 +345,14 @@ export function saveMicrosoft365MasterCategory(category: Microsoft365CalendarCat
   return invoke("save_m365_master_category", { name: category.name, color: category.color });
 }
 
+export function previewMicrosoft365CalendarCategoryRepair(): Promise<import("../types/m365").Microsoft365CalendarCategoryRepairPreview> {
+  return invoke("preview_m365_calendar_category_repair");
+}
+
+export function repairMicrosoft365CalendarCategories(): Promise<import("../types/m365").Microsoft365CalendarCategoryRepairResult> {
+  return invoke("repair_m365_calendar_categories");
+}
+
 export function connectMicrosoft365Interactively(): Promise<import("../types/m365").Microsoft365Account> {
   return invoke("start_m365_interactive_connection");
 }

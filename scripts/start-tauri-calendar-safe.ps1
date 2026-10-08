@@ -9,28 +9,65 @@ $backupScript = Join-Path $PSScriptRoot 'backup-calendar-sync-db.py'
 $accountCheckScript = Join-Path $PSScriptRoot 'check-calendar-safe-account.py'
 $tauriCli = Join-Path $projectRoot 'node_modules\.bin\tauri.cmd'
 $tauriConfig = Join-Path $projectRoot 'src-tauri\tauri.calendar-safe.conf.json'
+$pythonPrefix = @()
+$pythonLauncher = Get-Command py -ErrorAction SilentlyContinue
+if ($pythonLauncher) {
+    $pythonExecutable = $pythonLauncher.Source
+    $pythonPrefix = @('-3')
+} else {
+    $bundledPython = Join-Path $env:USERPROFILE '.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe'
+    if (Test-Path -LiteralPath $bundledPython -PathType Leaf) {
+        $pythonExecutable = $bundledPython
+    } else {
+        $pythonLauncher = Get-Command python3 -ErrorAction SilentlyContinue
+        if (-not $pythonLauncher) {
+            $pythonLauncher = Get-Command python -ErrorAction SilentlyContinue
+        }
+        if (-not $pythonLauncher) {
+            throw 'Python 3 fehlt. Installieren Sie Python oder stellen Sie den Python Launcher bereit.'
+        }
+        $pythonExecutable = $pythonLauncher.Source
+    }
+}
 
-if (Get-Process -Name 'agendakontakte' -ErrorAction SilentlyContinue) {
-    throw 'Schließen Sie zuerst alle DMH-Backup-Fenster. Sonst könnte eine andere Instanz Änderungen an Microsoft 365 senden.'
+$runningApps = @(Get-Process -Name 'agendakontakte' -ErrorAction SilentlyContinue)
+if ($runningApps.Count -gt 0) {
+    Write-Warning 'DMH Backup laeuft noch, moeglicherweise nur im Infobereich der Taskleiste.'
+    foreach ($runningApp in $runningApps) {
+        Write-Host "  PID $($runningApp.Id): $($runningApp.Path)"
+    }
+
+    $closeRunningApps = Read-Host 'DMH Backup jetzt sicher beenden und den Tauri-Test starten? [J/N]'
+    if ($closeRunningApps -notmatch '^(j|ja|y|yes)$') {
+        throw 'Der sichere Tauri-Test wurde abgebrochen. Beenden Sie DMH Backup und starten Sie den Befehl erneut.'
+    }
+
+    foreach ($runningApp in $runningApps) {
+        Stop-Process -Id $runningApp.Id -ErrorAction Stop
+        [void]$runningApp.WaitForExit(10000)
+    }
+    if (Get-Process -Name 'agendakontakte' -ErrorAction SilentlyContinue) {
+        throw 'DMH Backup konnte nicht beendet werden. Beenden Sie die App ueber den Infobereich oder den Task-Manager.'
+    }
 }
 if (-not (Test-Path -LiteralPath $tauriCli -PathType Leaf)) {
-    throw 'Die Tauri-CLI fehlt. Führen Sie zuerst npm install aus.'
+    throw 'Die Tauri-CLI fehlt. Fuehren Sie zuerst npm install aus.'
 }
 
 # The client ID is public but compiled into the Rust binary. Without it the
 # existing Microsoft 365 connection appears disconnected in a local dev build.
 if ([string]::IsNullOrWhiteSpace($env:M365_CLIENT_ID)) {
     if (-not (Get-Command gh -ErrorAction SilentlyContinue)) {
-        throw 'M365_CLIENT_ID fehlt. Stellen Sie die öffentliche GitHub-Variable als Umgebungsvariable bereit.'
+        throw 'M365_CLIENT_ID fehlt. Stellen Sie die oeffentliche GitHub-Variable als Umgebungsvariable bereit.'
     }
     $publicClientId = & gh variable get M365_CLIENT_ID --repo Diakonissenmutterhaus/DMHKontaktApp 2>$null | Select-Object -Last 1
     $env:M365_CLIENT_ID = [string]$publicClientId
     if ($LASTEXITCODE -ne 0 -or $env:M365_CLIENT_ID -notmatch '^[0-9a-fA-F-]{36}$') {
-        throw 'Die öffentliche GitHub-Variable M365_CLIENT_ID konnte nicht gelesen werden.'
+        throw 'Die oeffentliche GitHub-Variable M365_CLIENT_ID konnte nicht gelesen werden.'
     }
 }
 
-$backupPath = (& py -3 $backupScript $databasePath $backupDirectory | Select-Object -Last 1)
+$backupPath = (& $pythonExecutable @pythonPrefix $backupScript $databasePath $backupDirectory | Select-Object -Last 1)
 if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $backupPath -PathType Leaf)) {
     throw 'Die lokale Datenbanksicherung ist fehlgeschlagen. Der sichere Test wurde nicht gestartet.'
 }
@@ -44,7 +81,7 @@ if (-not (Test-Path -LiteralPath $isolatedDatabasePath -PathType Leaf)) {
     Copy-Item -LiteralPath $backupPath -Destination $isolatedDatabasePath -ErrorAction Stop
     Write-Host "Isolierte Testkopie erstellt: $isolatedDatabasePath"
 } else {
-    $isolatedBackupPath = (& py -3 $backupScript $isolatedDatabasePath $backupDirectory | Select-Object -Last 1)
+    $isolatedBackupPath = (& $pythonExecutable @pythonPrefix $backupScript $isolatedDatabasePath $backupDirectory | Select-Object -Last 1)
     if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $isolatedBackupPath -PathType Leaf)) {
         throw 'Die Sicherung der isolierten Testdatenbank ist fehlgeschlagen. Der Test wurde nicht gestartet.'
     }
@@ -52,9 +89,9 @@ if (-not (Test-Path -LiteralPath $isolatedDatabasePath -PathType Leaf)) {
 }
 
 $testSnapshot = if ($isolatedBackupPath) { $isolatedBackupPath } else { $isolatedDatabasePath }
-$expectedAccountHash = (& py -3 $accountCheckScript $backupPath $testSnapshot | Select-Object -Last 1)
+$expectedAccountHash = (& $pythonExecutable @pythonPrefix $accountCheckScript $backupPath $testSnapshot | Select-Object -Last 1)
 if ($LASTEXITCODE -ne 0 -or $expectedAccountHash -notmatch '^[0-9a-f]{64}$') {
-    throw 'Die sichere Testkopie gehört nicht zum Microsoft-365-Konto der Ausgangsdatenbank. Der Test wurde nicht gestartet.'
+    throw 'Die sichere Testkopie gehoert nicht zum Microsoft-365-Konto der Ausgangsdatenbank. Der Test wurde nicht gestartet.'
 }
 
 $env:CARGO_TARGET_DIR = Join-Path $projectRoot 'src-tauri\target-dev'

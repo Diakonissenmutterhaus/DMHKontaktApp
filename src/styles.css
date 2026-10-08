@@ -1443,6 +1443,468 @@ button:disabled {
   }
 }
 
+/* Rich calendar editor: DMH palette, clear steps and a stable laptop layout. */
+.calendar-event-dialog {
+  max-width: 1420px;
+  width: min(1420px, calc(100vw - 2rem));
+}
+
+.calendar-meeting-editor {
+  --meeting-accent: var(--primary);
+  --meeting-accent-hover: var(--primary-dark);
+  --meeting-bg: color-mix(in srgb, var(--primary) 3%, var(--surface-alt));
+  --meeting-border: color-mix(in srgb, var(--primary) 18%, var(--border));
+  --meeting-muted: var(--muted);
+  --meeting-surface: var(--surface);
+  --meeting-text: var(--text);
+}
+
+.calendar-meeting-titlebar {
+  background: linear-gradient(135deg, var(--primary-dark), var(--primary));
+  border: 0;
+  color: #fff;
+  min-height: 74px;
+  padding: 0.75rem 1rem 0.75rem 1.3rem;
+}
+
+.calendar-meeting-titlebar .calendar-meeting-title-copy {
+  align-items: center;
+  display: flex;
+  gap: 0.85rem;
+  min-width: 0;
+}
+
+.calendar-meeting-title-copy > span:last-child {
+  display: grid;
+  gap: 0.12rem;
+  min-width: 0;
+}
+
+.calendar-meeting-title-icon {
+  align-items: center;
+  background: rgba(255, 255, 255, 0.14);
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  border-radius: 10px;
+  display: inline-flex;
+  flex: 0 0 auto;
+  height: 48px;
+  justify-content: center;
+  width: 48px;
+}
+
+.calendar-meeting-titlebar .calendar-meeting-title-copy strong {
+  color: #fff;
+  font-size: 1.45rem;
+  font-weight: 750;
+  line-height: 1.1;
+}
+
+.calendar-meeting-title-copy small {
+  color: rgba(255, 255, 255, 0.86);
+  font-size: 0.82rem;
+}
+
+.calendar-meeting-titlebar > button {
+  color: #fff;
+}
+
+.calendar-meeting-titlebar > button:hover {
+  background: rgba(255, 255, 255, 0.14);
+}
+
+.calendar-meeting-commandbar {
+  background: color-mix(in srgb, var(--primary) 2.5%, var(--surface));
+  border-bottom-color: var(--meeting-border);
+  gap: 0.45rem;
+  min-height: 58px;
+  padding: 0.55rem 1.25rem;
+}
+
+.calendar-meeting-tabs,
+.calendar-command-select,
+.calendar-command-toggle,
+.calendar-command-icon {
+  border: 1px solid var(--meeting-border);
+  border-radius: 7px;
+  min-height: 38px;
+}
+
+.calendar-meeting-tabs {
+  overflow: hidden;
+}
+
+.calendar-meeting-tabs button {
+  border: 0;
+  border-radius: 0;
+  min-height: 38px;
+}
+
+.calendar-meeting-tabs button + button {
+  border-left: 1px solid var(--meeting-border);
+}
+
+.calendar-meeting-tabs button.active {
+  background: color-mix(in srgb, var(--primary) 10%, var(--surface));
+  box-shadow: inset 0 -2px 0 var(--primary);
+  color: var(--primary-dark);
+}
+
+.calendar-command-select,
+.calendar-command-toggle,
+.calendar-command-icon {
+  background: var(--surface);
+  margin-left: 0;
+  padding: 0.35rem 0.62rem;
+}
+
+.calendar-command-print {
+  gap: 0.4rem;
+  padding-inline: 0.75rem;
+}
+
+.calendar-meeting-layout {
+  background: var(--meeting-bg);
+  grid-template-columns: minmax(0, 1fr) minmax(310px, 35%);
+  padding: 0.7rem;
+}
+
+.calendar-meeting-fields {
+  background: transparent;
+}
+
+.calendar-meeting-scroll {
+  gap: 0.6rem;
+  padding: 0 0.65rem 0 0;
+}
+
+.calendar-meeting-section-card,
+.calendar-recurrence-panel {
+  background: var(--surface);
+  border: 1px solid var(--meeting-border);
+  border-radius: 10px;
+  flex: 0 0 auto;
+  padding: 0.72rem 0.85rem;
+}
+
+.calendar-meeting-section-card > h3 {
+  align-items: center;
+  color: var(--text);
+  display: flex;
+  font-size: 0.96rem;
+  gap: 0.55rem;
+  margin: 0 0 0.35rem;
+}
+
+.calendar-meeting-section-card > h3 svg {
+  color: var(--primary);
+  flex: 0 0 auto;
+}
+
+.calendar-meeting-field {
+  border-color: color-mix(in srgb, var(--meeting-border) 75%, transparent);
+  min-height: 48px;
+}
+
+.calendar-meeting-field.title-field {
+  min-height: 54px;
+}
+
+.calendar-meeting-field.title-field input {
+  border: 1px solid color-mix(in srgb, var(--meeting-border) 78%, #b6beca);
+  border-radius: 6px;
+  font-size: 1rem;
+  min-height: 40px;
+  padding: 0.45rem 0.65rem;
+}
+
+.calendar-meeting-field.title-field input:focus {
+  border-color: var(--primary);
+  border-width: 1px;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary) 12%, transparent);
+}
+
+.calendar-meeting-field.attendee-field button,
+.calendar-meeting-field.calendar-date-field > button {
+  background: color-mix(in srgb, var(--primary) 8%, var(--surface));
+  color: var(--primary-dark);
+  font-weight: 650;
+}
+
+.calendar-meeting-field.online-field {
+  border-bottom: 0;
+}
+
+.calendar-description-card {
+  min-height: 180px;
+}
+
+.calendar-description-editor {
+  border: 1px solid var(--meeting-border);
+  border-radius: 7px 7px 0 0;
+  min-height: 115px;
+  padding: 0.7rem;
+}
+
+.calendar-description-editor textarea {
+  min-height: 88px;
+}
+
+.calendar-description-toolbar {
+  border: 1px solid var(--meeting-border);
+  border-radius: 0 0 7px 7px;
+  border-top: 0;
+  min-height: 40px;
+  padding: 0.25rem 0.4rem;
+}
+
+.calendar-add-agenda {
+  color: var(--primary-dark);
+  font-weight: 650;
+}
+
+.calendar-meeting-footer {
+  background: var(--surface);
+  border: 1px solid var(--meeting-border);
+  border-radius: 9px;
+  gap: 1rem;
+  margin: 0.65rem 0.65rem 0 0;
+  min-height: 56px;
+  padding: 0.45rem 0.55rem 0.45rem 0.85rem;
+}
+
+.calendar-source-summary {
+  min-width: 0;
+}
+
+.calendar-source-summary strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.calendar-meeting-actions {
+  align-items: center;
+  display: flex;
+  flex: 0 0 auto;
+  gap: 0.5rem;
+}
+
+.calendar-meeting-actions > button {
+  min-height: 40px;
+  min-width: 112px;
+}
+
+.calendar-meeting-save {
+  position: static;
+}
+
+.calendar-meeting-planner {
+  background: color-mix(in srgb, var(--primary) 2.5%, var(--surface));
+  border: 1px solid var(--meeting-border);
+  border-radius: 10px;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  padding: 0.72rem;
+}
+
+.calendar-meeting-planner > header {
+  align-items: center;
+  border: 0;
+  display: flex;
+  justify-content: space-between;
+  min-height: 50px;
+  padding: 0 0 0.55rem;
+}
+
+.calendar-meeting-planner > header .calendar-planner-heading,
+.calendar-meeting-planner > header .calendar-planner-header-actions {
+  align-items: center;
+  display: flex;
+}
+
+.calendar-meeting-planner > header .calendar-planner-heading > span {
+  color: var(--text);
+  display: grid;
+  font-size: inherit;
+}
+
+.calendar-planner-heading {
+  align-items: center;
+  display: flex;
+  gap: 0.55rem;
+  min-width: 0;
+}
+
+.calendar-planner-heading > svg {
+  color: var(--primary);
+  flex: 0 0 auto;
+}
+
+.calendar-planner-heading > span {
+  display: grid;
+  line-height: 1.2;
+}
+
+.calendar-planner-heading strong {
+  font-size: 0.95rem;
+}
+
+.calendar-planner-heading small {
+  color: var(--muted);
+  font-size: 0.68rem;
+}
+
+.calendar-planner-header-actions,
+.calendar-planner-date-navigation {
+  align-items: center;
+  display: flex;
+  gap: 0.28rem;
+}
+
+.calendar-planner-date-navigation {
+  flex: 0 1 auto;
+}
+
+.calendar-planner-date-navigation div {
+  background: var(--surface);
+  border: 1px solid var(--meeting-border);
+  border-radius: 6px;
+  min-width: 116px;
+  padding: 0.42rem 0.55rem;
+}
+
+.calendar-planner-status {
+  align-items: center;
+  background: #edf8f2;
+  border: 1px solid #cbe9d8;
+  border-radius: 7px;
+  color: #087443;
+  display: flex;
+  flex: 0 0 auto;
+  font-size: 0.78rem;
+  font-weight: 650;
+  gap: 0.5rem;
+  margin-bottom: 0.55rem;
+  min-height: 42px;
+  padding: 0.48rem 0.68rem;
+}
+
+.calendar-planner-status.busy {
+  background: color-mix(in srgb, var(--primary) 7%, var(--surface));
+  border-color: color-mix(in srgb, var(--primary) 18%, var(--border));
+  color: var(--primary-dark);
+}
+
+.calendar-planner-timeline {
+  flex: 1;
+  min-height: 0;
+}
+
+.calendar-planner-event.draft {
+  background: color-mix(in srgb, var(--primary) 10%, var(--surface));
+  border-color: var(--primary);
+  color: var(--primary-dark);
+}
+
+.calendar-planner-duration {
+  align-items: center;
+  background: color-mix(in srgb, var(--primary) 4%, var(--surface));
+  border: 1px solid var(--meeting-border);
+  border-radius: 7px;
+  display: flex;
+  flex: 0 0 auto;
+  font-size: 0.78rem;
+  gap: 0.45rem;
+  margin-top: 0.55rem;
+  min-height: 40px;
+  padding: 0.45rem 0.65rem;
+}
+
+.calendar-planner-duration svg {
+  color: var(--primary);
+}
+
+@media (max-width: 1220px) {
+  .calendar-meeting-layout {
+    grid-template-columns: minmax(0, 1fr) minmax(270px, 32%);
+  }
+
+  .calendar-planner-heading small,
+  .calendar-command-print span {
+    display: none;
+  }
+
+  .calendar-meeting-commandbar {
+    padding-inline: 0.7rem;
+  }
+}
+
+@media (max-width: 900px) {
+  .calendar-event-dialog {
+    width: calc(100vw - 0.75rem);
+  }
+
+  .calendar-meeting-layout,
+  .calendar-meeting-layout.planner-hidden {
+    display: block;
+    overflow-y: auto;
+  }
+
+  .calendar-meeting-fields,
+  .calendar-meeting-scroll {
+    overflow: visible;
+  }
+
+  .calendar-meeting-planner {
+    height: 390px;
+    margin-top: 0.7rem;
+  }
+}
+
+.calendar-meeting-planner > header .calendar-planner-heading,
+.calendar-meeting-planner > header .calendar-planner-header-actions {
+  align-items: center;
+  display: flex;
+}
+
+.calendar-meeting-planner > header .calendar-planner-heading > span {
+  color: var(--text);
+  display: grid;
+  font-size: inherit;
+}
+
+@media (max-width: 620px) {
+  .calendar-meeting-titlebar {
+    min-height: 64px;
+    padding-inline: 0.75rem;
+  }
+
+  .calendar-meeting-title-icon {
+    height: 40px;
+    width: 40px;
+  }
+
+  .calendar-meeting-titlebar .calendar-meeting-title-copy strong {
+    font-size: 1.12rem;
+  }
+
+  .calendar-meeting-title-copy small,
+  .calendar-command-print span {
+    display: none;
+  }
+
+  .calendar-meeting-footer {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .calendar-meeting-actions,
+  .calendar-meeting-actions > button {
+    width: 100%;
+  }
+}
+
 .page {
   display: grid;
   gap: 1rem;
@@ -8850,6 +9312,44 @@ table {
 .calendar-category-list select {
   min-height: 36px;
   width: 100%;
+}
+
+.calendar-category-repair {
+  align-items: center;
+  background: color-mix(in srgb, var(--primary) 6%, var(--surface));
+  border: 1px solid color-mix(in srgb, var(--primary) 22%, var(--border));
+  border-radius: 8px;
+  display: flex;
+  gap: 1rem;
+  justify-content: space-between;
+  padding: 0.8rem;
+}
+
+.calendar-category-repair strong {
+  color: var(--primary-strong);
+  display: block;
+}
+
+.calendar-category-repair p {
+  color: var(--muted);
+  line-height: 1.4;
+  margin: 0.2rem 0 0;
+}
+
+.calendar-category-repair button {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+@media (max-width: 720px) {
+  .calendar-category-repair {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .calendar-category-repair button {
+    width: 100%;
+  }
 }
 
 .calendar-category-safety {
@@ -19748,4 +20248,667 @@ td small {
 @media (max-width: 640px) {
   .export-single-step { min-height: 230px; padding-inline: .25rem; }
   .export-single-step-actions { padding-inline: 0; }
+}
+
+/* Laptop and constrained-window hardening.
+   The contact workspace is made of independently responsive panes, so its
+   controls adapt to the space they actually receive instead of the viewport. */
+.group-folder-pane {
+  container-name: groups-pane;
+  container-type: inline-size;
+}
+
+.contacts-directory-pane {
+  container-name: contacts-directory;
+  container-type: inline-size;
+}
+
+.contact-inspector {
+  container-name: contact-inspector;
+  container-type: inline-size;
+}
+
+.contacts-workspace > *,
+.groups-panel-heading > *,
+.group-contacts-header > *,
+.contact-inspector-header > *,
+.contact-form-group > *,
+.calendar-meeting-commandbar > *,
+.calendar-meeting-field > * {
+  min-width: 0;
+}
+
+.group-new-button,
+.contact-new-button {
+  align-items: center;
+  display: inline-flex;
+  justify-content: center;
+}
+
+.group-new-button > span,
+.contact-new-button > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@container groups-pane (max-width: 250px) {
+  .group-folder-pane .groups-panel-heading {
+    gap: 0.4rem;
+    padding-inline: 0.55rem;
+  }
+
+  .group-folder-pane .groups-panel-heading h3 {
+    font-size: 1rem;
+  }
+
+  .group-folder-pane .group-new-button {
+    min-height: 40px;
+    min-width: 40px;
+    padding: 0.4rem;
+    width: 40px;
+  }
+
+  .group-folder-pane .group-new-button > span {
+    display: none;
+  }
+
+  .group-folder-pane .group-folder-row {
+    gap: 0.3rem;
+    grid-template-columns: 19px minmax(0, 1fr) auto 28px;
+    padding-left: 0.4rem;
+  }
+
+  .group-folder-pane .group-folder-row.all-contacts-folder {
+    grid-template-columns: 19px minmax(0, 1fr) auto;
+  }
+}
+
+@container groups-pane (max-width: 205px) {
+  .group-folder-pane .group-folder-count {
+    display: none;
+  }
+
+  .group-folder-pane .group-folder-row {
+    grid-template-columns: 19px minmax(0, 1fr) 28px;
+  }
+
+  .group-folder-pane .group-folder-row.all-contacts-folder {
+    grid-template-columns: 19px minmax(0, 1fr);
+  }
+}
+
+@container contacts-directory (max-width: 440px) {
+  .contacts-directory-pane .group-contacts-header {
+    gap: 0.55rem;
+    padding: 0.65rem;
+  }
+
+  .contacts-directory-pane .contact-new-button {
+    min-width: 40px;
+    padding-inline: 0.65rem;
+  }
+
+  .contacts-directory-pane .group-contacts-title > div > span {
+    display: none;
+  }
+
+  .contacts-directory-pane .contact-compact-row {
+    gap: 0.5rem;
+    grid-template-columns: auto minmax(0, 1fr) 40px;
+    padding-left: 0.55rem;
+  }
+
+  .contacts-directory-pane .contact-compact-phone {
+    display: none;
+  }
+
+  .contacts-directory-pane .group-contact-actions .more-menu {
+    max-height: calc(100dvh - 185px);
+    min-width: min(248px, calc(100cqw - 1rem));
+    width: min(248px, calc(100cqw - 1rem));
+  }
+
+  .contacts-directory-pane .group-contact-actions .more-menu button {
+    font-size: 0.82rem;
+    min-height: 36px;
+    padding: 0.38rem 0.5rem;
+  }
+}
+
+@container contacts-directory (max-width: 350px) {
+  .contacts-directory-pane .contact-new-button > span {
+    display: none;
+  }
+
+  .contacts-directory-pane .group-contacts-title h2 {
+    font-size: 1.2rem;
+  }
+
+  .contacts-directory-pane .group-contact-actions {
+    gap: 0.3rem;
+  }
+
+  .contacts-directory-pane .group-contact-actions button,
+  .contacts-directory-pane .contact-sort-menu-button {
+    min-width: 40px;
+  }
+
+  .contacts-directory-pane .contact-sort-menu {
+    min-width: min(260px, calc(100cqw - 1rem));
+    width: min(260px, calc(100cqw - 1rem));
+  }
+}
+
+@container contact-inspector (max-width: 450px) {
+  .contact-inspector .contact-inspector-header,
+  .contact-inspector .contact-form-header {
+    gap: 0.65rem;
+    padding: 0.75rem;
+  }
+
+  .contact-inspector .contact-inspector-avatar,
+  .contact-inspector .contact-form-avatar {
+    height: 50px;
+    width: 50px;
+  }
+
+  .contact-inspector .contact-form-body {
+    padding: 0.6rem;
+  }
+
+  .contact-inspector .contact-form-group,
+  .contact-inspector .contact-form-groups {
+    padding: 0.7rem;
+  }
+
+  .contact-inspector .contact-form-group h3,
+  .contact-inspector .contact-form-groups h3 {
+    align-items: flex-start;
+    flex-wrap: wrap;
+    gap: 0.45rem;
+  }
+
+  .contact-inspector .contact-form-channel-row {
+    align-items: stretch;
+    grid-template-columns: minmax(0, 1fr) 40px;
+  }
+
+  .contact-inspector .contact-form-channel-row > input {
+    grid-column: 1 / -1;
+  }
+
+  .contact-inspector .contact-form-channel-kind {
+    grid-column: 1;
+    width: 100%;
+  }
+
+  .contact-inspector .contact-form-channel-row > button {
+    grid-column: 2;
+  }
+
+  .contact-inspector .contact-form-footer > span {
+    justify-self: stretch;
+    text-align: left;
+  }
+
+  .contact-inspector .contact-inspector-section > div:not(.contact-inspector-tags) {
+    gap: 0.2rem;
+    grid-template-columns: 1fr;
+  }
+}
+
+@container contact-inspector (max-width: 340px) {
+  .contact-inspector .contact-form-footer .button-row {
+    grid-template-columns: 1fr;
+  }
+
+  .contact-inspector .contact-inspector-header {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .contact-inspector .contact-inspector-more {
+    grid-column: 2;
+    justify-self: end;
+  }
+}
+
+@media (min-width: 1101px) and (max-width: 1600px) {
+  .app-shell {
+    grid-template-columns: 218px minmax(0, 1fr);
+  }
+
+  .sidebar {
+    padding: 0.85rem;
+  }
+
+  .content {
+    padding: 0.75rem;
+  }
+
+  .contacts-page.groups-tab-active {
+    height: calc(100dvh - 1.5rem);
+  }
+
+  .contacts-workspace {
+    grid-template-columns:
+      minmax(190px, clamp(190px, var(--groups-pane, 23%), 280px))
+      8px
+      minmax(300px, clamp(300px, var(--contacts-pane, 34%), 420px))
+      8px
+      minmax(320px, 1fr);
+  }
+
+  .contact-pane-divider {
+    min-width: 8px;
+  }
+
+  .contact-pane-divider::before {
+    inset-inline: 3px;
+  }
+}
+
+@media (min-width: 901px) and (max-width: 1320px) {
+  .app-shell {
+    grid-template-columns: 198px minmax(0, 1fr);
+  }
+
+  .contacts-workspace {
+    grid-template-columns:
+      minmax(175px, clamp(175px, var(--groups-pane, 22%), 230px))
+      7px
+      minmax(280px, clamp(280px, var(--contacts-pane, 34%), 350px))
+      7px
+      minmax(300px, 1fr);
+  }
+
+  .contact-pane-divider {
+    min-width: 7px;
+  }
+}
+
+/* Dialogs stay inside the usable laptop viewport, including Windows' taskbar. */
+.easy-import-dialog,
+.reconciliation-dialog,
+.calendar-event-dialog,
+.m365-sync-dialog,
+.onboarding-dialog {
+  max-height: calc(100dvh - 1rem);
+}
+
+@media (max-height: 820px) and (min-width: 621px) {
+  .easy-import-backdrop,
+  .reconciliation-backdrop {
+    padding: 0.5rem;
+  }
+
+  .easy-import-dialog,
+  .reconciliation-dialog {
+    gap: 0.75rem;
+    padding: 0.9rem;
+    width: min(680px, calc(100vw - 1rem));
+  }
+
+  .easy-import-dialog-heading,
+  .reconciliation-heading {
+    padding-bottom: 0.7rem;
+  }
+
+  .easy-import-platforms > button,
+  .reconciliation-platforms > button {
+    min-height: 88px;
+    padding: 0.7rem;
+  }
+
+  .easy-import-platform-icon,
+  .easy-import-dialog-heading > span:first-child,
+  .reconciliation-heading-icon {
+    height: 48px;
+    width: 48px;
+  }
+}
+
+@media (max-width: 1400px), (max-height: 900px) {
+  .calendar-event-dialog {
+    max-height: min(760px, calc(100dvh - 3rem));
+    width: min(1180px, calc(100vw - 0.75rem));
+  }
+
+  .calendar-meeting-editor {
+    height: min(760px, calc(100dvh - 3rem));
+    max-height: min(760px, calc(100dvh - 3rem));
+    min-height: 0;
+  }
+
+  .calendar-meeting-layout {
+    grid-template-columns: minmax(0, 1fr) minmax(260px, 29%);
+  }
+
+  .calendar-meeting-scroll {
+    gap: 0.55rem;
+    padding: 0.8rem 1rem 0.6rem;
+  }
+
+  .calendar-meeting-field {
+    min-height: 50px;
+  }
+
+  .calendar-meeting-field.title-field {
+    min-height: 58px;
+  }
+
+  .calendar-meeting-field.title-field input {
+    font-size: 1.32rem;
+  }
+
+  .calendar-description-card {
+    min-height: 175px;
+  }
+
+  .calendar-description-editor {
+    min-height: 140px;
+    padding-top: 0.7rem;
+  }
+
+  .calendar-description-editor textarea {
+    min-height: 110px;
+  }
+
+  .calendar-meeting-planner {
+    min-width: 0;
+    padding: 0.5rem;
+  }
+}
+
+@media (max-width: 1120px) {
+  .calendar-meeting-layout {
+    grid-template-columns: minmax(0, 1fr) 250px;
+  }
+
+  .calendar-date-controls,
+  .calendar-date-controls.all-day {
+    grid-template-columns: minmax(108px, 1fr) 78px;
+  }
+
+  .calendar-date-controls > .calendar-date-separator {
+    display: none;
+  }
+}
+
+@media (max-width: 820px) {
+  .calendar-event-dialog {
+    border-radius: 8px;
+    width: calc(100vw - 0.5rem);
+  }
+
+  .calendar-meeting-layout,
+  .calendar-meeting-layout.planner-hidden {
+    display: block;
+    overflow-y: auto;
+  }
+
+  .calendar-meeting-fields,
+  .calendar-meeting-scroll {
+    overflow: visible;
+  }
+
+  .calendar-meeting-planner {
+    border-left: 0;
+    border-top: 1px solid var(--meeting-border);
+    height: 360px;
+  }
+}
+
+/* Calendar editor visual layer must remain after the legacy Teams-style rules. */
+@media (max-width: 1220px) {
+  body .calendar-meeting-planner > header {
+    align-items: stretch;
+    display: grid;
+    gap: 0.4rem;
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .calendar-meeting-planner > header .calendar-planner-header-actions {
+    justify-content: space-between;
+    width: 100%;
+  }
+
+  .calendar-meeting-planner > header .calendar-planner-date-navigation {
+    flex: 1;
+  }
+
+  .calendar-meeting-planner > header .calendar-planner-date-navigation div {
+    flex: 1;
+  }
+
+  .calendar-planner-heading strong {
+    white-space: nowrap;
+  }
+}
+
+.calendar-meeting-planner > header .calendar-planner-heading,
+.calendar-meeting-planner > header .calendar-planner-header-actions {
+  align-items: center;
+  display: flex;
+}
+
+.calendar-meeting-planner > header .calendar-planner-heading > span {
+  color: var(--text);
+  display: grid;
+  font-size: inherit;
+}
+
+.calendar-event-dialog {
+  max-width: 1420px;
+  width: min(1420px, calc(100vw - 2rem));
+}
+
+.calendar-meeting-editor {
+  --meeting-accent: var(--primary);
+  --meeting-accent-hover: var(--primary-dark);
+  --meeting-bg: color-mix(in srgb, var(--primary) 3%, var(--surface-alt));
+  --meeting-border: color-mix(in srgb, var(--primary) 18%, var(--border));
+  --meeting-muted: var(--muted);
+  --meeting-surface: var(--surface);
+  --meeting-text: var(--text);
+  background: var(--meeting-bg);
+  color: var(--meeting-text);
+}
+
+.calendar-meeting-titlebar {
+  background: linear-gradient(135deg, var(--primary-dark), var(--primary));
+  border: 0;
+  color: #fff;
+  min-height: 74px;
+  padding: 0.75rem 1rem 0.75rem 1.3rem;
+}
+
+.calendar-meeting-titlebar .calendar-meeting-title-copy {
+  align-items: center;
+  display: flex;
+  gap: 0.85rem;
+}
+
+.calendar-meeting-titlebar .calendar-meeting-title-copy strong {
+  color: #fff;
+  font-size: 1.45rem;
+}
+
+.calendar-meeting-titlebar > button {
+  color: #fff;
+}
+
+.calendar-meeting-commandbar {
+  background: color-mix(in srgb, var(--primary) 2.5%, var(--surface));
+  border-bottom-color: var(--meeting-border);
+  gap: 0.45rem;
+  min-height: 58px;
+  padding: 0.55rem 1.25rem;
+}
+
+.calendar-meeting-tabs,
+.calendar-command-select,
+.calendar-command-toggle,
+.calendar-command-icon {
+  border: 1px solid var(--meeting-border);
+  border-radius: 7px;
+  min-height: 38px;
+}
+
+.calendar-meeting-tabs button,
+.calendar-command-select,
+.calendar-command-toggle,
+.calendar-command-icon {
+  min-height: 38px;
+}
+
+.calendar-command-select,
+.calendar-command-toggle,
+.calendar-command-icon {
+  background: var(--surface);
+  border-left: 1px solid var(--meeting-border);
+  border-radius: 7px;
+  margin-left: 0;
+  padding: 0.35rem 0.62rem;
+}
+
+.calendar-meeting-layout {
+  background: var(--meeting-bg);
+  grid-template-columns: minmax(0, 1fr) minmax(310px, 35%);
+  padding: 0.7rem;
+}
+
+.calendar-meeting-fields {
+  background: transparent;
+  padding: 0;
+}
+
+.calendar-meeting-scroll {
+  gap: 0.6rem;
+  padding: 0 0.65rem 0 0;
+}
+
+.calendar-meeting-section-card,
+.calendar-recurrence-panel {
+  background: var(--surface);
+  border: 1px solid var(--meeting-border);
+  border-radius: 10px;
+  flex: 0 0 auto;
+  padding: 0.72rem 0.85rem;
+}
+
+.calendar-meeting-field {
+  border-color: color-mix(in srgb, var(--meeting-border) 75%, transparent);
+  min-height: 48px;
+}
+
+.calendar-meeting-field.title-field {
+  min-height: 54px;
+}
+
+.calendar-meeting-field.title-field input {
+  border: 1px solid color-mix(in srgb, var(--meeting-border) 78%, #b6beca);
+  border-radius: 6px;
+  font-size: 1rem;
+  min-height: 40px;
+  padding: 0.45rem 0.65rem;
+}
+
+.calendar-meeting-field.title-field input:focus {
+  border-color: var(--primary);
+  border-bottom-width: 1px;
+}
+
+.calendar-description-card {
+  border-top: 1px solid var(--meeting-border);
+  min-height: 180px;
+}
+
+.calendar-description-editor {
+  border: 1px solid var(--meeting-border);
+  border-radius: 7px 7px 0 0;
+  min-height: 115px;
+  padding: 0.7rem;
+}
+
+.calendar-description-editor textarea {
+  min-height: 88px;
+}
+
+.calendar-description-toolbar {
+  border: 1px solid var(--meeting-border);
+  border-radius: 0 0 7px 7px;
+  border-top: 0;
+  min-height: 40px;
+  padding: 0.25rem 0.4rem;
+}
+
+.calendar-meeting-footer {
+  background: var(--surface);
+  border: 1px solid var(--meeting-border);
+  border-radius: 9px;
+  gap: 1rem;
+  margin: 0.65rem 0.65rem 0 0;
+  min-height: 56px;
+  padding: 0.45rem 0.55rem 0.45rem 0.85rem;
+}
+
+.calendar-meeting-save {
+  position: static;
+}
+
+.calendar-meeting-planner {
+  background: color-mix(in srgb, var(--primary) 2.5%, var(--surface));
+  border: 1px solid var(--meeting-border);
+  border-radius: 10px;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  padding: 0.72rem;
+}
+
+.calendar-meeting-planner > header {
+  align-items: center;
+  border: 0;
+  display: flex;
+  justify-content: space-between;
+  min-height: 50px;
+  padding: 0 0 0.55rem;
+}
+
+.calendar-planner-timeline {
+  flex: 1;
+  min-height: 0;
+}
+
+@media (max-width: 1220px) {
+  .calendar-meeting-layout {
+    grid-template-columns: minmax(0, 1fr) minmax(270px, 32%);
+  }
+
+  .calendar-meeting-commandbar {
+    padding-inline: 0.7rem;
+  }
+}
+
+@media (max-width: 900px) {
+  .calendar-event-dialog {
+    width: calc(100vw - 0.75rem);
+  }
+
+  .calendar-meeting-layout,
+  .calendar-meeting-layout.planner-hidden {
+    display: block;
+    overflow-y: auto;
+  }
+
+  .calendar-meeting-fields,
+  .calendar-meeting-scroll {
+    overflow: visible;
+  }
+
+  .calendar-meeting-planner {
+    height: 390px;
+    margin-top: 0.7rem;
+  }
 }

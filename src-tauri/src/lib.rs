@@ -10552,6 +10552,8 @@ pub fn run() {
             m365::get_m365_read_only_test_mode,
             m365::list_m365_master_categories,
             m365::save_m365_master_category,
+            m365::preview_m365_calendar_category_repair,
+            m365::repair_m365_calendar_categories,
             m365::start_m365_interactive_connection,
             m365::start_m365_connection,
             m365::poll_m365_connection,

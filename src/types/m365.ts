@@ -17,6 +17,21 @@ export interface Microsoft365CalendarCategory {
   color: string;
 }
 
+export interface Microsoft365CalendarCategoryRepairPreview {
+  linkedEvents: number;
+  categoryNames: string[];
+  categoriesToRepair: number;
+  pendingOperations: number;
+  pendingDeletions: number;
+}
+
+export interface Microsoft365CalendarCategoryRepairResult {
+  scanned: number;
+  updated: number;
+  errors: number;
+  errorMessages: string[];
+}
+
 export interface Microsoft365DeviceCode {
   userCode: string;
   verificationUri: string;

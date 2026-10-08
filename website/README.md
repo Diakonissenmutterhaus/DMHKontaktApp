@@ -24,4 +24,6 @@ O projeto Vercel `dmh-backup` está vinculado localmente à pasta `website`; o d
 
 Nenhum dado é enviado pelo site; os passos de envio à EDV e importação acontecem somente dentro do aplicativo DMH Backup.
 
+O botão **Weitere Hilfe** abre um painel com duas opções: instalar o aplicativo e escrever para a EDV. O download desse painel consulta exclusivamente a release pública marcada como `latest` no repositório oficial `Diakonissenmutterhaus/DMHKontaktApp`. Apenas versões SemVer estáveis, sem `draft` ou `prerelease`, e com o instalador Windows assinado no padrão `DMH.Backup_<versão>_x64-setup.exe` são usadas para o download direto. Se a consulta não estiver disponível, o link abre a página oficial da release mais recente em vez de escolher um arquivo não confirmado.
+
 Os recortes de tela que destacam os botões são feitos em SVG diretamente no HTML, a partir das capturas originais. O texto abaixo do vídeo oferece instruções escritas, mas não substitui legendas sincronizadas. Para adicioná-las sem inventar falas, é necessária uma transcrição revisada do áudio. O bloco de ajuda pode receber um telefone/e-mail da EDV quando houver um contato oficial confirmado.

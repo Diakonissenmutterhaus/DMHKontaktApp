@@ -22,7 +22,99 @@
           <small>Kurzanleitung</small>
         </span>
       </a>
+      <button
+        class="site-help-button"
+        id="more-help-button"
+        type="button"
+        aria-expanded="false"
+        aria-controls="more-help-panel"
+      >
+        <span class="site-help-icon" aria-hidden="true">?</span>
+        <span>
+          <strong>Hilfe &amp; Download</strong>
+          <small>Kontakt &amp; Installation</small>
+        </span>
+        <svg class="site-help-arrow" aria-hidden="true" viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="m9 18 6-6-6-6" />
+        </svg>
+      </button>
     </header>
+
+    <div class="more-help-backdrop" id="more-help-panel" hidden>
+      <section
+        class="more-help-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="more-help-title"
+        tabindex="-1"
+      >
+        <header class="more-help-header">
+          <div>
+            <p class="more-help-kicker">DMH Backup</p>
+            <h2 id="more-help-title">Weitere Hilfe</h2>
+          </div>
+          <button class="more-help-close" id="more-help-close" type="button" aria-label="Weitere Hilfe schließen">
+            <span aria-hidden="true">×</span>
+          </button>
+        </header>
+
+        <div class="more-help-sections">
+          <article class="more-help-card">
+            <div class="more-help-card-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" width="38" height="38" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M12 3v12" />
+                <path d="m7 10 5 5 5-5" />
+                <path d="M5 18v3h14v-3" />
+              </svg>
+            </div>
+            <div>
+              <h3>Die App ist nicht auf Ihrem Desktop?</h3>
+              <p>Dann laden Sie die neueste offizielle Version hier herunter.</p>
+              <a
+                class="help-download-action"
+                id="download-button"
+                href="https://github.com/Diakonissenmutterhaus/DMHKontaktApp/releases/latest"
+                aria-label="Neueste offizielle Version von DMH Backup herunterladen"
+                title="Neueste offizielle Version herunterladen"
+              >
+                <svg aria-hidden="true" viewBox="0 0 24 24" width="36" height="36" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M12 3v12" />
+                  <path d="m7 10 5 5 5-5" />
+                  <path d="M5 18v3h14v-3" />
+                </svg>
+                <span>
+                  <strong>DMH Backup herunterladen</strong>
+                  <small id="download-version">Neueste offizielle Version</small>
+                </span>
+              </a>
+            </div>
+          </article>
+
+          <article class="more-help-card">
+            <div class="more-help-card-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" width="38" height="38" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                <rect x="3" y="5" width="18" height="14" rx="1" />
+                <path d="m3 7 9 7 9-7" />
+              </svg>
+            </div>
+            <div>
+              <h3>Sie haben Fragen?</h3>
+              <p>Schreiben Sie bitte eine E-Mail an die EDV:</p>
+              <a class="help-email-action" href="mailto:edv@dmh-aidlingen.de">
+                <svg aria-hidden="true" viewBox="0 0 24 24" width="30" height="30" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                  <rect x="3" y="5" width="18" height="14" rx="1" />
+                  <path d="m3 7 9 7 9-7" />
+                </svg>
+                <span>edv@dmh-aidlingen.de</span>
+                <svg class="help-email-arrow" aria-hidden="true" viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="m9 18 6-6-6-6" />
+                </svg>
+              </a>
+            </div>
+          </article>
+        </div>
+      </section>
+    </div>
 
     <main id="inhalt">
       <section class="hero" aria-labelledby="page-title">

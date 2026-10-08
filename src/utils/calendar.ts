@@ -42,6 +42,23 @@ export function mergeImportedCalendarCategories(events: CalendarEvent[]) {
   return mergeImportedCalendarCategoryDefinitions(events.map((event) => ({ name: event.category, color: event.color })));
 }
 
+export const calendarCategoryRulesStorageKey = "agendakontakte.calendarCategoryRules.v1";
+export function applyCalendarCategoryRules(categories: CalendarCategoryDefinition[], rules?: import("../types/m365").CalendarCategoryOperation[]): CalendarCategoryDefinition[] {
+  let activeRules = rules;
+  if (!activeRules) {
+    try { activeRules = JSON.parse(localStorage.getItem(calendarCategoryRulesStorageKey) ?? "[]"); }
+    catch { activeRules = []; }
+  }
+  if (!Array.isArray(activeRules)) activeRules = [];
+  return categories.flatMap((category) => {
+    let next: CalendarCategoryDefinition | null = category;
+    for (const rule of activeRules ?? []) {
+      if (next && rule.names.some((name) => name.toLowerCase() === next!.name.trim().toLowerCase())) next = rule.replacement;
+    }
+    return next ? [next] : [];
+  });
+}
+
 export function mergeMicrosoft365CalendarCategories(remote: CalendarCategoryDefinition[]): void {
   // A completed inbound sync replaces old colours, unlike a file import.
   let stored: CalendarCategoryDefinition[] = [];
@@ -50,8 +67,8 @@ export function mergeMicrosoft365CalendarCategories(remote: CalendarCategoryDefi
     if (Array.isArray(parsed)) stored = parsed.filter((entry): entry is CalendarCategoryDefinition =>
       Boolean(entry && typeof entry.name === "string" && typeof entry.color === "string"));
   } catch { /* Use the confirmed remote data if local metadata is malformed. */ }
-  const byName = new Map(stored.map((category) => [category.name.trim().toLowerCase(), category]));
-  for (const category of remote) {
+  const byName = new Map(applyCalendarCategoryRules(stored).map((category) => [category.name.trim().toLowerCase(), category]));
+  for (const category of applyCalendarCategoryRules(remote)) {
     const name = category.name.trim();
     if (name) byName.set(name.toLowerCase(), { name, color: calendarColorValue(category.color) });
   }
@@ -70,14 +87,14 @@ export function mergeImportedCalendarCategoryDefinitions(imported: CalendarCateg
   }
 
   const byName = new Map<string, CalendarCategoryDefinition>();
-  for (const category of stored) {
+  for (const category of applyCalendarCategoryRules(stored)) {
     const name = String(category.name).trim();
     if (name) byName.set(name.toLocaleLowerCase("de-DE"), { name, color: calendarColorValue(category.color) });
   }
 
   let added = 0;
   let updated = 0;
-  for (const category of imported) {
+  for (const category of applyCalendarCategoryRules(imported)) {
     const name = category.name?.trim();
     if (!name) continue;
     const key = name.toLocaleLowerCase("de-DE");

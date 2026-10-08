@@ -99,6 +99,10 @@ npm run tauri:build:admin-test
 
 Esses comandos usam outro diretório de dados e deixam o endpoint EDV de produção desativado. O desenvolvimento oficial comum continua disponível com `npm run tauri:dev`.
 
+`npm run tauri:dev` abre a versão de desenvolvimento com a mesma base local e a mesma conexão Microsoft 365 da instalação oficial. A sincronização lê e grava dados reais conforme as direções configuradas no app. Antes de abrir, o comando salva um snapshot SQLite consistente em `.local-sync-test`; a janela é identificada como `DEV – LIVE M365`.
+
+Para um diagnóstico sem gravar no Exchange, use `npm run tauri:dev:calendar-safe`. Esse comando mantém uma cópia local separada e permite apenas a importação do calendário. O modo Live limpa os indicadores de somente leitura dos processos Cargo/Vite e restaura o ambiente do terminal quando termina.
+
 ## Copiar dados reais sem tocar na instalação oficial
 
 1. Na instalação oficial, abrir **Einstellungen > Sicherung**.

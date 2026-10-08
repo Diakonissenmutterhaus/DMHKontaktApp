@@ -34,7 +34,8 @@ $runningApps = @(Get-Process -Name 'agendakontakte' -ErrorAction SilentlyContinu
 if ($runningApps.Count -gt 0) {
     Write-Warning 'DMH Backup laeuft noch, moeglicherweise nur im Infobereich der Taskleiste.'
     foreach ($runningApp in $runningApps) {
-        Write-Host "  PID $($runningApp.Id): $($runningApp.Path)"
+        $appPath = if ($runningApp.Path) { $runningApp.Path } else { 'Pfad nicht lesbar (ggf. erhoehte Rechte)' }
+        Write-Host "  PID $($runningApp.Id): $appPath"
     }
 
     $closeRunningApps = Read-Host 'DMH Backup jetzt sicher beenden und den Tauri-Test starten? [J/N]'
@@ -43,11 +44,25 @@ if ($runningApps.Count -gt 0) {
     }
 
     foreach ($runningApp in $runningApps) {
-        Stop-Process -Id $runningApp.Id -ErrorAction Stop
-        [void]$runningApp.WaitForExit(10000)
+        try {
+            Stop-Process -Id $runningApp.Id -ErrorAction Stop
+            [void]$runningApp.WaitForExit(10000)
+        } catch {
+            # A process can exit between enumeration and Stop-Process. Only
+            # report failures for an instance that is still running.
+            if (Get-Process -Id $runningApp.Id -ErrorAction SilentlyContinue) {
+                Write-Warning "DMH Backup (PID $($runningApp.Id)) konnte nicht beendet werden: $($_.Exception.Message)"
+            }
+        }
     }
-    if (Get-Process -Name 'agendakontakte' -ErrorAction SilentlyContinue) {
-        throw 'DMH Backup konnte nicht beendet werden. Beenden Sie die App ueber den Infobereich oder den Task-Manager.'
+    $remainingApps = @(Get-Process -Name 'agendakontakte' -ErrorAction SilentlyContinue)
+    if ($remainingApps.Count -gt 0) {
+        Write-Host ''
+        Write-Host "Der sichere Tauri-Test wurde nicht gestartet. Noch aktive DMH-Backup-Prozesse: $($remainingApps.Id -join ', ')." -ForegroundColor Yellow
+        Write-Host 'Beenden Sie diese Apps im Infobereich mit "Beenden". Das Schliessen des Fensters reicht eventuell nicht aus.'
+        Write-Host 'Bei "Zugriff verweigert": Task-Manager als Administrator oeffnen, unter "Details" die oben genannten PIDs pruefen und diese Prozesse beenden.'
+        Write-Host 'Fuehren Sie danach npm run tauri:dev:calendar-safe erneut im normalen Terminal aus.'
+        exit 1
     }
 }
 if (-not (Test-Path -LiteralPath $tauriCli -PathType Leaf)) {
@@ -90,6 +105,11 @@ if (-not (Test-Path -LiteralPath $isolatedDatabasePath -PathType Leaf)) {
 
 $testSnapshot = if ($isolatedBackupPath) { $isolatedBackupPath } else { $isolatedDatabasePath }
 $expectedAccountHash = (& $pythonExecutable @pythonPrefix $accountCheckScript $backupPath $testSnapshot | Select-Object -Last 1)
+if ($LASTEXITCODE -eq 2 -and $isolatedBackupPath) {
+    Write-Warning 'Die bisherige Testkopie gehoert zu einem anderen Microsoft-365-Konto. Sie wird aus der aktuellen Sicherung neu erstellt.'
+    Write-Host "Die bisherigen Testdaten bleiben gesichert: $isolatedBackupPath"
+    $expectedAccountHash = (& $pythonExecutable @pythonPrefix $accountCheckScript $backupPath $isolatedBackupPath --refresh-test-copy $isolatedDatabasePath | Select-Object -Last 1)
+}
 if ($LASTEXITCODE -ne 0 -or $expectedAccountHash -notmatch '^[0-9a-f]{64}$') {
     throw 'Die sichere Testkopie gehoert nicht zum Microsoft-365-Konto der Ausgangsdatenbank. Der Test wurde nicht gestartet.'
 }

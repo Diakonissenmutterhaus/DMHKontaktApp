@@ -62,7 +62,12 @@ async function installTauriMock(page: Page, contacts: MockContact[], options: { 
         case "get_vault_status":
           return { protectionEnabled: false, unlocked: true, username: "", recoveryEmail: "", recoveryEmailHint: "", recoveryAvailable: false, entryCount: 0 };
         case "get_microsoft365_connection_status":
+        case "get_m365_connection_status":
           return { connected: false, accountName: "", accountEmail: "" };
+        case "get_m365_read_only_test_mode":
+          return false;
+        case "get_calendar_category_rules":
+          return [];
         case "list_contacts":
           return seedContacts;
         case "list_groups":
@@ -188,6 +193,38 @@ test("evento de dia inteiro usa a faixa superior e esconde horários", async ({ 
   await expect(page.getByRole("button", { name: /Speichern/ })).toBeEnabled();
 });
 
+test("novo evento mantém fontes uniformes e o formulário cabe em diferentes janelas", async ({ page }, testInfo) => {
+  await installTauriMock(page, []);
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.goto("/");
+  await page.getByRole("button", { name: "Kalender", exact: true }).click();
+  await page.getByRole("button", { name: /Neuer Termin/ }).click();
+  await page.getByLabel("Startzeit").fill("08:30");
+  await page.getByLabel("Endzeit").fill("10:45");
+
+  const editor = page.locator(".calendar-meeting-editor");
+  const fontSizes = await editor.locator('.calendar-meeting-field input:not([type="checkbox"]), textarea').evaluateAll((fields) => fields.map((field) => getComputedStyle(field).fontSize));
+  expect([...new Set(fontSizes)]).toEqual(["16px"]);
+  await expect(page.locator(".calendar-meeting-commandbar").getByRole("button", { name: /Speichern/ })).toBeVisible();
+  const saveBox = await editor.getByRole("button", { name: /Speichern/ }).boundingBox();
+  const categoryBox = await editor.getByLabel("Kategorie", { exact: true }).boundingBox();
+  expect(saveBox!.y).toBeLessThan(categoryBox!.y + categoryBox!.height);
+  await expect(page.locator(".calendar-meeting-footer")).toContainText("DMH Backup");
+  await page.locator(".calendar-event-dialog").screenshot({ path: testInfo.outputPath("novo-evento-desktop.png") });
+
+  await page.setViewportSize({ width: 760, height: 900 });
+  await expect(editor).toBeVisible();
+  const horizontalOverflow = await editor.evaluate((element) => element.scrollWidth > element.clientWidth + 1);
+  expect(horizontalOverflow).toBe(false);
+  await expect(editor.getByRole("button", { name: /Speichern/ })).toBeVisible();
+  await page.getByPlaceholder("Titel hinzufügen").fill("Planejamento");
+  await page.getByRole("checkbox", { name: /Ganztägig/ }).check();
+  await expect(page.getByLabel("Enddatum", { exact: true })).toBeVisible();
+  await expect(page.locator(".calendar-meeting-footer")).toBeInViewport();
+  await expect(editor.getByRole("button", { name: /Speichern/ })).toBeEnabled();
+  await page.locator(".calendar-event-dialog").screenshot({ path: testInfo.outputPath("novo-evento-compacto.png") });
+});
+
 test("menu de contexto mantém os ícones alinhados à esquerda e as setas à direita", async ({ page }, testInfo) => {
   const today = new Date();
   const day = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
@@ -300,4 +337,31 @@ test("abas aguardam os dados antes de mostrar o estado vazio", async ({ page }) 
   await expect(page.getByText("Kalender wird geladen …", { exact: true })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Noch keine Termine" })).toHaveCount(0);
   await expect(page.getByRole("heading", { name: "Noch keine Termine" })).toBeVisible();
+});
+
+
+test("gerenciador de categorias permite buscar e selecionar em janelas menores", async ({ page }, testInfo) => {
+  await installTauriMock(page, []);
+  await page.addInitScript(() => localStorage.setItem("agendakontakte.calendarCategories", JSON.stringify(
+    Array.from({ length: 35 }, (_, index) => ({ name: `Kategorie ${String(index + 1).padStart(2, "0")}`, color: index % 2 ? "blue" : "green" }))
+  )));
+  await page.goto("/");
+  await page.getByRole("button", { name: "Kalender", exact: true }).click();
+  await page.getByRole("button", { name: "Weitere Kalenderaktionen" }).click();
+  await page.getByRole("button", { name: "Kategorien verwalten", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: "Kategorien verwalten", exact: true });
+  await expect(dialog.getByText("35 Kategorien", { exact: true })).toBeVisible();
+  await expect(dialog.getByText("Ohne Kategorie: Blau", { exact: true })).toBeVisible();
+  await dialog.getByRole("searchbox", { name: "Kategorien suchen" }).fill("Kategorie 3");
+  await expect(dialog.locator(".category-manager-list > li")).toHaveCount(6);
+  await dialog.getByRole("checkbox", { name: "Alle angezeigten Kategorien auswählen" }).check();
+  await expect(dialog.getByText("6 ausgewählt", { exact: true })).toBeVisible();
+  await expect(dialog.getByRole("button", { name: "Auswahl löschen" })).toBeEnabled();
+  await dialog.locator(".calendar-category-manager-card").screenshot({ path: testInfo.outputPath("categorias-desktop.png") });
+  for (const width of [760, 520]) {
+    await page.setViewportSize({ width, height: 900 });
+    expect(await dialog.evaluate((element) => element.scrollWidth > element.clientWidth + 1)).toBe(false);
+    expect(await dialog.locator(".category-manager-list").evaluate((element) => element.scrollWidth > element.clientWidth + 1)).toBe(false);
+    await expect(dialog.getByRole("button", { name: "Kategorie anlegen" })).toBeVisible();
+  }
 });

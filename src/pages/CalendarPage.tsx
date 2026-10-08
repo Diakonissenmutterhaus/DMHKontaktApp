@@ -4,6 +4,9 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent } from "react";
 import { CalendarReconciliationDialog } from "../components/CalendarReconciliationDialog";
 import { CalendarEventForm } from "../components/CalendarEventForm";
+import { CalendarCategoryManager } from "../components/CalendarCategoryManager";
+import type { CalendarCategoryOperation } from "../types/m365";
+import { applyCalendarCategoryRules, calendarCategoryRulesStorageKey, mergeImportedCalendarCategories } from "../utils/calendar";
 import { ActionResultDialog, type ActionResult } from "../components/ActionResultDialog";
 import { EasyImportDialog } from "../components/EasyImportDialog";
 import { EmptyImportState } from "../components/EmptyImportState";
@@ -21,6 +24,9 @@ import {
 } from "../utils/automaticCalendarSync";
 import {
   listCalendarEvents,
+  changeCalendarCategories,
+  getCalendarCategoryOperation,
+  getCalendarCategoryRules,
   listCalendarEventsInRange,
   getMicrosoft365ConnectionStatus,
   getMicrosoft365ReadOnlyTestMode,
@@ -33,6 +39,7 @@ import {
   restoreCalendarEvents,
   saveCalendarEvents,
   saveMicrosoft365MasterCategory,
+  saveLocalCalendarCategory,
   writeExportFile
 } from "../services/db";
 
@@ -468,8 +475,11 @@ export function CalendarPage({ advancedMode, onAdvancedModeChange, onNavigate }:
   const [eventContextMenu, setEventContextMenu] = useState<CalendarEventContextMenuState | null>(null);
   const [eventToPrint, setEventToPrint] = useState<CalendarEvent | null>(null);
   const [m365SyncDialogOpen, setM365SyncDialogOpen] = useState(false);
-  const [newCategoryName, setNewCategoryName] = useState("");
-  const [newCategoryColor, setNewCategoryColor] = useState(defaultCalendarColor);
+  const [categoryConnected, setCategoryConnected] = useState(false);
+  const [categoryExchangeNames, setCategoryExchangeNames] = useState<string[]>([]);
+  const [categoryCounts, setCategoryCounts] = useState<Record<string, number>>({});
+  const [categoryLoadError, setCategoryLoadError] = useState("");
+  const [categoryPending, setCategoryPending] = useState<CalendarCategoryOperation | null>(null);
   const [categoryManagerLoading, setCategoryManagerLoading] = useState(false);
   const [categorySaving, setCategorySaving] = useState(false);
   const [categoryRepairing, setCategoryRepairing] = useState(false);
@@ -754,6 +764,19 @@ export function CalendarPage({ advancedMode, onAdvancedModeChange, onNavigate }:
     const sorted = Array.from(byName.values()).sort((left, right) => left.name.localeCompare(right.name, "de"));
     setCategories(sorted);
     localStorage.setItem(calendarCategoriesStorageKey, JSON.stringify(sorted));
+    window.dispatchEvent(new Event(calendarCategoriesUpdatedEventName));
+  };
+
+  const persistEventChanges = async (changed: CalendarEvent[]) => {
+    if ("__TAURI_INTERNALS__" in window) {
+      if (changed.length) await saveCalendarEvents(changed);
+      window.dispatchEvent(new Event(calendarChangedEventName));
+    } else {
+      const allEvents = JSON.parse(localStorage.getItem(calendarStorageKey) ?? "[]") as CalendarEvent[];
+      const byId = new Map(changed.map((event) => [event.id, event]));
+      localStorage.setItem(calendarStorageKey, JSON.stringify(allEvents.map((event) => byId.get(event.id) ?? event)));
+    }
+    await loadVisibleEvents();
   };
 
   const mergeRemoteCategories = (remoteCategories: CalendarCategory[]) => {
@@ -763,16 +786,37 @@ export function CalendarPage({ advancedMode, onAdvancedModeChange, onNavigate }:
   const openCategoryManager = async () => {
     setShowActionsMenu(false);
     setShowCategoryDialog(true);
-    if (!("__TAURI_INTERNALS__" in window)) return;
-
+    setCategoryLoadError("");
     setCategoryManagerLoading(true);
     try {
-      setCategoryReadOnly(await getMicrosoft365ReadOnlyTestMode());
-      const status = await getMicrosoft365ConnectionStatus();
-      if (!status.connected) return;
-      mergeRemoteCategories(await listMicrosoft365MasterCategories());
-    } catch {
-      setMessage("Exchange-Kategorien konnten nicht geladen werden. Lokale Kategorien bleiben verfügbar.");
+      const native = "__TAURI_INTERNALS__" in window;
+      if (native) {
+        const [readOnly, status, pending, rules] = await Promise.all([
+          getMicrosoft365ReadOnlyTestMode(), getMicrosoft365ConnectionStatus(),
+          getCalendarCategoryOperation(), getCalendarCategoryRules()
+        ]);
+        setCategoryReadOnly(readOnly);
+        setCategoryConnected(status.connected);
+        setCategoryPending(pending);
+        localStorage.setItem(calendarCategoryRulesStorageKey, JSON.stringify(rules));
+      }
+      const allEvents = native ? await listCalendarEvents() : JSON.parse(localStorage.getItem(calendarStorageKey) ?? "[]") as CalendarEvent[];
+      const counts: Record<string, number> = {};
+      for (const event of allEvents) {
+        if (event.category.trim()) counts[event.category.toLowerCase()] = (counts[event.category.toLowerCase()] ?? 0) + 1;
+      }
+      setCategoryCounts(counts);
+      mergeImportedCalendarCategories(allEvents);
+      const stored = JSON.parse(localStorage.getItem(calendarCategoriesStorageKey) ?? "[]") as CalendarCategory[];
+      persistCategories(applyCalendarCategoryRules(stored));
+      if (native && (await getMicrosoft365ConnectionStatus()).connected) {
+        const remote = await listMicrosoft365MasterCategories();
+        localStorage.setItem(calendarCategoryRulesStorageKey, JSON.stringify(await getCalendarCategoryRules()));
+        setCategoryExchangeNames(remote.map((category) => category.name));
+        mergeRemoteCategories(remote);
+      }
+    } catch (error) {
+      setCategoryLoadError(`Kategorien konnten nicht vollständig geladen werden: ${String(error)}. Bitte neu laden.`);
     } finally {
       setCategoryManagerLoading(false);
     }
@@ -781,7 +825,7 @@ export function CalendarPage({ advancedMode, onAdvancedModeChange, onNavigate }:
   const syncCategoryWithExchange = async (category: CalendarCategory) => {
     if (!("__TAURI_INTERNALS__" in window)) return false;
     const status = await getMicrosoft365ConnectionStatus();
-    if (!status.connected) return false;
+    if (!status.connected) { await saveLocalCalendarCategory(category); return false; }
     const saved = await saveMicrosoft365MasterCategory(category);
     mergeRemoteCategories([saved]);
     await loadVisibleEvents();
@@ -907,47 +951,72 @@ export function CalendarPage({ advancedMode, onAdvancedModeChange, onNavigate }:
     });
   };
 
-  const createCategory = async () => {
-    const name = newCategoryName.trim();
-    if (!name) {
-      setMessage("Bitte geben Sie einen Kategorienamen ein.");
-      return;
-    }
-    if (categories.some((category) => category.name.toLowerCase() === name.toLowerCase())) {
-      setMessage("Diese Kategorie gibt es bereits.");
-      return;
-    }
-    const category = { name, color: newCategoryColor };
-    persistCategories([...categories, category]);
-    setNewCategoryName("");
-    setNewCategoryColor(defaultCalendarColor);
+  const createCategory = async (category: CalendarCategory): Promise<string> => {
+    const name = category.name.trim();
+    if (!name || name.length > 255) throw new Error("Bitte geben Sie einen Namen mit höchstens 255 Zeichen ein.");
+    if (categories.some((entry) => entry.name.toLowerCase() === name.toLowerCase())) throw new Error("Diese Kategorie gibt es bereits.");
     setCategorySaving(true);
     try {
-      const synced = await syncCategoryWithExchange(category);
-      setMessage(synced
-        ? `Kategorie „${name}“ wurde mit Exchange gespeichert.`
-        : `Kategorie „${name}“ wurde lokal erstellt. Verbinden Sie Microsoft 365 und wählen Sie anschließend die Farbe erneut, um sie mit Exchange zu speichern.`);
-    } catch (error) {
-      setMessage(`Kategorie „${name}“ wurde lokal gespeichert. Exchange konnte sie noch nicht übernehmen: ${String(error)}`);
-    } finally {
-      setCategorySaving(false);
-    }
+      const synced = await syncCategoryWithExchange({ name, color: category.color });
+      const rules = "__TAURI_INTERNALS__" in window ? await getCalendarCategoryRules() :
+        (JSON.parse(localStorage.getItem(calendarCategoryRulesStorageKey) ?? "[]") as CalendarCategoryOperation[])
+          .map((rule) => ({ ...rule, names: rule.names.filter((old) => old.toLowerCase() !== name.toLowerCase()) }));
+      localStorage.setItem(calendarCategoryRulesStorageKey, JSON.stringify(rules));
+      persistCategories([...categories, { name, color: category.color }]);
+      if (synced) setCategoryExchangeNames((current) => [...current, name]);
+      return synced ? `Kategorie „${name}“ wurde in Exchange bestätigt.` : `Kategorie „${name}“ wurde lokal erstellt.`;
+    } finally { setCategorySaving(false); }
   };
 
-  const updateCategoryColor = async (category: CalendarCategory, color: string) => {
+  const updateCategoryColor = async (category: CalendarCategory, color: string): Promise<string> => {
     const updated = { ...category, color };
-    persistCategories(categories.map((entry) => entry.name.toLowerCase() === category.name.toLowerCase() ? updated : entry));
     setCategorySaving(true);
     try {
       const synced = await syncCategoryWithExchange(updated);
-      setMessage(synced
-        ? `Die Farbe von „${category.name}“ wurde mit Exchange aktualisiert.`
-        : `Die Farbe von „${category.name}“ wurde lokal gespeichert. Verbinden Sie Microsoft 365 und wählen Sie die Farbe danach erneut, um sie mit Exchange zu speichern.`);
+      if (!synced) {
+        const allEvents = "__TAURI_INTERNALS__" in window ? await listCalendarEvents() : JSON.parse(localStorage.getItem(calendarStorageKey) ?? "[]") as CalendarEvent[];
+        const changed = allEvents.filter((event) => event.category.toLowerCase() === category.name.toLowerCase()).map((event) => ({ ...event, color }));
+        await persistEventChanges(changed);
+      }
+      persistCategories(categories.map((entry) => entry.name.toLowerCase() === category.name.toLowerCase() ? updated : entry));
+      if (synced) setCategoryExchangeNames((current) => Array.from(new Set([...current, category.name])));
+      return synced ? `Die Farbe von „${category.name}“ wurde in Exchange bestätigt.` : `Die Farbe von „${category.name}“ wurde lokal gespeichert.`;
+    } finally { setCategorySaving(false); }
+  };
+
+  const changeCategories = async (operation: CalendarCategoryOperation): Promise<string> => {
+    const replacement = operation.replacement ? { ...operation.replacement, name: operation.replacement.name.trim() } : null;
+    if (replacement && !categoryPending && categories.some((category) => category.name.toLowerCase() === replacement.name.toLowerCase())) throw new Error("Diese Kategorie gibt es bereits.");
+    setCategorySaving(true);
+    try {
+      let localEvents = 0;
+      let exchangeEvents = 0;
+      const request = { ...operation, replacement };
+      if ("__TAURI_INTERNALS__" in window) {
+        const result = await changeCalendarCategories(request);
+        localEvents = result.localEvents;
+        exchangeEvents = result.exchangeEvents;
+        const rules = await getCalendarCategoryRules();
+        localStorage.setItem(calendarCategoryRulesStorageKey, JSON.stringify(rules));
+      } else {
+        const allEvents = JSON.parse(localStorage.getItem(calendarStorageKey) ?? "[]") as CalendarEvent[];
+        const changed = allEvents.filter((event) => operation.names.some((name) => name.toLowerCase() === event.category.toLowerCase()) || (!replacement && !event.category && event.color !== defaultCalendarColor)).map((event) => ({ ...event, category: replacement?.name ?? "", color: replacement?.color ?? defaultCalendarColor }));
+        localEvents = changed.length;
+        await persistEventChanges(changed);
+        const rules = JSON.parse(localStorage.getItem(calendarCategoryRulesStorageKey) ?? "[]") as CalendarCategoryOperation[];
+        localStorage.setItem(calendarCategoryRulesStorageKey, JSON.stringify([...rules, request]));
+      }
+      persistCategories(applyCalendarCategoryRules(categories));
+      if (replacement) mergeRemoteCategories([replacement]);
+      setCategoryPending(null);
+      await loadVisibleEvents();
+      window.dispatchEvent(new Event(calendarStorageUpdatedEventName));
+      await openCategoryManager();
+      return `${operation.names.length} ${replacement ? "Kategorie umbenannt" : "Kategorien gelöscht"}. ${localEvents} Termine in der App${operation.exchange ? ` und ${exchangeEvents} in Exchange aktualisiert` : " aktualisiert"}.`;
     } catch (error) {
-      setMessage(`Die Farbe von „${category.name}“ wurde lokal gespeichert. Exchange konnte sie noch nicht übernehmen: ${String(error)}`);
-    } finally {
-      setCategorySaving(false);
-    }
+      if ("__TAURI_INTERNALS__" in window) setCategoryPending(await getCalendarCategoryOperation().catch(() => null));
+      throw error;
+    } finally { setCategorySaving(false); }
   };
 
   const repairExchangeCategoryColors = async () => {
@@ -1457,83 +1526,14 @@ export function CalendarPage({ advancedMode, onAdvancedModeChange, onNavigate }:
 
       {m365SyncDialogOpen && <Microsoft365SyncDialog context="calendar" onClose={() => setM365SyncDialogOpen(false)} />}
 
-      {showCategoryDialog && (
-        <div className="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="calendar-category-manager-title">
-          <div className="modal-card calendar-category-dialog">
-            <section className="form-panel calendar-category-manager">
-              <div className="panel-heading">
-                <div>
-                  <h3 id="calendar-category-manager-title">Kategorien verwalten</h3>
-                  <p>Farben werden bei verbundener Microsoft-365-Anmeldung direkt mit Exchange abgeglichen.</p>
-                </div>
-                <button className="icon-only" type="button" aria-label="Schließen" onClick={() => setShowCategoryDialog(false)}>
-                  <X size={22} />
-                </button>
-              </div>
-              {categoryReadOnly && <p role="status">Microsoft-365-Testmodus: nur lesen. Farben können hier angezeigt, aber nicht in Exchange geändert werden.</p>}
-              <section className="calendar-category-manager-card">
-                <div className="calendar-category-card-heading">
-                  <div><h4>Neue Kategorie</h4><p>Zum Beispiel „Vortrag“ oder „Dienstbesprechung“.</p></div>
-                </div>
-                <div className="form-grid">
-                  <label className="field">
-                    <span>Name</span>
-                    <input value={newCategoryName} onChange={(event) => setNewCategoryName(event.target.value)} placeholder="z. B. Sitzung" autoFocus />
-                  </label>
-                  <label className="field">
-                    <span>Farbe</span>
-                    <select value={newCategoryColor} onChange={(event) => setNewCategoryColor(event.target.value)}>
-                      {calendarColorOptions.map((color) => <option value={color.value} key={color.value}>{color.label}</option>)}
-                    </select>
-                  </label>
-                </div>
-                <div className="button-row">
-                  <button className="primary" type="button" onClick={() => void createCategory()} disabled={categorySaving || categoryManagerLoading || categoryReadOnly}>{categorySaving ? "Wird gespeichert …" : "Kategorie anlegen"}</button>
-                </div>
-              </section>
-              <section className="calendar-category-manager-card">
-                <div className="calendar-category-card-heading">
-                  <div><h4>Bestehende Kategorien</h4><p>Die Farbänderung gilt auch für passende Kategorien in Outlook, Teams und weiteren Exchange-Apps.</p></div>
-                  <button type="button" className="icon-only" aria-label="Exchange-Kategorien neu laden" title="Exchange-Kategorien neu laden" onClick={() => void openCategoryManager()} disabled={categoryManagerLoading}>
-                    <RefreshCw size={18} className={categoryManagerLoading ? "is-spinning" : ""} />
-                  </button>
-                </div>
-                {categories.length === 0 ? <p className="calendar-category-empty">Noch keine Kategorien angelegt.</p> : (
-                  <ul className="calendar-category-list">
-                    {categories.map((category) => {
-                      const option = calendarColorOptions.find((color) => color.value === calendarColorValue(category.color)) ?? calendarColorOptions[0];
-                      return <li key={category.name}>
-                        <span className="calendar-category-swatch" style={{ background: category.color === "gray" ? "#737373" : option.border }} aria-hidden="true" />
-                        <strong>{category.name}</strong>
-                        <label>
-                          <span className="sr-only">Farbe für {category.name}</span>
-                          <select value={category.color} disabled={categorySaving || categoryManagerLoading || categoryReadOnly} onChange={(event) => void updateCategoryColor(category, event.target.value)}>
-                            {category.color === "gray" && <option value="gray" disabled>Ohne sichtbare Exchange-Farbe</option>}
-                            {calendarColorOptions.map((color) => <option value={color.value} key={color.value}>{color.label}</option>)}
-                          </select>
-                        </label>
-                      </li>;
-                    })}
-                  </ul>
-                )}
-                <div className="calendar-category-repair">
-                  <div>
-                    <strong>Exchange-Farben sicher reparieren</strong>
-                    <p>Prüft zuerst eine Vorschau und ändert danach ausschließlich Kategorien bereits verknüpfter Termine. Die normale Synchronisierungswarteschlange bleibt unberührt.</p>
-                  </div>
-                  <button className="primary" type="button" onClick={() => void repairExchangeCategoryColors()} disabled={categoryRepairing || categorySaving || categoryManagerLoading || categoryReadOnly}>
-                    <Palette size={18} /> {categoryRepairing ? "Farben werden geprüft …" : "Farben prüfen und reparieren"}
-                  </button>
-                </div>
-                <p className="calendar-category-safety">Kategorien werden hier nicht gelöscht: Sie können in Exchange auch E-Mails, Kontakte oder Aufgaben kennzeichnen.</p>
-              </section>
-              <div className="button-row">
-                <button type="button" onClick={() => setShowCategoryDialog(false)}>Schließen</button>
-              </div>
-            </section>
-          </div>
-        </div>
-      )}
+      {showCategoryDialog && <CalendarCategoryManager
+        categories={categories} exchangeNames={categoryExchangeNames} counts={categoryCounts}
+        connected={categoryConnected} loading={categoryManagerLoading} busy={categorySaving}
+        readOnly={categoryReadOnly} repairing={categoryRepairing} loadError={categoryLoadError}
+        pending={categoryPending} onRefresh={openCategoryManager} onCreate={createCategory}
+        onColor={updateCategoryColor} onChange={changeCategories} onRepair={repairExchangeCategoryColors}
+        onClose={() => setShowCategoryDialog(false)}
+      />}
 
       {showDuplicateDialog && (
         <div className="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="calendar-duplicate-title">

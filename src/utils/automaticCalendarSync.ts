@@ -10,7 +10,7 @@ import {
 import type { CalendarEvent } from "../types/calendar";
 import type { Microsoft365SyncHistoryEntry, Microsoft365SyncResult } from "../types/m365";
 import { parseSyncConfig, type SyncConfig } from "../types/sync";
-import { mergeImportedCalendarCategories, mergeMicrosoft365CalendarCategories } from "./calendar";
+import { calendarCategoryRulesStorageKey, mergeImportedCalendarCategories, mergeMicrosoft365CalendarCategories } from "./calendar";
 
 export const synchronizationConfigKey = "synchronization_config_v1";
 export const synchronizationHistoryKey = "synchronization_history_v1";
@@ -111,8 +111,12 @@ function parseHistory(raw: string | null): Microsoft365SyncHistoryEntry[] {
   }
 }
 
-export function announceMicrosoft365CalendarChanges(result: Pick<Microsoft365SyncResult, "calendarUpserts" | "calendarDeletes" | "calendarCategories">): void {
+export function announceMicrosoft365CalendarChanges(result: Pick<Microsoft365SyncResult, "calendarUpserts" | "calendarDeletes" | "calendarCategories" | "calendarCategoryRules">): void {
   const { calendarUpserts, calendarDeletes, calendarCategories = [] } = result;
+  if (result.calendarCategoryRules) {
+    localStorage.setItem(calendarCategoryRulesStorageKey, JSON.stringify(result.calendarCategoryRules));
+    mergeMicrosoft365CalendarCategories([]);
+  }
   if (calendarUpserts.length === 0 && calendarDeletes.length === 0 && calendarCategories.length === 0) return;
   // apply_m365_sync already committed the events and delta acknowledgements
   // atomically in SQLite before returning to the WebView.
@@ -131,9 +135,10 @@ export async function runAutomaticCalendarSync(trigger: AutomaticSyncTrigger): P
   if (!config.enabled || config.paused || !config.providers.m365 || (!config.calendars && !config.contacts)) return null;
   if (trigger === "open" && !config.runOnOpen) return null;
   const fastCalendarPoll = m365SafeImportTestMode || trigger === "calendar-poll";
-  if (fastCalendarPoll && (!config.calendars || !config.selectedCalendarSourceIds.some((sourceId) =>
-    (config.sourceDirections[sourceId] ?? config.direction) !== "export"))) return null;
-  if (trigger !== "contact-change" && config.calendars && config.selectedCalendarSourceIds.length === 0) {
+  const contactOnlyCycle = !m365SafeImportTestMode && (trigger === "poll" || trigger === "contact-change");
+  const calendars = config.calendars && !contactOnlyCycle;
+  if (fastCalendarPoll && !config.calendars) return null;
+  if (calendars && config.selectedCalendarSourceIds.length === 0) {
     const message = "Automatische Synchronisierung ist aktiviert, aber es wurde kein Microsoft-365-Kalender ausgewählt.";
     await recordMicrosoft365SynchronizationError(message);
     return { state: "error", message };
@@ -158,13 +163,13 @@ export async function runAutomaticCalendarSync(trigger: AutomaticSyncTrigger): P
   // re-scanning a 50,000-item calendar before a newly saved appointment can
   // leave the app.
   const emptyOutbox = { processed: 0, created: 0, updated: 0, deleted: 0, pending: 0, errors: 0, errorMessages: [] as string[] };
-  const queued = fastCalendarPoll || trigger === "contact-change" || !config.calendars ? emptyOutbox : await flushMicrosoft365CalendarOutbox({
+  const queued = m365SafeImportTestMode || !calendars ? emptyOutbox : await flushMicrosoft365CalendarOutbox({
     direction: config.direction,
     selectedCalendarSourceIds: config.selectedCalendarSourceIds,
     sourceDirections: config.sourceDirections,
     sharedCalendars: config.sharedCalendars,
     sharedMailboxAddresses: config.sharedMailboxAddresses
-  });
+  }).catch((error: unknown) => ({ ...emptyOutbox, errors: 1, errorMessages: [String(error)] }));
   const queuedExchangeCount = queued.created + queued.updated + queued.deleted;
   if (queued.created > 0) window.dispatchEvent(new Event(calendarStorageUpdatedEventName));
 
@@ -186,7 +191,7 @@ export async function runAutomaticCalendarSync(trigger: AutomaticSyncTrigger): P
   // in Exchange/Teams.  The full synchronizer now receives only calendar
   // sources that permit importing, and those sources are forced to import-only
   // here because outbound writes are already handled safely by the outbox.
-  const inboundCalendarSourceIds = config.calendars
+  const inboundCalendarSourceIds = calendars
     ? config.selectedCalendarSourceIds.filter((sourceId) =>
         (config.sourceDirections[sourceId] ?? config.direction) !== "export")
     : [];

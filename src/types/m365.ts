@@ -17,6 +17,18 @@ export interface Microsoft365CalendarCategory {
   color: string;
 }
 
+export interface CalendarCategoryOperation {
+  names: string[];
+  replacement: Microsoft365CalendarCategory | null;
+  exchange: boolean;
+}
+
+export interface CalendarCategoryOperationResult {
+  localEvents: number;
+  exchangeEvents: number;
+  category: Microsoft365CalendarCategory | null;
+}
+
 export interface Microsoft365CalendarCategoryRepairPreview {
   linkedEvents: number;
   categoryNames: string[];
@@ -108,6 +120,7 @@ export interface Microsoft365SyncResult {
   calendarUpserts: import("./calendar").CalendarEvent[];
   calendarDeletes: string[];
   calendarCategories?: Microsoft365CalendarCategory[];
+  calendarCategoryRules?: CalendarCategoryOperation[];
 }
 
 export interface CalendarOutboxSyncResult {

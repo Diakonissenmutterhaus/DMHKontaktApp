@@ -42,7 +42,7 @@
     "tauri:build": "set \"CARGO_TARGET_DIR=%CD%\\src-tauri\\target-dev\"&& tauri build",
     "tauri:build:signed": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-tauri-signed.ps1",
     "tauri:build:admin-test": "set CARGO_TARGET_DIR=%TEMP%\\agendakontakte-admin-test-cargo-target&& set VITE_APP_CHANNEL=admin-test&& set VITE_FEATURE_AUTHENTICATOR_DEFAULT=false&& set VITE_FEATURE_SERVICES_DEFAULT=false&& set VITE_SOURCE_COMMIT=local&& set DMH_RELEASE_CHANNEL=admin-test&& tauri build --config src-tauri/tauri.admin-test.conf.json",
-    "tauri:dev": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/start-tauri-calendar-safe.ps1",
+    "tauri:dev": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/start-tauri-live.ps1",
     "tauri:dev:calendar-safe": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/start-tauri-calendar-safe.ps1",
     "tauri:dev:admin-test": "set CARGO_TARGET_DIR=%TEMP%\\agendakontakte-admin-test-cargo-target&& set VITE_APP_CHANNEL=admin-test&& set VITE_FEATURE_AUTHENTICATOR_DEFAULT=false&& set VITE_FEATURE_SERVICES_DEFAULT=false&& set VITE_SOURCE_COMMIT=local&& set DMH_RELEASE_CHANNEL=admin-test&& tauri dev --config src-tauri/tauri.admin-test.conf.json",
     "tauri:open": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/open-tauri-dev.ps1",

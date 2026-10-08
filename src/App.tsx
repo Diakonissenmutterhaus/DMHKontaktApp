@@ -86,6 +86,8 @@ export default function App() {
   const documentSyncPromise = useRef<Promise<void> | null>(null);
   const calendarSyncPromise = useRef<Promise<"success" | "error" | "skipped"> | null>(null);
   const queuedCalendarSyncTriggers = useRef(new Set<AutomaticSyncTrigger>());
+  const contactSyncPromise = useRef<Promise<"success" | "error" | "skipped"> | null>(null);
+  const queuedContactSyncTriggers = useRef(new Set<AutomaticSyncTrigger>());
   const navigationBlockerRef = useRef<NavigationBlocker | null>(null);
   const closing = useRef(false);
   const settingsAreaOpen = page === "settings" || page === "feature-development" || page === "backup" || page === "synchronizations" || page === "m365" || page === "recovery";
@@ -188,9 +190,12 @@ export default function App() {
 
   const runCalendarSync = useCallback(async (trigger: AutomaticSyncTrigger): Promise<"success" | "error" | "skipped"> => {
     if (!("__TAURI_INTERNALS__" in window)) return "skipped";
-    if (calendarSyncPromise.current) {
-      queuedCalendarSyncTriggers.current.add(trigger);
-      return calendarSyncPromise.current;
+    const contactCycle = trigger === "poll" || trigger === "contact-change";
+    const activePromise = contactCycle ? contactSyncPromise : calendarSyncPromise;
+    const queuedTriggers = contactCycle ? queuedContactSyncTriggers : queuedCalendarSyncTriggers;
+    if (activePromise.current) {
+      queuedTriggers.current.add(trigger);
+      return activePromise.current;
     }
     const promise = (async () => {
       let outcome: "success" | "error" | "skipped" = "skipped";
@@ -219,16 +224,16 @@ export default function App() {
           }));
         }
         nextTrigger = (["change", "contact-change", "calendar-poll", "open", "poll"] as AutomaticSyncTrigger[])
-          .find((candidate) => queuedCalendarSyncTriggers.current.has(candidate));
-        if (nextTrigger) queuedCalendarSyncTriggers.current.delete(nextTrigger);
+          .find((candidate) => queuedTriggers.current.has(candidate));
+        if (nextTrigger) queuedTriggers.current.delete(nextTrigger);
       }
       return outcome;
     })();
-    calendarSyncPromise.current = promise;
+    activePromise.current = promise;
     try {
       return await promise;
     } finally {
-      if (calendarSyncPromise.current === promise) calendarSyncPromise.current = null;
+      if (activePromise.current === promise) activePromise.current = null;
     }
   }, []);
 
@@ -297,7 +302,7 @@ export default function App() {
           }
           await runCalendarSync("calendar-poll");
           if (!m365SafeImportTestMode) {
-            const outcome = await runCalendarSync("open");
+            const outcome = await runCalendarSync("poll");
             failedPollingCycles = outcome === "error" ? 1 : 0;
           }
         }
@@ -391,6 +396,7 @@ export default function App() {
         await appWindow.hide();
         closing.current = false;
         void Promise.allSettled([
+          runCalendarSync("calendar-poll"),
           runCalendarSync("poll"),
           runDocumentSync(),
           runSafetyBackup(true)

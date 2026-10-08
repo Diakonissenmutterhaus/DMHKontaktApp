@@ -12,7 +12,7 @@ const mocks = vi.hoisted(() => ({
   mergeMicrosoft365CalendarCategories: vi.fn()
 }));
 vi.mock("../services/db", () => mocks);
-vi.mock("./calendar", () => ({ mergeImportedCalendarCategories: mocks.mergeImportedCalendarCategories, mergeMicrosoft365CalendarCategories: mocks.mergeMicrosoft365CalendarCategories }));
+vi.mock("./calendar", () => ({ calendarCategoryRulesStorageKey: "agendakontakte.calendarCategoryRules.v1", mergeImportedCalendarCategories: mocks.mergeImportedCalendarCategories, mergeMicrosoft365CalendarCategories: mocks.mergeMicrosoft365CalendarCategories }));
 
 import { calendarStorageUpdatedEventName, describeMicrosoft365SyncFailure, runAutomaticCalendarSync, synchronizationConfigKey } from "./automaticCalendarSync";
 
@@ -80,7 +80,7 @@ describe("automatic Microsoft 365 calendar polling", () => {
     expect(status?.state).toBe("success");
     expect(mocks.mergeImportedCalendarCategories).toHaveBeenCalledWith([incomingEvent]);
     expect(refreshed).toHaveBeenCalledOnce();
-    expect(mocks.flushMicrosoft365CalendarOutbox).not.toHaveBeenCalled();
+    expect(mocks.flushMicrosoft365CalendarOutbox).toHaveBeenCalledOnce();
     expect(mocks.flushMicrosoft365ContactOutbox).not.toHaveBeenCalled();
     expect(mocks.applyMicrosoft365Sync).toHaveBeenCalledWith(expect.objectContaining({
       calendars: true,
@@ -120,7 +120,7 @@ describe("automatic Microsoft 365 calendar polling", () => {
     expect(status?.state).toBe("success");
     expect(mocks.mergeMicrosoft365CalendarCategories).toHaveBeenCalledWith([{ name: "Vortrag", color: "purple" }]);
     expect(refreshed).toHaveBeenCalledOnce();
-    expect(mocks.flushMicrosoft365CalendarOutbox).not.toHaveBeenCalled();
+    expect(mocks.flushMicrosoft365CalendarOutbox).toHaveBeenCalledOnce();
     window.removeEventListener(calendarStorageUpdatedEventName, refreshed);
   });
 
@@ -134,6 +134,45 @@ describe("automatic Microsoft 365 calendar polling", () => {
     expect(mocks.flushMicrosoft365ContactOutbox).toHaveBeenCalledOnce();
     expect(mocks.flushMicrosoft365CalendarOutbox).not.toHaveBeenCalled();
     expect(mocks.applyMicrosoft365Sync).not.toHaveBeenCalled();
+  });
+
+  it("sends queued calendar changes during the frequent calendar poll", async () => {
+    mocks.flushMicrosoft365CalendarOutbox.mockResolvedValue({ ...emptyOutbox, processed: 1, created: 1 });
+    const status = await runAutomaticCalendarSync("calendar-poll");
+    expect(status?.state).toBe("success");
+    expect(mocks.flushMicrosoft365CalendarOutbox).toHaveBeenCalledOnce();
+    expect(mocks.applyMicrosoft365Sync).toHaveBeenCalledOnce();
+    expect(mocks.flushMicrosoft365ContactOutbox).not.toHaveBeenCalled();
+  });
+
+  it("still imports Exchange changes if sending the calendar outbox fails", async () => {
+    mocks.flushMicrosoft365CalendarOutbox.mockRejectedValue(new Error("Microsoft Graph HTTP 504"));
+    const status = await runAutomaticCalendarSync("calendar-poll");
+    expect(status?.state).toBe("error");
+    expect(mocks.applyMicrosoft365Sync).toHaveBeenCalledOnce();
+    expect(mocks.mergeImportedCalendarCategories).toHaveBeenCalledWith([incomingEvent]);
+  });
+
+  it("keeps export-only calendars sending during the frequent poll", async () => {
+    mocks.getAppSetting.mockImplementation(async (key: string) => key === synchronizationConfigKey
+      ? JSON.stringify({ ...defaultSyncConfig, enabled: true, contacts: false, calendars: true,
+          selectedCalendarSourceIds: ["me:calendar"], sourceDirections: { "me:calendar": "export" } })
+      : null);
+    mocks.flushMicrosoft365CalendarOutbox.mockResolvedValue({ ...emptyOutbox, processed: 1, created: 1 });
+    const status = await runAutomaticCalendarSync("calendar-poll");
+    expect(status?.state).toBe("success");
+    expect(mocks.flushMicrosoft365CalendarOutbox).toHaveBeenCalledOnce();
+    expect(mocks.applyMicrosoft365Sync).not.toHaveBeenCalled();
+  });
+
+  it("runs the slower contact poll independently of the calendar queue", async () => {
+    const status = await runAutomaticCalendarSync("poll");
+    expect(status?.state).toBe("success");
+    expect(mocks.flushMicrosoft365CalendarOutbox).not.toHaveBeenCalled();
+    expect(mocks.flushMicrosoft365ContactOutbox).toHaveBeenCalledOnce();
+    expect(mocks.applyMicrosoft365Sync).toHaveBeenCalledWith(expect.objectContaining({
+      calendars: false, contacts: true, selectedCalendarSourceIds: []
+    }));
   });
 
   it("explains a temporary Graph failure without claiming the local change was lost", async () => {

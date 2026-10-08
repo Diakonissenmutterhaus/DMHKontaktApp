@@ -345,6 +345,22 @@ export function saveMicrosoft365MasterCategory(category: Microsoft365CalendarCat
   return invoke("save_m365_master_category", { name: category.name, color: category.color });
 }
 
+export function changeCalendarCategories(operation: import("../types/m365").CalendarCategoryOperation): Promise<import("../types/m365").CalendarCategoryOperationResult> {
+  return invoke("change_calendar_categories", { operation });
+}
+
+export function getCalendarCategoryOperation(): Promise<import("../types/m365").CalendarCategoryOperation | null> {
+  return invoke("get_calendar_category_operation");
+}
+
+export function getCalendarCategoryRules(): Promise<import("../types/m365").CalendarCategoryOperation[]> {
+  return invoke("get_calendar_category_rules");
+}
+
+export function saveLocalCalendarCategory(category: Microsoft365CalendarCategory): Promise<void> {
+  return invoke("save_local_calendar_category", { category });
+}
+
 export function previewMicrosoft365CalendarCategoryRepair(): Promise<import("../types/m365").Microsoft365CalendarCategoryRepairPreview> {
   return invoke("preview_m365_calendar_category_repair");
 }

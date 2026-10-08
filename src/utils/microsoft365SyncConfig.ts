@@ -33,8 +33,10 @@ export function initializeMicrosoft365SourceSelection(config: SyncConfig, source
 
 export function selectAllMicrosoft365Sources(config: SyncConfig, sources: Microsoft365SyncSources): SyncConfig {
   const sourceDirections = { ...config.sourceDirections };
-  const selectedContactSourceIds = new Set(config.selectedContactSourceIds);
-  const selectedCalendarSourceIds = new Set(config.selectedCalendarSourceIds);
+  // Explicitly enabling all sources after connecting uses the current account's
+  // discovered sources, rather than retaining IDs from an earlier connection.
+  const selectedContactSourceIds = new Set<string>();
+  const selectedCalendarSourceIds = new Set<string>();
 
   for (const source of [...sources.contacts, ...sources.calendars]) {
     if (isTechnicalMicrosoft365Source(source)) continue;

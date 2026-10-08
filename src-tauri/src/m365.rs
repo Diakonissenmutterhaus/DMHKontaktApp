@@ -61,7 +61,9 @@ fn calendar_delta_quarters(year: i32, month: u32) -> Vec<(String, String)> {
         for window_month in [1, 4, 7, 10] {
             let (end_year, end_month) = if window_month == 10 {
                 (window_year + 1, 1)
-            } else { (window_year, window_month + 3) };
+            } else {
+                (window_year, window_month + 3)
+            };
             windows.push((
                 format!("{window_year:04}-{window_month:02}-01T00:00:00Z"),
                 format!("{end_year:04}-{end_month:02}-01T00:00:00Z"),
@@ -910,7 +912,11 @@ async fn graph_json_response(access_token: &str, url: &str) -> Result<Value, Str
     for attempt in 0..GRAPH_MAX_ATTEMPTS {
         let response = match http_client()
             .get(url)
-            .timeout(if delta_request { Duration::from_secs(15) } else { GRAPH_REQUEST_TIMEOUT })
+            .timeout(if delta_request {
+                Duration::from_secs(15)
+            } else {
+                GRAPH_REQUEST_TIMEOUT
+            })
             .bearer_auth(access_token)
             .header(
                 "Prefer",
@@ -926,7 +932,9 @@ async fn graph_json_response(access_token: &str, url: &str) -> Result<Value, Str
             Ok(response) => response,
             Err(error) => {
                 last_network_error = Some(error.to_string());
-                if delta_request { break; }
+                if delta_request {
+                    break;
+                }
                 if attempt + 1 < GRAPH_MAX_ATTEMPTS {
                     tokio::time::sleep(Duration::from_secs(1u64 << attempt.min(5))).await;
                     continue;
@@ -1009,17 +1017,23 @@ struct CalendarDeltaBatch {
 }
 
 fn clear_calendar_delta_state(app: &AppHandle, source_id: &str) -> Result<(), String> {
-    open_db(app)?.execute(
-        "DELETE FROM m365_calendar_delta_state WHERE source_id = ?1",
-        [source_id],
-    )
-    .map_err(|error| error.to_string())?;
+    open_db(app)?
+        .execute(
+            "DELETE FROM m365_calendar_delta_state WHERE source_id = ?1",
+            [source_id],
+        )
+        .map_err(|error| error.to_string())?;
     // Other periods may already have uncommitted events in the shared queue.
     // Expiring one period's token must not discard any of them.
     Ok(())
 }
 
-fn calendar_delta_link(app: &AppHandle, source_id: &str, window_start: &str, window_end: &str) -> Result<Option<String>, String> {
+fn calendar_delta_link(
+    app: &AppHandle,
+    source_id: &str,
+    window_start: &str,
+    window_end: &str,
+) -> Result<Option<String>, String> {
     open_db(app)?
         .query_row(
             "SELECT delta_link FROM m365_calendar_delta_state
@@ -1118,9 +1132,16 @@ fn checkpoint_calendar_delta_window_page(
 }
 
 #[cfg(test)]
-fn checkpoint_calendar_delta_page(conn: &mut rusqlite::Connection, source_id: &str, values: &[Value], delta_link: &str) -> Result<(), String> {
+fn checkpoint_calendar_delta_page(
+    conn: &mut rusqlite::Connection,
+    source_id: &str,
+    values: &[Value],
+    delta_link: &str,
+) -> Result<(), String> {
     let (start, end) = calendar_delta_window(Utc::now().year());
-    checkpoint_calendar_delta_window_page(conn, source_id, values, delta_link, source_id, &start, &end)
+    checkpoint_calendar_delta_window_page(
+        conn, source_id, values, delta_link, source_id, &start, &end,
+    )
 }
 
 fn blank_calendar_title_candidates(
@@ -1280,14 +1301,27 @@ async fn refresh_calendar_delta_queue(
 ) -> Result<(), String> {
     let now = Utc::now();
     let windows = calendar_delta_quarters(now.year(), now.month());
-    let current = refresh_calendar_delta_period(app, access_token, source, &windows[0].0, &windows[0].1).await;
+    let current =
+        refresh_calendar_delta_period(app, access_token, source, &windows[0].0, &windows[0].1)
+            .await;
     // Poll the current quarter on every cycle and rotate one historical/future
     // quarter alongside it. A problematic old series cannot freeze this week.
-    let rotation_key = format!("m365_calendar_period_rotation_v1:{}:{}", source.id, now.year());
-    let index = get_setting(app, &rotation_key)?.and_then(|value| value.parse::<usize>().ok()).unwrap_or(0) % (windows.len() - 1);
+    let rotation_key = format!(
+        "m365_calendar_period_rotation_v1:{}:{}",
+        source.id,
+        now.year()
+    );
+    let index = get_setting(app, &rotation_key)?
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or(0)
+        % (windows.len() - 1);
     let (start, end) = &windows[index + 1];
     let history = refresh_calendar_delta_period(app, access_token, source, start, end).await;
-    set_setting(app, &rotation_key, &((index + 1) % (windows.len() - 1)).to_string())?;
+    set_setting(
+        app,
+        &rotation_key,
+        &((index + 1) % (windows.len() - 1)).to_string(),
+    )?;
     current.and(history)?;
     repair_blank_calendar_titles(app, access_token, source).await
 }
@@ -1390,7 +1424,15 @@ async fn refresh_calendar_delta_period(
                 "Microsoft Graph hat keinen Delta-Merker geliefert. Es wurden keine Änderungen verworfen."
                     .to_string()
             })?;
-            checkpoint_calendar_delta_window_page(&mut open_db(app)?, &source.id, &resolved, checkpoint, &cursor_id, window_start, window_end)?;
+            checkpoint_calendar_delta_window_page(
+                &mut open_db(app)?,
+                &source.id,
+                &resolved,
+                checkpoint,
+                &cursor_id,
+                window_start,
+                window_end,
+            )?;
             if next_url.is_some() && pages >= CALENDAR_DELTA_PAGES_PER_SYNC {
                 // Release the shared sync gate regularly so app edits can be
                 // exported while the first calendar import is still running.
@@ -2419,21 +2461,40 @@ fn expected_calendar_category_preset(
 
 pub mod category_management;
 
-async fn ensure_calendar_default_blue(token: &str, source: &Microsoft365SyncSource) -> Result<(), String> {
-    if !source.editable { return Ok(()); }
+async fn ensure_calendar_default_blue(
+    token: &str,
+    source: &Microsoft365SyncSource,
+) -> Result<(), String> {
+    if !source.editable {
+        return Ok(());
+    }
     let calendar = graph_json(token, &format!("{}?$select=id,color", source.resource_path)).await?;
     if !value_text(&calendar, "color").eq_ignore_ascii_case("lightBlue") {
-        graph_write(token, reqwest::Method::PATCH, &source.resource_path, &json!({"color": "lightBlue"})).await?;
-        let saved = graph_json(token, &format!("{}?$select=id,color", source.resource_path)).await?;
+        graph_write(
+            token,
+            reqwest::Method::PATCH,
+            &source.resource_path,
+            &json!({"color": "lightBlue"}),
+        )
+        .await?;
+        let saved =
+            graph_json(token, &format!("{}?$select=id,color", source.resource_path)).await?;
         if !value_text(&saved, "color").eq_ignore_ascii_case("lightBlue") {
-            return Err(format!("Exchange hat die blaue Standardfarbe für „{}“ nicht bestätigt.", source.name));
+            return Err(format!(
+                "Exchange hat die blaue Standardfarbe für „{}“ nicht bestätigt.",
+                source.name
+            ));
         }
     }
     Ok(())
 }
 
 fn graph_category_values(category: &str) -> Vec<String> {
-    if category.is_empty() { Vec::new() } else { vec![category.to_string()] }
+    if category.is_empty() {
+        Vec::new()
+    } else {
+        vec![category.to_string()]
+    }
 }
 
 fn graph_category_for_event(event: &crate::CalendarEvent) -> String {
@@ -2499,7 +2560,9 @@ fn required_calendar_category_colors(
 ) -> HashMap<String, (String, &'static str)> {
     let mut required = HashMap::new();
     for target in targets {
-        if target.category.is_empty() { continue; }
+        if target.category.is_empty() {
+            continue;
+        }
         let key = target.category.to_lowercase();
         required.entry(key).or_insert_with(|| {
             (
@@ -2546,7 +2609,14 @@ fn verified_calendar_category_names(
 }
 
 fn verify_calendar_event_category(value: &Value, category: &str) -> Result<(), String> {
-    if category.is_empty() && value.get("categories").and_then(Value::as_array).is_some_and(Vec::is_empty) { return Ok(()); }
+    if category.is_empty()
+        && value
+            .get("categories")
+            .and_then(Value::as_array)
+            .is_some_and(Vec::is_empty)
+    {
+        return Ok(());
+    }
     if value
         .get("categories")
         .and_then(Value::as_array)
@@ -2579,7 +2649,9 @@ async fn ensure_m365_calendar_categories(
     .collect::<HashMap<_, _>>();
     let mut needed = HashMap::<String, (String, String)>::new();
     for (name, local_color, force_local_color) in categories {
-        if name.trim().is_empty() { continue; }
+        if name.trim().is_empty() {
+            continue;
+        }
         // Preserve the chosen Exchange colour. Cached event colours are only
         // a fallback for missing or uncoloured master categories.
         let color = expected_calendar_category_preset(
@@ -2721,7 +2793,11 @@ fn refresh_calendar_category_colors_in_db(
         }) {
             continue;
         }
-        let color = if event.category.trim().is_empty() { Some(&"blue") } else { colors.get(&event.category.trim().to_lowercase()) };
+        let color = if event.category.trim().is_empty() {
+            Some(&"blue")
+        } else {
+            colors.get(&event.category.trim().to_lowercase())
+        };
         let Some(color) = color else {
             continue;
         };
@@ -3080,7 +3156,9 @@ fn graph_event_payload_for_master(
     names: &HashMap<String, String>,
 ) -> Value {
     let mut payload = graph_event_payload(event);
-    payload["categories"] = json!(graph_category_values(&master_category_for_event(event, names)));
+    payload["categories"] = json!(graph_category_values(&master_category_for_event(
+        event, names
+    )));
     payload
 }
 
@@ -3426,7 +3504,9 @@ async fn build_m365_sync_plan(
     request: &Microsoft365SyncPreviewRequest,
     allow_partial_sources: bool,
 ) -> Result<Microsoft365SyncPlan, String> {
-    if request.calendars { category_management::ensure_no_pending_operation(app)?; }
+    if request.calendars {
+        category_management::ensure_no_pending_operation(app)?;
+    }
     let sources = list_m365_sync_sources_filtered(
         app.clone(),
         Some(request.shared_mailbox_addresses.clone()),
@@ -4731,12 +4811,15 @@ fn outbox_source_is_available(
 }
 
 fn calendar_outbox_lookup_window(starts_at: &str) -> Result<(String, String), String> {
-    let date = starts_at.get(..10)
+    let date = starts_at
+        .get(..10)
         .and_then(|value| chrono::NaiveDate::parse_from_str(value, "%Y-%m-%d").ok())
         .ok_or_else(|| "Der Kalendertermin hat kein gültiges Startdatum.".to_string())?;
-    let start = date.checked_sub_signed(ChronoDuration::days(1))
+    let start = date
+        .checked_sub_signed(ChronoDuration::days(1))
         .ok_or_else(|| "Das Startdatum liegt außerhalb des unterstützten Bereichs.".to_string())?;
-    let end = date.checked_add_signed(ChronoDuration::days(2))
+    let end = date
+        .checked_add_signed(ChronoDuration::days(2))
         .ok_or_else(|| "Das Startdatum liegt außerhalb des unterstützten Bereichs.".to_string())?;
     // calendarView query bounds use UTC even when Prefer requests local times.
     // Cover the local day and its UTC offsets, then match the exact local start.
@@ -4789,7 +4872,10 @@ pub async fn flush_m365_calendar_outbox(
         outbox_source_is_available(&request, source)
             && outbox_source_direction(&request, &source.id) != "import"
     });
-    for source in sources.calendars.iter().filter(|source| outbox_source_is_available(&request, source) && outbox_source_direction(&request, &source.id) != "import") {
+    for source in sources.calendars.iter().filter(|source| {
+        outbox_source_is_available(&request, source)
+            && outbox_source_direction(&request, &source.id) != "import"
+    }) {
         ensure_calendar_default_blue(&access_token, source).await?;
     }
     // Upgrade existing appointments through the normal outbox in bounded,
@@ -5054,10 +5140,14 @@ pub async fn apply_m365_sync(
     // Mixed manual syncs acquire both in a fixed order to avoid overlap.
     let _contact_guard = if request.contacts {
         Some(state.m365.contact_sync_gate.lock().await)
-    } else { None };
+    } else {
+        None
+    };
     let _calendar_guard = if request.calendars {
         Some(state.m365.calendar_sync_gate.lock().await)
-    } else { None };
+    } else {
+        None
+    };
     let started_at = Utc::now().to_rfc3339();
     let access_token = refreshed_access_token(&app).await?;
     let backup = request
@@ -5102,7 +5192,11 @@ pub async fn apply_m365_sync(
     let master_category_names = if needs_calendar_write_categories {
         let mut calendars = HashSet::new();
         for operation in &plan.operations {
-            if operation.change.kind == "Kalender" && operation.source.editable && calendars.insert(operation.source.id.clone()) && source_direction(&preview_request, &operation.source.id) != "import" {
+            if operation.change.kind == "Kalender"
+                && operation.source.editable
+                && calendars.insert(operation.source.id.clone())
+                && source_direction(&preview_request, &operation.source.id) != "import"
+            {
                 ensure_calendar_default_blue(&access_token, &operation.source).await?;
             }
         }
@@ -5698,7 +5792,9 @@ pub async fn list_m365_master_categories(
     let mut access_token = refreshed_access_token(&app).await?;
     let categories = m365_master_categories(&access_token).await;
     access_token.zeroize();
-    if let Ok(categories) = &categories { category_management::reconcile_recreated_categories(&app, categories)?; }
+    if let Ok(categories) = &categories {
+        category_management::reconcile_recreated_categories(&app, categories)?;
+    }
     categories
 }
 
@@ -5787,7 +5883,8 @@ pub async fn repair_m365_calendar_categories(
     let _sync_guard = state.m365.calendar_sync_gate.lock().await;
     let (mut access_token, targets) = calendar_category_repair_context(&app).await?;
     let result = async {
-        let sources = list_m365_sync_sources_filtered(app.clone(), Some(Vec::new()), false, true).await?;
+        let sources =
+            list_m365_sync_sources_filtered(app.clone(), Some(Vec::new()), false, true).await?;
         for source in sources.calendars.iter().filter(|source| source.editable) {
             ensure_calendar_default_blue(&access_token, source).await?;
         }
@@ -6596,24 +6693,50 @@ mod tests {
     fn calendar_delta_quarters_prioritize_today_and_cover_the_entire_window() {
         let windows = calendar_delta_quarters(2026, 10);
         assert_eq!(windows.len(), 16);
-        assert_eq!(windows[0], ("2026-10-01T00:00:00Z".to_string(), "2027-01-01T00:00:00Z".to_string()));
+        assert_eq!(
+            windows[0],
+            (
+                "2026-10-01T00:00:00Z".to_string(),
+                "2027-01-01T00:00:00Z".to_string()
+            )
+        );
         let mut sorted = windows.clone();
         sorted.sort();
         let range = calendar_delta_window(2026);
         assert_eq!(sorted.first().unwrap().0, range.0);
         assert_eq!(sorted.last().unwrap().1, range.1);
-        for pair in sorted.windows(2) { assert_eq!(pair[0].1, pair[1].0); }
-        assert_eq!(calendar_delta_quarters(2026, 1)[0].0, "2026-01-01T00:00:00Z");
+        for pair in sorted.windows(2) {
+            assert_eq!(pair[0].1, pair[1].0);
+        }
+        assert_eq!(
+            calendar_delta_quarters(2026, 1)[0].0,
+            "2026-01-01T00:00:00Z"
+        );
     }
 
     #[test]
     fn outbox_lookup_covers_local_times_across_summer_and_winter_offsets() {
         for (date, start, end) in [
-            ("2026-10-08T08:30", "2026-10-07T00:00:00Z", "2026-10-10T00:00:00Z"),
-            ("2026-03-29T00:15:00", "2026-03-28T00:00:00Z", "2026-03-31T00:00:00Z"),
-            ("2026-10-25T23:45:00", "2026-10-24T00:00:00Z", "2026-10-27T00:00:00Z"),
+            (
+                "2026-10-08T08:30",
+                "2026-10-07T00:00:00Z",
+                "2026-10-10T00:00:00Z",
+            ),
+            (
+                "2026-03-29T00:15:00",
+                "2026-03-28T00:00:00Z",
+                "2026-03-31T00:00:00Z",
+            ),
+            (
+                "2026-10-25T23:45:00",
+                "2026-10-24T00:00:00Z",
+                "2026-10-27T00:00:00Z",
+            ),
         ] {
-            assert_eq!(calendar_outbox_lookup_window(date).unwrap(), (start.to_string(), end.to_string()));
+            assert_eq!(
+                calendar_outbox_lookup_window(date).unwrap(),
+                (start.to_string(), end.to_string())
+            );
         }
         assert!(calendar_outbox_lookup_window("invalid").is_err());
     }
@@ -6629,22 +6752,71 @@ mod tests {
              CREATE TABLE m365_calendar_delta_state (
                 source_id TEXT PRIMARY KEY, delta_link TEXT NOT NULL,
                 window_start TEXT NOT NULL, window_end TEXT NOT NULL, updated_at TEXT NOT NULL);",
-        ).unwrap();
-        checkpoint_calendar_delta_page(&mut conn, "calendar-a", &[json!({"id":"event-1", "subject":"First"})], "next-page-2").unwrap();
-        checkpoint_calendar_delta_page(&mut conn, "calendar-a", &[json!({"id":"event-2", "subject":"Second"})], "next-page-3").unwrap();
-        let cursor: String = conn.query_row("SELECT delta_link FROM m365_calendar_delta_state", [], |row| row.get(0)).unwrap();
+        )
+        .unwrap();
+        checkpoint_calendar_delta_page(
+            &mut conn,
+            "calendar-a",
+            &[json!({"id":"event-1", "subject":"First"})],
+            "next-page-2",
+        )
+        .unwrap();
+        checkpoint_calendar_delta_page(
+            &mut conn,
+            "calendar-a",
+            &[json!({"id":"event-2", "subject":"Second"})],
+            "next-page-3",
+        )
+        .unwrap();
+        let cursor: String = conn
+            .query_row(
+                "SELECT delta_link FROM m365_calendar_delta_state",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
         assert_eq!(cursor, "next-page-3");
-        let count: usize = conn.query_row("SELECT COUNT(*) FROM m365_calendar_delta_changes", [], |row| row.get(0)).unwrap();
+        let count: usize = conn
+            .query_row(
+                "SELECT COUNT(*) FROM m365_calendar_delta_changes",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
         assert_eq!(count, 2);
         conn.execute_batch("CREATE TRIGGER fail_checkpoint BEFORE UPDATE ON m365_calendar_delta_state BEGIN SELECT RAISE(ABORT, 'checkpoint failed'); END;").unwrap();
-        assert!(checkpoint_calendar_delta_page(&mut conn, "calendar-a", &[json!({"id":"event-3"})], "final-delta").is_err());
-        let count: usize = conn.query_row("SELECT COUNT(*) FROM m365_calendar_delta_changes", [], |row| row.get(0)).unwrap();
+        assert!(checkpoint_calendar_delta_page(
+            &mut conn,
+            "calendar-a",
+            &[json!({"id":"event-3"})],
+            "final-delta"
+        )
+        .is_err());
+        let count: usize = conn
+            .query_row(
+                "SELECT COUNT(*) FROM m365_calendar_delta_changes",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
         assert_eq!(count, 2);
-        let cursor: String = conn.query_row("SELECT delta_link FROM m365_calendar_delta_state", [], |row| row.get(0)).unwrap();
+        let cursor: String = conn
+            .query_row(
+                "SELECT delta_link FROM m365_calendar_delta_state",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
         assert_eq!(cursor, "next-page-3");
         conn.execute_batch("DROP TRIGGER fail_checkpoint;").unwrap();
         checkpoint_calendar_delta_page(&mut conn, "calendar-a", &[], "final-delta").unwrap();
-        let cursor: String = conn.query_row("SELECT delta_link FROM m365_calendar_delta_state", [], |row| row.get(0)).unwrap();
+        let cursor: String = conn
+            .query_row(
+                "SELECT delta_link FROM m365_calendar_delta_state",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
         assert_eq!(cursor, "final-delta");
     }
 

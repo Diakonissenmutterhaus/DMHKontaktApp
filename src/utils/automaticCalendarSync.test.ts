@@ -8,10 +8,11 @@ const mocks = vi.hoisted(() => ({
   getAppSetting: vi.fn(),
   getMicrosoft365ConnectionStatus: vi.fn(),
   setAppSetting: vi.fn(),
-  mergeImportedCalendarCategories: vi.fn()
+  mergeImportedCalendarCategories: vi.fn(),
+  mergeMicrosoft365CalendarCategories: vi.fn()
 }));
 vi.mock("../services/db", () => mocks);
-vi.mock("./calendar", () => ({ mergeImportedCalendarCategories: mocks.mergeImportedCalendarCategories }));
+vi.mock("./calendar", () => ({ mergeImportedCalendarCategories: mocks.mergeImportedCalendarCategories, mergeMicrosoft365CalendarCategories: mocks.mergeMicrosoft365CalendarCategories }));
 
 import { calendarStorageUpdatedEventName, describeMicrosoft365SyncFailure, runAutomaticCalendarSync, synchronizationConfigKey } from "./automaticCalendarSync";
 
@@ -104,6 +105,23 @@ describe("automatic Microsoft 365 calendar polling", () => {
     expect(mocks.flushMicrosoft365CalendarOutbox).toHaveBeenCalledOnce();
     expect(mocks.flushMicrosoft365ContactOutbox).not.toHaveBeenCalled();
     expect(mocks.applyMicrosoft365Sync).not.toHaveBeenCalled();
+  });
+
+  it("refreshes changed master-category colors even when Exchange returns no changed events", async () => {
+    mocks.applyMicrosoft365Sync.mockResolvedValue({
+      startedAt: "2026-10-08T10:00:00Z", finishedAt: "2026-10-08T10:00:01Z",
+      created: 0, updated: 0, deleted: 0, ignored: 0, conflicts: 0, errors: 0,
+      errorMessages: [], calendarUpserts: [], calendarDeletes: [],
+      calendarCategories: [{ name: "Vortrag", color: "purple" }]
+    });
+    const refreshed = vi.fn();
+    window.addEventListener(calendarStorageUpdatedEventName, refreshed);
+    const status = await runAutomaticCalendarSync("calendar-poll");
+    expect(status?.state).toBe("success");
+    expect(mocks.mergeMicrosoft365CalendarCategories).toHaveBeenCalledWith([{ name: "Vortrag", color: "purple" }]);
+    expect(refreshed).toHaveBeenCalledOnce();
+    expect(mocks.flushMicrosoft365CalendarOutbox).not.toHaveBeenCalled();
+    window.removeEventListener(calendarStorageUpdatedEventName, refreshed);
   });
 
   it("sends a contact edit without touching the calendar outbox", async () => {

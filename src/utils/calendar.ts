@@ -5,6 +5,7 @@ export const defaultCalendarColor = "blue";
 export const calendarStorageKey = "agendakontakte.calendarEvents";
 export const calendarTrashStorageKey = "agendakontakte.deletedCalendarEvents";
 export const calendarCategoriesStorageKey = "agendakontakte.calendarCategories";
+export const calendarCategoriesUpdatedEventName = "dmh:calendar-categories-updated";
 
 export interface CalendarCategoryDefinition {
   name: string;
@@ -22,6 +23,7 @@ export const calendarColorOptions = [
 const weekdayCodes = ["SU", "MO", "TU", "WE", "TH", "FR", "SA"];
 
 export function calendarColorValue(value?: string): string {
+  if (value === "gray") return "gray";
   return value && calendarColorOptions.some((color) => color.value === value) ? value : defaultCalendarColor;
 }
 
@@ -38,6 +40,24 @@ export function calendarColorFromCategory(category: string, fallback = defaultCa
 
 export function mergeImportedCalendarCategories(events: CalendarEvent[]) {
   return mergeImportedCalendarCategoryDefinitions(events.map((event) => ({ name: event.category, color: event.color })));
+}
+
+export function mergeMicrosoft365CalendarCategories(remote: CalendarCategoryDefinition[]): void {
+  // A completed inbound sync replaces old colours, unlike a file import.
+  let stored: CalendarCategoryDefinition[] = [];
+  try {
+    const parsed: unknown = JSON.parse(localStorage.getItem(calendarCategoriesStorageKey) ?? "[]");
+    if (Array.isArray(parsed)) stored = parsed.filter((entry): entry is CalendarCategoryDefinition =>
+      Boolean(entry && typeof entry.name === "string" && typeof entry.color === "string"));
+  } catch { /* Use the confirmed remote data if local metadata is malformed. */ }
+  const byName = new Map(stored.map((category) => [category.name.trim().toLowerCase(), category]));
+  for (const category of remote) {
+    const name = category.name.trim();
+    if (name) byName.set(name.toLowerCase(), { name, color: calendarColorValue(category.color) });
+  }
+  const next = Array.from(byName.values()).sort((left, right) => left.name.localeCompare(right.name, "de"));
+  localStorage.setItem(calendarCategoriesStorageKey, JSON.stringify(next));
+  window.dispatchEvent(new Event(calendarCategoriesUpdatedEventName));
 }
 
 export function mergeImportedCalendarCategoryDefinitions(imported: CalendarCategoryDefinition[]) {
@@ -78,6 +98,7 @@ export function mergeImportedCalendarCategoryDefinitions(imported: CalendarCateg
 }
 
 export function calendarColorStyle(value?: string) {
+  if (value === "gray") return { "--event-bg": "#e5e7eb", "--event-border": "#6b7280" } as CSSProperties;
   const color = calendarColorOptions.find((option) => option.value === calendarColorValue(value)) ?? calendarColorOptions[0];
   return {
     "--event-bg": color.chip,

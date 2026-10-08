@@ -11,7 +11,7 @@ import { Microsoft365SyncDialog } from "../components/Microsoft365SyncDialog";
 import { StatusMessage } from "../components/StatusMessage";
 import type { Page } from "../components/Sidebar";
 import type { CalendarAvailability, CalendarEvent } from "../types/calendar";
-import { calendarCategoriesStorageKey, calendarColorOptions, calendarColorStyle, calendarColorValue, calendarStorageKey, defaultCalendarColor, expandCalendarEvents, exportCalendarIcs, formatCalendarDate, parseCalendarDate } from "../utils/calendar";
+import { calendarCategoriesStorageKey, calendarCategoriesUpdatedEventName, calendarColorOptions, calendarColorStyle, calendarColorValue, calendarStorageKey, defaultCalendarColor, expandCalendarEvents, exportCalendarIcs, formatCalendarDate, mergeMicrosoft365CalendarCategories, parseCalendarDate } from "../utils/calendar";
 import { findExactCalendarDuplicateGroups, removeExactCalendarDuplicates } from "../utils/calendarDuplicates";
 import {
   calendarAutomaticSyncStatusEventName,
@@ -23,6 +23,7 @@ import {
   listCalendarEvents,
   listCalendarEventsInRange,
   getMicrosoft365ConnectionStatus,
+  getMicrosoft365ReadOnlyTestMode,
   getCalendarOverview,
   listMicrosoft365MasterCategories,
   mergeCalendarEvents,
@@ -419,7 +420,7 @@ function normalizeEvent(event: CalendarEvent): CalendarEvent {
 function normalizeCategory(category: CalendarCategory): CalendarCategory {
   return {
     name: category.name.trim(),
-    color: calendarColorValue(category.color)
+    color: category.color === "gray" ? "gray" : calendarColorValue(category.color)
   };
 }
 
@@ -472,6 +473,7 @@ export function CalendarPage({ advancedMode, onAdvancedModeChange, onNavigate }:
   const [categoryManagerLoading, setCategoryManagerLoading] = useState(false);
   const [categorySaving, setCategorySaving] = useState(false);
   const [categoryRepairing, setCategoryRepairing] = useState(false);
+  const [categoryReadOnly, setCategoryReadOnly] = useState(false);
   const [duplicateCleanupBackup, setDuplicateCleanupBackup] = useState<CalendarDuplicateCleanupBackup | null>(
     () => readDuplicateCleanupBackup()
   );
@@ -542,15 +544,20 @@ export function CalendarPage({ advancedMode, onAdvancedModeChange, onNavigate }:
   }, [loadVisibleEvents]);
 
   useEffect(() => {
-    try {
-      const savedCategories = localStorage.getItem(calendarCategoriesStorageKey);
-      if (savedCategories) {
-        const storedCategories = (JSON.parse(savedCategories) as CalendarCategory[]).map(normalizeCategory).filter((category) => category.name);
-        setCategories(storedCategories);
+    const reloadCategories = () => {
+      try {
+        const savedCategories = localStorage.getItem(calendarCategoriesStorageKey);
+        if (savedCategories) {
+          const storedCategories = (JSON.parse(savedCategories) as CalendarCategory[]).map(normalizeCategory).filter((category) => category.name);
+          setCategories(storedCategories);
+        }
+      } catch {
+        setMessage("Die gespeicherten Kalenderkategorien konnten nicht geladen werden.");
       }
-    } catch {
-      setMessage("Die gespeicherten Kalenderkategorien konnten nicht geladen werden.");
-    }
+    };
+    reloadCategories();
+    window.addEventListener(calendarCategoriesUpdatedEventName, reloadCategories);
+    return () => window.removeEventListener(calendarCategoriesUpdatedEventName, reloadCategories);
   }, []);
 
   useEffect(() => {
@@ -750,15 +757,7 @@ export function CalendarPage({ advancedMode, onAdvancedModeChange, onNavigate }:
   };
 
   const mergeRemoteCategories = (remoteCategories: CalendarCategory[]) => {
-    setCategories((current) => {
-      const byName = new Map<string, CalendarCategory>();
-      for (const category of [...current, ...remoteCategories].map(normalizeCategory).filter((entry) => entry.name)) {
-        byName.set(category.name.toLowerCase(), category);
-      }
-      const next = Array.from(byName.values()).sort((left, right) => left.name.localeCompare(right.name, "de"));
-      localStorage.setItem(calendarCategoriesStorageKey, JSON.stringify(next));
-      return next;
-    });
+    mergeMicrosoft365CalendarCategories(remoteCategories);
   };
 
   const openCategoryManager = async () => {
@@ -768,6 +767,7 @@ export function CalendarPage({ advancedMode, onAdvancedModeChange, onNavigate }:
 
     setCategoryManagerLoading(true);
     try {
+      setCategoryReadOnly(await getMicrosoft365ReadOnlyTestMode());
       const status = await getMicrosoft365ConnectionStatus();
       if (!status.connected) return;
       mergeRemoteCategories(await listMicrosoft365MasterCategories());
@@ -784,6 +784,8 @@ export function CalendarPage({ advancedMode, onAdvancedModeChange, onNavigate }:
     if (!status.connected) return false;
     const saved = await saveMicrosoft365MasterCategory(category);
     mergeRemoteCategories([saved]);
+    await loadVisibleEvents();
+    window.dispatchEvent(new Event(calendarStorageUpdatedEventName));
     return true;
   };
 
@@ -951,6 +953,14 @@ export function CalendarPage({ advancedMode, onAdvancedModeChange, onNavigate }:
   const repairExchangeCategoryColors = async () => {
     setCategoryRepairing(true);
     try {
+      if (await getMicrosoft365ReadOnlyTestMode()) {
+        setActionResult({
+          title: "Microsoft-365-Testmodus: nur lesen",
+          summary: "Diese App darf keine Exchange-Farben ändern. Öffnen Sie die verbundene Admin-Test-App ohne „NUR LESEN“, um die Farben zu reparieren.",
+          tone: "info"
+        });
+        return;
+      }
       const preview = await previewMicrosoft365CalendarCategoryRepair();
       if (preview.linkedEvents === 0) {
         setActionResult({
@@ -976,11 +986,12 @@ export function CalendarPage({ advancedMode, onAdvancedModeChange, onNavigate }:
         mergeRemoteCategories(await listMicrosoft365MasterCategories());
       }
       setActionResult({
-        title: result.errors === 0 ? "Exchange-Farben repariert" : "Exchange-Farben teilweise repariert",
-        summary: `${result.updated} von ${result.scanned} verknüpften Terminen wurden ausschließlich bei der Kategorie aktualisiert.`,
+        title: result.errors === 0 ? "Kategorien in Exchange bestätigt" : "Exchange-Kategorien teilweise bestätigt",
+        summary: `Exchange hat die gespeicherte Kategorie bei ${result.updated} von ${result.scanned} erneut gelesenen Terminen bestätigt.`,
         details: [
           `Die ${preview.pendingOperations} ausstehenden Synchronisierungsvorgänge wurden nicht ausgeführt oder verändert.`,
           "Titel, Uhrzeit, Teilnehmer und Inhalte der Termine blieben unverändert.",
+          "Falls Teams weiterhin Grau zeigt, laden Sie den Kalender neu und prüfen Sie die Kategorie desselben Termins in Outlook.",
           ...result.errorMessages
         ],
         tone: result.errors === 0 ? "success" : "error"
@@ -1267,6 +1278,10 @@ export function CalendarPage({ advancedMode, onAdvancedModeChange, onNavigate }:
     persistSingleEvent({
       ...current,
       ...update,
+      // Exchange represents event colours through categories. A direct colour
+      // selection must assign its colour category instead of retaining an old
+      // custom category whose mailbox colour would override the selection.
+      category: update.color !== undefined && update.category === undefined ? "" : update.category ?? current.category,
       meeting: nextMeeting,
       color: matchingCategory?.color ?? update.color ?? current.color,
       updatedAt: new Date().toISOString()
@@ -1455,6 +1470,7 @@ export function CalendarPage({ advancedMode, onAdvancedModeChange, onNavigate }:
                   <X size={22} />
                 </button>
               </div>
+              {categoryReadOnly && <p role="status">Microsoft-365-Testmodus: nur lesen. Farben können hier angezeigt, aber nicht in Exchange geändert werden.</p>}
               <section className="calendar-category-manager-card">
                 <div className="calendar-category-card-heading">
                   <div><h4>Neue Kategorie</h4><p>Zum Beispiel „Vortrag“ oder „Dienstbesprechung“.</p></div>
@@ -1472,7 +1488,7 @@ export function CalendarPage({ advancedMode, onAdvancedModeChange, onNavigate }:
                   </label>
                 </div>
                 <div className="button-row">
-                  <button className="primary" type="button" onClick={() => void createCategory()} disabled={categorySaving}>{categorySaving ? "Wird gespeichert …" : "Kategorie anlegen"}</button>
+                  <button className="primary" type="button" onClick={() => void createCategory()} disabled={categorySaving || categoryManagerLoading || categoryReadOnly}>{categorySaving ? "Wird gespeichert …" : "Kategorie anlegen"}</button>
                 </div>
               </section>
               <section className="calendar-category-manager-card">
@@ -1487,11 +1503,12 @@ export function CalendarPage({ advancedMode, onAdvancedModeChange, onNavigate }:
                     {categories.map((category) => {
                       const option = calendarColorOptions.find((color) => color.value === calendarColorValue(category.color)) ?? calendarColorOptions[0];
                       return <li key={category.name}>
-                        <span className="calendar-category-swatch" style={{ background: option.border }} aria-hidden="true" />
+                        <span className="calendar-category-swatch" style={{ background: category.color === "gray" ? "#737373" : option.border }} aria-hidden="true" />
                         <strong>{category.name}</strong>
                         <label>
                           <span className="sr-only">Farbe für {category.name}</span>
-                          <select value={calendarColorValue(category.color)} disabled={categorySaving} onChange={(event) => void updateCategoryColor(category, event.target.value)}>
+                          <select value={category.color} disabled={categorySaving || categoryManagerLoading || categoryReadOnly} onChange={(event) => void updateCategoryColor(category, event.target.value)}>
+                            {category.color === "gray" && <option value="gray" disabled>Ohne sichtbare Exchange-Farbe</option>}
                             {calendarColorOptions.map((color) => <option value={color.value} key={color.value}>{color.label}</option>)}
                           </select>
                         </label>
@@ -1504,7 +1521,7 @@ export function CalendarPage({ advancedMode, onAdvancedModeChange, onNavigate }:
                     <strong>Exchange-Farben sicher reparieren</strong>
                     <p>Prüft zuerst eine Vorschau und ändert danach ausschließlich Kategorien bereits verknüpfter Termine. Die normale Synchronisierungswarteschlange bleibt unberührt.</p>
                   </div>
-                  <button className="primary" type="button" onClick={() => void repairExchangeCategoryColors()} disabled={categoryRepairing || categorySaving}>
+                  <button className="primary" type="button" onClick={() => void repairExchangeCategoryColors()} disabled={categoryRepairing || categorySaving || categoryManagerLoading || categoryReadOnly}>
                     <Palette size={18} /> {categoryRepairing ? "Farben werden geprüft …" : "Farben prüfen und reparieren"}
                   </button>
                 </div>

@@ -25,8 +25,7 @@ import { applyMicrosoft365Sync, cancelMicrosoft365Connection, connectMicrosoft36
 import type { Microsoft365ConflictDecision, Microsoft365ConnectionStatus, Microsoft365DeviceCode, Microsoft365PollResult, Microsoft365SyncHistoryEntry, Microsoft365SyncPreview, Microsoft365SyncSource, Microsoft365SyncSources } from "../types/m365";
 import { defaultSyncConfig, parseSyncConfig, type SyncConfig, type SyncDirection } from "../types/sync";
 import { captureBrowserStorage } from "../utils/backup";
-import { mergeImportedCalendarCategories } from "../utils/calendar";
-import { calendarChangedEventName, calendarStorageUpdatedEventName, emptyMicrosoft365SynchronizationRuntimeStatus, m365SafeImportTestMode, parseSynchronizationRuntimeStatus, recordMicrosoft365SynchronizationError, recordMicrosoft365SynchronizationSuccess, synchronizationConfigKey as syncConfigKey, synchronizationHistoryKey as syncHistoryKey, synchronizationRuntimeStatusKey, synchronizationRuntimeStatusUpdatedEventName, type Microsoft365SynchronizationRuntimeStatus } from "../utils/automaticCalendarSync";
+import { announceMicrosoft365CalendarChanges, calendarChangedEventName, emptyMicrosoft365SynchronizationRuntimeStatus, m365SafeImportTestMode, parseSynchronizationRuntimeStatus, recordMicrosoft365SynchronizationError, recordMicrosoft365SynchronizationSuccess, synchronizationConfigKey as syncConfigKey, synchronizationHistoryKey as syncHistoryKey, synchronizationRuntimeStatusKey, synchronizationRuntimeStatusUpdatedEventName, type Microsoft365SynchronizationRuntimeStatus } from "../utils/automaticCalendarSync";
 import { initializeMicrosoft365SourceSelection, isTechnicalMicrosoft365Source } from "../utils/microsoft365SyncConfig";
 
 interface SynchronizationsPageProps {
@@ -427,12 +426,7 @@ export function SynchronizationsPage({ onNavigate, embedded = false, onClose }: 
         decisions: conflictDecisions,
         backup
       });
-      if (result.calendarUpserts.length > 0 || result.calendarDeletes.length > 0) {
-        // Rust has already saved these calendar changes together with their
-        // delta acknowledgements. Only refresh the local UI metadata here.
-        mergeImportedCalendarCategories(result.calendarUpserts);
-        window.dispatchEvent(new Event(calendarStorageUpdatedEventName));
-      }
+      announceMicrosoft365CalendarChanges(result);
       await persistHistory({ ...result, id: `${result.startedAt}-${Date.now()}` });
       await recordMicrosoft365SynchronizationSuccess(config, result);
       setPreview(null);

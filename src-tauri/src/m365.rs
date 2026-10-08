@@ -28,6 +28,7 @@ const GRAPH_PROFILE_URL: &str =
 const LOGIN_SCOPES: &str = "openid profile offline_access User.Read Contacts.ReadWrite Contacts.ReadWrite.Shared Calendars.ReadWrite Calendars.ReadWrite.Shared Calendars.Read.Shared MailboxSettings.ReadWrite Files.ReadWrite.All Sites.Read.All";
 const INTERACTIVE_LOGIN_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 const GRAPH_MAX_ATTEMPTS: usize = 5;
+const GRAPH_REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
 const GRAPH_MAX_PAGES: usize = 100_000;
 // Large enough to drain a 200k-event first import in roughly 40 bounded
 // transactions, while keeping each WebView/SQLite hand-off manageable.
@@ -264,6 +265,7 @@ pub struct Microsoft365SyncResult {
     pub error_messages: Vec<String>,
     pub calendar_upserts: Vec<crate::CalendarEvent>,
     pub calendar_deletes: Vec<String>,
+    pub calendar_categories: Vec<Microsoft365CalendarCategory>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -885,6 +887,7 @@ async fn graph_json_response(access_token: &str, url: &str) -> Result<Value, Str
     for attempt in 0..GRAPH_MAX_ATTEMPTS {
         let response = match http_client()
             .get(url)
+            .timeout(GRAPH_REQUEST_TIMEOUT)
             .bearer_auth(access_token)
             .header(
                 "Prefer",
@@ -2283,7 +2286,7 @@ fn outlook_category_color(value: &str) -> &'static str {
         "preset7" | "preset22" => "blue",
         "preset8" | "preset23" => "purple",
         "preset10" | "preset11" | "preset12" | "preset13" | "preset14" => "gray",
-        _ => "blue",
+        _ => "gray",
     }
 }
 
@@ -2299,17 +2302,55 @@ fn outlook_category_has_color(value: &str) -> bool {
     number <= 24 && !(10..=14).contains(&number)
 }
 
+fn outlook_category_has_preset(value: &str) -> bool {
+    value
+        .trim()
+        .to_ascii_lowercase()
+        .strip_prefix("preset")
+        .and_then(|number| number.parse::<u8>().ok())
+        .is_some_and(|number| number <= 24)
+}
+
 fn dmh_category_for_calendar_color(value: &str) -> (&'static str, &'static str) {
     match value.trim().to_ascii_lowercase().as_str() {
         "red" => ("DMH Farbe: Rot", "preset0"),
         "green" => ("DMH Farbe: Grün", "preset4"),
-        "yellow" => ("DMH Farbe: Gelb", "preset1"),
+        "yellow" => ("DMH Farbe: Gelb", "preset3"),
         "purple" => ("DMH Farbe: Lila", "preset8"),
         // A gray local/imported value must never create a gray category in
         // Exchange. Use the default blue category instead.
         "gray" | "grey" => ("DMH Farbe: Blau", "preset7"),
         _ => ("DMH Farbe: Blau", "preset7"),
     }
+}
+
+fn calendar_category_preset(name: &str, local_color: &str) -> &'static str {
+    // Generated category names describe their colour. An old appointment's
+    // cached colour must not turn "DMH Farbe: Blau" into a green category.
+    match name.trim().to_lowercase().as_str() {
+        "dmh farbe: rot" => "preset0",
+        "dmh farbe: grün" => "preset4",
+        "dmh farbe: gelb" => "preset3",
+        "dmh farbe: lila" => "preset8",
+        "dmh farbe: grau" | "dmh farbe: blau" => "preset7",
+        _ => dmh_category_for_calendar_color(local_color).1,
+    }
+}
+
+fn expected_calendar_category_preset(
+    name: &str,
+    local_color: &str,
+    existing: Option<&Value>,
+    force_local_color: bool,
+) -> String {
+    if force_local_color {
+        return dmh_category_for_calendar_color(local_color).1.to_string();
+    }
+    existing
+        .map(|category| value_text(category, "color"))
+        .filter(|color| outlook_category_has_preset(color))
+        .unwrap_or_else(|| calendar_category_preset(name, local_color))
+        .to_string()
 }
 
 fn graph_category_for_event(event: &crate::CalendarEvent) -> String {
@@ -2383,15 +2424,59 @@ fn required_calendar_category_colors(
     required
 }
 
-fn category_needs_repair(name: &str, actual: &str, expected: &str) -> bool {
-    !outlook_category_has_color(actual)
-        || (name.to_ascii_lowercase().starts_with("dmh farbe:")
-            && !actual.eq_ignore_ascii_case(expected))
+fn category_needs_repair(_name: &str, actual: &str, expected: &str) -> bool {
+    !outlook_category_has_preset(actual) || !actual.eq_ignore_ascii_case(expected)
+}
+
+fn verified_calendar_category_names(
+    categories: Vec<Value>,
+    needed: &HashMap<String, (String, String)>,
+) -> Result<HashMap<String, String>, String> {
+    let by_name = categories
+        .into_iter()
+        .filter_map(|category| {
+            let name = value_text(&category, "displayName").trim().to_lowercase();
+            (!name.is_empty()).then_some((name, category))
+        })
+        .collect::<HashMap<_, _>>();
+    for (key, (name, expected)) in needed {
+        let actual = by_name
+            .get(key)
+            .map(|category| value_text(category, "color"))
+            .unwrap_or("");
+        if category_needs_repair(name, actual, expected) {
+            return Err(format!(
+                "Die Exchange-Kategorie „{name}“ hat noch keine bestätigte Farbe (erwartet: {expected}, erhalten: {}). Der Termin wird später erneut synchronisiert.",
+                if actual.is_empty() { "Kategorie fehlt" } else { actual }
+            ));
+        }
+    }
+    Ok(by_name
+        .into_iter()
+        .filter(|(_, category)| outlook_category_has_preset(value_text(category, "color")))
+        .map(|(key, category)| (key, value_text(&category, "displayName").trim().to_string()))
+        .collect())
+}
+
+fn verify_calendar_event_category(value: &Value, category: &str) -> Result<(), String> {
+    if value
+        .get("categories")
+        .and_then(Value::as_array)
+        .and_then(|categories| categories.first())
+        .and_then(Value::as_str)
+        == Some(category)
+    {
+        Ok(())
+    } else {
+        Err(format!(
+            "Exchange hat die Kategorie „{category}“ am erneut gelesenen Termin nicht bestätigt. Bitte erneut prüfen."
+        ))
+    }
 }
 
 async fn ensure_m365_calendar_categories(
     access_token: &str,
-    categories: impl IntoIterator<Item = (String, String)>,
+    categories: impl IntoIterator<Item = (String, String, bool)>,
 ) -> Result<HashMap<String, String>, String> {
     let existing = graph_collection(
         access_token,
@@ -2404,39 +2489,49 @@ async fn ensure_m365_calendar_categories(
         (!name.is_empty()).then_some((name, category))
     })
     .collect::<HashMap<_, _>>();
-    let mut needed = HashMap::<String, (String, &'static str)>::new();
-    for (name, local_color) in categories {
-        let color = dmh_category_for_calendar_color(&local_color).1;
-        needed.entry(name.to_lowercase()).or_insert((name, color));
+    let mut needed = HashMap::<String, (String, String)>::new();
+    for (name, local_color, force_local_color) in categories {
+        // Preserve the chosen Exchange colour. Cached event colours are only
+        // a fallback for missing or uncoloured master categories.
+        let color = expected_calendar_category_preset(
+            &name,
+            &local_color,
+            existing.get(&name.to_lowercase()),
+            force_local_color,
+        );
+        if force_local_color {
+            needed.insert(name.to_lowercase(), (name, color));
+        } else {
+            needed.entry(name.to_lowercase()).or_insert((name, color));
+        }
     }
-    // Repair categories created by earlier app versions, including the old
-    // gray default, even when no local event still refers to that category.
+    // Fill in generated categories without a valid preset. A valid colour
+    // chosen in Teams is retained until an explicit app colour edit or repair.
     for (key, category) in &existing {
-        if outlook_category_has_color(value_text(category, "color")) {
+        if outlook_category_has_preset(value_text(category, "color")) {
             continue;
         }
         let app_color = match key.as_str() {
             "dmh farbe: rot" => Some("preset0"),
             "dmh farbe: grün" => Some("preset4"),
-            "dmh farbe: gelb" => Some("preset1"),
+            "dmh farbe: gelb" => Some("preset3"),
             "dmh farbe: lila" => Some("preset8"),
             "dmh farbe: grau" | "dmh farbe: blau" => Some("preset7"),
             _ => None,
         };
         if let Some(color) = app_color {
-            needed.insert(
-                key.clone(),
+            needed.entry(key.clone()).or_insert_with(|| {
                 (
                     value_text(category, "displayName").trim().to_string(),
-                    color,
-                ),
-            );
+                    color.to_string(),
+                )
+            });
         }
     }
     let mut changed = false;
     for (key, (name, color)) in &needed {
         let write = match existing.get(key) {
-            Some(category) if !category_needs_repair(key, value_text(category, "color"), color) => {
+            Some(category) if value_text(category, "color").eq_ignore_ascii_case(color) => {
                 continue;
             }
             Some(category) => {
@@ -2479,20 +2574,7 @@ async fn ensure_m365_calendar_categories(
     } else {
         existing.into_values().collect()
     };
-    let verified = verified_categories
-        .into_iter()
-        .filter(|category| outlook_category_has_color(value_text(category, "color")))
-        .filter_map(|category| {
-            let name = value_text(&category, "displayName").trim().to_string();
-            (!name.is_empty()).then(|| (name.to_lowercase(), name))
-        })
-        .collect::<HashMap<_, _>>();
-    if let Some((_, (name, _))) = needed.iter().find(|(key, _)| !verified.contains_key(*key)) {
-        return Err(format!(
-                "Die Exchange-Kategorie „{name}“ hat noch keine bestätigte Farbe. Der Termin wird später erneut synchronisiert."
-            ));
-    }
-    Ok(verified)
+    verified_calendar_category_names(verified_categories, &needed)
 }
 
 async fn m365_master_categories(
@@ -2526,16 +2608,52 @@ fn m365_master_category_from_value(value: &Value) -> Option<Microsoft365Calendar
     })
 }
 
-async fn m365_master_category_colors(access_token: &str) -> HashMap<String, String> {
-    m365_master_categories(access_token)
-        .await
-        .unwrap_or_default()
-        .into_iter()
-        .map(|category| (category.name.to_lowercase(), category.color))
-        .collect()
+fn refresh_calendar_category_colors_in_db(
+    conn: &rusqlite::Connection,
+    categories: &[Microsoft365CalendarCategory],
+    source_ids: Option<&[String]>,
+) -> Result<Vec<crate::CalendarEvent>, String> {
+    if categories.is_empty() || source_ids.is_some_and(|ids| ids.is_empty()) {
+        return Ok(Vec::new());
+    }
+    let colors: HashMap<_, _> = categories
+        .iter()
+        .map(|category| (category.name.trim().to_lowercase(), category.color.as_str()))
+        .collect();
+    let tx = conn
+        .unchecked_transaction()
+        .map_err(|error| error.to_string())?;
+    crate::set_audit_source(&tx, "m365")?;
+    let mut changed = Vec::new();
+    for mut event in crate::read_calendar_events(&tx, false)? {
+        if source_ids.is_some_and(|ids| {
+            !ids.iter()
+                .any(|source| linked_calendar_remote_id(&event, source).is_some())
+        }) {
+            continue;
+        }
+        let Some(color) = colors.get(&event.category.trim().to_lowercase()) else {
+            continue;
+        };
+        if event.color == *color {
+            continue;
+        }
+        event.color = (*color).to_string();
+        // Colour metadata must not advance the content timestamp or enqueue
+        // an outgoing write that would undo the change just read from Teams.
+        tx.execute("UPDATE calendar_events SET event_json = json_set(event_json, '$.color', ?1) WHERE id = ?2", params![color, event.id])
+            .map_err(|error| error.to_string())?;
+        changed.push(event);
+    }
+    crate::set_audit_source(&tx, "user")?;
+    tx.commit().map_err(|error| error.to_string())?;
+    Ok(changed)
 }
 
 fn apply_m365_category_color(value: &mut Value, colors: &HashMap<String, String>) {
+    if value.get("categories").is_none() {
+        return;
+    }
     let category = value
         .get("categories")
         .and_then(Value::as_array)
@@ -2544,13 +2662,15 @@ fn apply_m365_category_color(value: &mut Value, colors: &HashMap<String, String>
         .unwrap_or("")
         .trim()
         .to_lowercase();
-    let Some(color) = colors.get(&category) else {
-        return;
+    let color = if category.is_empty() {
+        "blue"
+    } else {
+        colors.get(&category).map(String::as_str).unwrap_or("gray")
     };
     if let Some(object) = value.as_object_mut() {
         object.insert(
             "_dmhCategoryColor".to_string(),
-            Value::String(color.clone()),
+            Value::String(color.to_string()),
         );
     }
 }
@@ -3143,6 +3263,8 @@ struct Microsoft365SyncPlan {
     delta_operation_acks: HashMap<String, (String, String)>,
     delta_noop_acks: Vec<(String, String)>,
     source_errors: Vec<String>,
+    calendar_categories: Vec<Microsoft365CalendarCategory>,
+    category_import_source_ids: Vec<String>,
 }
 
 const MAX_CONTACT_OPERATIONS_PER_SYNC: usize = 250;
@@ -3301,11 +3423,24 @@ async fn build_m365_sync_plan(
     } else {
         HashSet::new()
     };
-    let master_category_colors = if request.calendars {
-        m365_master_category_colors(access_token).await
+    let calendar_categories = if request.calendars {
+        m365_master_categories(access_token).await?
     } else {
-        HashMap::new()
+        Vec::new()
     };
+    let master_category_colors = calendar_categories
+        .iter()
+        .map(|category| (category.name.to_lowercase(), category.color.clone()))
+        .collect();
+    let category_import_source_ids = sources
+        .calendars
+        .iter()
+        .filter(|source| {
+            calendar_source_is_enabled(request, &selected_calendars, source)
+                && source_direction(request, &source.id) != "export"
+        })
+        .map(|source| source.id.clone())
+        .collect();
 
     if request.contacts {
         for source in sources.contacts.iter().filter(|source| {
@@ -4069,6 +4204,8 @@ async fn build_m365_sync_plan(
         delta_operation_acks,
         delta_noop_acks,
         source_errors,
+        calendar_categories,
+        category_import_source_ids,
     })
 }
 
@@ -4088,6 +4225,7 @@ async fn graph_write(
     for attempt in 0..GRAPH_MAX_ATTEMPTS {
         let response = match http_client()
             .request(method.clone(), url)
+            .timeout(GRAPH_REQUEST_TIMEOUT)
             .bearer_auth(access_token)
             .header("Prefer", "outlook.timezone=\"W. Europe Standard Time\"")
             .json(body)
@@ -4575,6 +4713,7 @@ pub async fn flush_m365_calendar_outbox(
                     (
                         graph_category_for_event(&entry.event),
                         entry.event.color.clone(),
+                        entry.event.category.trim().is_empty(),
                     )
                 }),
         )
@@ -4845,7 +4984,11 @@ pub async fn apply_m365_sync(
             let mut names = Vec::with_capacity(2);
             if let PlannedPayload::Calendar { local, remote } = &operation.payload {
                 if let Some(event) = local {
-                    names.push((graph_category_for_event(event), event.color.clone()));
+                    names.push((
+                        graph_category_for_event(event),
+                        event.color.clone(),
+                        event.category.trim().is_empty(),
+                    ));
                 }
                 if let Some(event) = remote {
                     let name = event
@@ -4863,6 +5006,7 @@ pub async fn apply_m365_sync(
                             name.to_string()
                         },
                         color.to_string(),
+                        false,
                     ));
                 }
             }
@@ -4875,6 +5019,7 @@ pub async fn apply_m365_sync(
     let conflicts = plan.preview.conflicts;
     let mut delta_acks_to_commit = plan.delta_noop_acks;
     let delta_operation_acks = plan.delta_operation_acks;
+    let category_import_source_ids = plan.category_import_source_ids;
     let mut result = Microsoft365SyncResult {
         started_at,
         finished_at: String::new(),
@@ -4887,6 +5032,7 @@ pub async fn apply_m365_sync(
         error_messages: plan.source_errors,
         calendar_upserts: Vec::new(),
         calendar_deletes: Vec::new(),
+        calendar_categories: plan.calendar_categories,
     };
 
     for operation in plan.operations {
@@ -5305,6 +5451,29 @@ pub async fn apply_m365_sync(
         &result.calendar_deletes,
         &delta_acks_to_commit,
     )?;
+    if needs_calendar_write_categories {
+        result.calendar_categories = m365_master_categories(&access_token).await?;
+    }
+    let recolored = refresh_calendar_category_colors_in_db(
+        &open_db(&app)?,
+        &result.calendar_categories,
+        Some(&category_import_source_ids),
+    )?;
+    let upsert_indices: HashMap<_, _> = result
+        .calendar_upserts
+        .iter()
+        .enumerate()
+        .map(|(index, event)| (event.id.clone(), index))
+        .collect();
+    for event in recolored {
+        if let Some(index) = upsert_indices.get(&event.id) {
+            result.calendar_upserts[*index] = event;
+        } else {
+            // Category metadata makes the WebView reload its visible range.
+            // Avoid shipping every historical event when one category changes.
+            result.updated += 1;
+        }
+    }
     result.finished_at = Utc::now().to_rfc3339();
     Ok(result)
 }
@@ -5494,7 +5663,7 @@ pub async fn repair_m365_calendar_categories(
             &access_token,
             targets
                 .iter()
-                .map(|target| (target.category.clone(), target.color.clone())),
+                .map(|target| (target.category.clone(), target.color.clone(), true)),
         )
         .await?;
         let scanned = targets.len();
@@ -5505,12 +5674,21 @@ pub async fn repair_m365_calendar_categories(
                 .cloned()
                 .unwrap_or(target.category.clone());
             async move {
-                let outcome = graph_write(
-                    access_token,
-                    reqwest::Method::PATCH,
-                    &target.url,
-                    &json!({ "categories": [category] }),
-                )
+                let outcome = async {
+                    graph_write(
+                        access_token,
+                        reqwest::Method::PATCH,
+                        &target.url,
+                        &json!({ "categories": [category] }),
+                    )
+                    .await?;
+                    let saved = graph_json(
+                        access_token,
+                        &format!("{}?$select=id,categories", target.url),
+                    )
+                    .await?;
+                    verify_calendar_event_category(&saved, &category)
+                }
                 .await;
                 (target.title, outcome)
             }
@@ -5560,6 +5738,11 @@ pub async fn save_m365_master_category(
     name: String,
     color: String,
 ) -> Result<Microsoft365CalendarCategory, String> {
+    if m365_read_only_test_mode() {
+        return Err("Der sichere M365-Testmodus sperrt ausgehende Änderungen.".to_string());
+    }
+    let state = app.state::<crate::AppState>();
+    let _sync_guard = state.m365.sync_gate.lock().await;
     let name = name.trim();
     if name.is_empty() {
         return Err("Bitte geben Sie einen Kategorienamen ein.".to_string());
@@ -5613,8 +5796,10 @@ pub async fn save_m365_master_category(
         .find(|category| value_text(category, "displayName").trim().eq_ignore_ascii_case(name))
         .filter(|category| value_text(category, "color").eq_ignore_ascii_case(outlook_color))
         .ok_or_else(|| "Microsoft 365 hat die neue Kategorienfarbe noch nicht bestätigt. Bitte versuchen Sie es erneut.".to_string())?;
-        m365_master_category_from_value(&saved)
-            .ok_or_else(|| "Microsoft 365 hat die Kategorie unvollständig zurückgegeben.".to_string())
+        let category = m365_master_category_from_value(&saved)
+            .ok_or_else(|| "Microsoft 365 hat die Kategorie unvollständig zurückgegeben.".to_string())?;
+        refresh_calendar_category_colors_in_db(&open_db(&app)?, std::slice::from_ref(&category), None)?;
+        Ok(category)
     }
     .await;
     access_token.zeroize();
@@ -6893,6 +7078,207 @@ mod tests {
         assert_eq!(outlook_category_color("preset8"), "purple");
         assert_eq!(outlook_category_color("preset12"), "gray");
         assert_eq!(outlook_category_color("preset18"), "yellow");
+        assert_eq!(outlook_category_color("None"), "gray");
+        assert_eq!(outlook_category_color("unknown"), "gray");
+        assert_eq!(dmh_category_for_calendar_color("yellow").1, "preset3");
+    }
+
+    #[test]
+    fn stale_event_colors_do_not_reset_the_chosen_exchange_color() {
+        let chosen = json!({ "displayName": "DMH Farbe: Blau", "color": "preset4" });
+        assert_eq!(
+            expected_calendar_category_preset("DMH Farbe: Blau", "blue", Some(&chosen), false),
+            "preset4"
+        );
+        let uncolored = json!({ "displayName": "DMH Farbe: Blau", "color": "None" });
+        assert_eq!(
+            expected_calendar_category_preset("DMH Farbe: Blau", "green", Some(&uncolored), false),
+            "preset7"
+        );
+        assert_eq!(
+            expected_calendar_category_preset("DMH Farbe: Blau", "green", None, false),
+            "preset7"
+        );
+        assert_eq!(
+            expected_calendar_category_preset("Vortrag", "green", None, false),
+            "preset4"
+        );
+    }
+
+    #[test]
+    fn explicit_app_color_choices_override_remote_color_for_the_color_category() {
+        let old = json!({ "displayName": "DMH Farbe: Blau", "color": "preset4" });
+        for (color, preset) in [
+            ("blue", "preset7"),
+            ("green", "preset4"),
+            ("yellow", "preset3"),
+            ("red", "preset0"),
+            ("purple", "preset8"),
+        ] {
+            assert_eq!(
+                expected_calendar_category_preset("DMH Farbe: Blau", color, Some(&old), true),
+                preset
+            );
+        }
+        let gray = json!({ "color": "preset14" });
+        assert_eq!(
+            expected_calendar_category_preset("Kategorie", "blue", Some(&gray), false),
+            "preset14"
+        );
+    }
+
+    #[test]
+    fn remote_category_assignment_and_removal_update_the_local_color() {
+        let source = calendar_source("calendar-a");
+        let mut local = calendar_event("m365:calendar-a:event-1");
+        local.category = "Vortrag".to_string();
+        local.color = "red".to_string();
+        let colors = HashMap::from([("vortrag".to_string(), "green".to_string())]);
+        for (categories, expected_category, expected_color) in [
+            (json!(["Vortrag"]), "Vortrag", "green"),
+            (json!([]), "", "blue"),
+            (
+                json!(["Unbekannte Kategorie"]),
+                "Unbekannte Kategorie",
+                "gray",
+            ),
+        ] {
+            let mut remote = json!({ "id": "event-1", "categories": categories });
+            apply_m365_category_color(&mut remote, &colors);
+            let mapped = remote_event_to_local(&remote, &source, Some(&local));
+            assert_eq!(mapped.category, expected_category);
+            assert_eq!(mapped.color, expected_color);
+            assert_eq!(mapped.title, local.title);
+        }
+    }
+
+    #[test]
+    fn master_category_color_changes_refresh_events_without_event_delta_or_outgoing_writes() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch("CREATE TABLE calendar_events (id TEXT PRIMARY KEY, starts_at TEXT, updated_at TEXT, deleted_at TEXT, event_json TEXT);
+            CREATE TABLE audit_context (id INTEGER PRIMARY KEY, source TEXT);
+            INSERT INTO audit_context VALUES (1, 'user');
+            CREATE TABLE calendar_sync_outbox (event_id TEXT PRIMARY KEY, action TEXT, attempts INTEGER);").unwrap();
+        for id in [
+            "m365:calendar-a:event-1",
+            "m365:calendar-b:event-2",
+            "local-event",
+        ] {
+            let mut event = calendar_event(id);
+            event.category = "Vortrag".to_string();
+            event.color = "red".to_string();
+            conn.execute(
+                "INSERT INTO calendar_events VALUES (?1, ?2, 'unchanged', NULL, ?3)",
+                params![id, event.starts_at, serde_json::to_string(&event).unwrap()],
+            )
+            .unwrap();
+        }
+        conn.execute(
+            "INSERT INTO calendar_sync_outbox VALUES ('m365:calendar-a:event-1', 'upsert', 2)",
+            [],
+        )
+        .unwrap();
+        let categories = vec![Microsoft365CalendarCategory {
+            name: "vOrTrAg".to_string(),
+            color: "green".to_string(),
+        }];
+        let changed = refresh_calendar_category_colors_in_db(
+            &conn,
+            &categories,
+            Some(&["calendar-a".to_string()]),
+        )
+        .unwrap();
+        assert_eq!(changed.len(), 1);
+        assert_eq!(changed[0].color, "green");
+        assert_eq!(
+            changed[0].updated_at,
+            calendar_event("m365:calendar-a:event-1").updated_at
+        );
+        let events = crate::read_calendar_events(&conn, false).unwrap();
+        assert!(events
+            .iter()
+            .filter(|event| event.id != changed[0].id)
+            .all(|event| event.color == "red"));
+        let (action, attempts): (String, usize) = conn
+            .query_row(
+                "SELECT action, attempts FROM calendar_sync_outbox",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!((action.as_str(), attempts), ("upsert", 2));
+        assert_eq!(
+            conn.query_row(
+                "SELECT updated_at FROM calendar_events WHERE id = ?1",
+                [&changed[0].id],
+                |row| row.get::<_, String>(0)
+            )
+            .unwrap(),
+            "unchanged"
+        );
+        assert!(refresh_calendar_category_colors_in_db(
+            &conn,
+            &categories,
+            Some(&["calendar-a".to_string()])
+        )
+        .unwrap()
+        .is_empty());
+        let local_category_change = vec![Microsoft365CalendarCategory {
+            name: "Vortrag".to_string(),
+            color: "purple".to_string(),
+        }];
+        assert_eq!(
+            refresh_calendar_category_colors_in_db(&conn, &local_category_change, None)
+                .unwrap()
+                .len(),
+            3
+        );
+        assert_eq!(
+            conn.query_row("SELECT COUNT(*) FROM calendar_sync_outbox", [], |row| row
+                .get::<_, usize>(
+                0
+            ))
+            .unwrap(),
+            1
+        );
+    }
+
+    #[test]
+    fn category_verification_rejects_missing_gray_and_wrong_visible_colors() {
+        let needed = HashMap::from([(
+            "dmh farbe: blau".to_string(),
+            ("DMH Farbe: Blau".to_string(), "preset7".to_string()),
+        )]);
+        assert!(verified_calendar_category_names(vec![], &needed).is_err());
+        for color in ["None", "preset12", "preset14", "preset4"] {
+            let actual = vec![json!({ "displayName": "DMH Farbe: Blau", "color": color })];
+            assert!(
+                verified_calendar_category_names(actual, &needed).is_err(),
+                "{color}"
+            );
+        }
+        let actual = vec![json!({ "displayName": "DMH Farbe: Blau", "color": "Preset7" })];
+        assert_eq!(
+            verified_calendar_category_names(actual, &needed).unwrap()["dmh farbe: blau"],
+            "DMH Farbe: Blau"
+        );
+    }
+
+    #[test]
+    fn accepted_patch_is_not_success_without_the_persisted_event_category() {
+        for saved in [
+            json!({}),
+            json!({ "categories": [] }),
+            json!({ "categories": ["Black category"] }),
+            json!({ "categories": ["Black category", "DMH Farbe: Blau"] }),
+        ] {
+            assert!(verify_calendar_event_category(&saved, "DMH Farbe: Blau").is_err());
+        }
+        assert!(verify_calendar_event_category(
+            &json!({ "categories": ["DMH Farbe: Blau"] }),
+            "DMH Farbe: Blau"
+        )
+        .is_ok());
     }
 
     #[test]
@@ -6932,7 +7318,7 @@ mod tests {
             "preset7",
             "preset7"
         ));
-        assert!(!category_needs_repair(
+        assert!(category_needs_repair(
             "Eigene Kategorie",
             "preset0",
             "preset7"
@@ -6942,7 +7328,8 @@ mod tests {
     #[test]
     fn isolated_category_repair_only_targets_linked_editable_events() {
         let mut editable = calendar_source("calendar-a");
-        editable.resource_path = "/me/calendars/calendar-a".to_string();
+        editable.resource_path =
+            "https://graph.microsoft.com/v1.0/me/calendars/calendar-a".to_string();
         let mut read_only = calendar_source("calendar-b");
         read_only.editable = false;
         let linked = calendar_event("m365:calendar-a:event-1");
@@ -6955,7 +7342,10 @@ mod tests {
         );
 
         assert_eq!(targets.len(), 1);
-        assert_eq!(targets[0].url, "/me/calendars/calendar-a/events/event-1");
+        assert_eq!(
+            targets[0].url,
+            "https://graph.microsoft.com/v1.0/me/calendars/calendar-a/events/event-1"
+        );
         assert_eq!(targets[0].category, "DMH Farbe: Blau");
         assert_eq!(targets[0].color, "blue");
     }

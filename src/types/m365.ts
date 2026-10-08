@@ -107,6 +107,7 @@ export interface Microsoft365SyncResult {
   errorMessages: string[];
   calendarUpserts: import("./calendar").CalendarEvent[];
   calendarDeletes: string[];
+  calendarCategories?: Microsoft365CalendarCategory[];
 }
 
 export interface CalendarOutboxSyncResult {
@@ -129,7 +130,7 @@ export interface ContactOutboxSyncResult {
   errorMessages: string[];
 }
 
-export interface Microsoft365SyncHistoryEntry extends Omit<Microsoft365SyncResult, "calendarUpserts" | "calendarDeletes" | "deleted"> {
+export interface Microsoft365SyncHistoryEntry extends Omit<Microsoft365SyncResult, "calendarUpserts" | "calendarDeletes" | "calendarCategories" | "deleted"> {
   id: string;
   deleted?: number;
 }

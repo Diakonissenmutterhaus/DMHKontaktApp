@@ -80,7 +80,7 @@ export function CalendarEventForm({ value, isNew, categories, events, onChange, 
   const updateMeeting = (changes: Partial<CalendarMeetingOptions>) => update("meeting", { ...meeting, ...changes });
   const categoryNames = categories.map((category) => category.name);
   const selectedCategory = categories.find((category) => category.name === value.category);
-  const selectedCategoryColor = calendarColorOptions.find((color) => color.value === calendarColorValue(selectedCategory?.color ?? "gray"))?.border ?? "#64748b";
+  const selectedCategoryColor = calendarColorOptions.find((color) => color.value === calendarColorValue(selectedCategory?.color ?? value.color))?.border ?? "#64748b";
   const calendarLabel = value.source.trim() && value.source !== "local" ? value.source : "Agenda";
   const recurrence = value.recurrence ?? null;
   const recurrencePreset = !recurrence ? "none" : recurrence.frequency === "monthly" && recurrence.interval === 6 ? "semiannual" : recurrence.frequency;

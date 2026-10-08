@@ -10,7 +10,7 @@ import {
 import type { CalendarEvent } from "../types/calendar";
 import type { Microsoft365SyncHistoryEntry, Microsoft365SyncResult } from "../types/m365";
 import { parseSyncConfig, type SyncConfig } from "../types/sync";
-import { mergeImportedCalendarCategories } from "./calendar";
+import { mergeImportedCalendarCategories, mergeMicrosoft365CalendarCategories } from "./calendar";
 
 export const synchronizationConfigKey = "synchronization_config_v1";
 export const synchronizationHistoryKey = "synchronization_history_v1";
@@ -111,11 +111,13 @@ function parseHistory(raw: string | null): Microsoft365SyncHistoryEntry[] {
   }
 }
 
-function announceCalendarChanges(calendarUpserts: CalendarEvent[], calendarDeletes: string[]): void {
-  if (calendarUpserts.length === 0 && calendarDeletes.length === 0) return;
+export function announceMicrosoft365CalendarChanges(result: Pick<Microsoft365SyncResult, "calendarUpserts" | "calendarDeletes" | "calendarCategories">): void {
+  const { calendarUpserts, calendarDeletes, calendarCategories = [] } = result;
+  if (calendarUpserts.length === 0 && calendarDeletes.length === 0 && calendarCategories.length === 0) return;
   // apply_m365_sync already committed the events and delta acknowledgements
   // atomically in SQLite before returning to the WebView.
   mergeImportedCalendarCategories(calendarUpserts);
+  if (calendarCategories.length > 0) mergeMicrosoft365CalendarCategories(calendarCategories);
   window.dispatchEvent(new Event(calendarStorageUpdatedEventName));
 }
 
@@ -240,7 +242,7 @@ export async function runAutomaticCalendarSync(trigger: AutomaticSyncTrigger): P
     allowPartialSources: true
   });
 
-  announceCalendarChanges(result.calendarUpserts, result.calendarDeletes);
+  announceMicrosoft365CalendarChanges(result);
   if (result.created + result.updated + result.deleted > 0) {
     window.dispatchEvent(new Event(m365DataUpdatedEventName));
   }

@@ -194,8 +194,9 @@ function recurrenceToRrule(recurrence?: CalendarRecurrence | null): string {
   const parts = [`FREQ=${recurrence.frequency.toUpperCase()}`];
   if (recurrence.interval > 1) parts.push(`INTERVAL=${Math.max(1, Math.floor(recurrence.interval))}`);
   if (recurrence.daysOfWeek?.length) {
-    const prefix = recurrence.weekOfMonth && recurrence.weekOfMonth !== 0 ? String(recurrence.weekOfMonth) : "";
+    const prefix = recurrence.weekOfMonth && recurrence.weekOfMonth !== 0 && !recurrence.weekdaySetPosition ? String(recurrence.weekOfMonth) : "";
     parts.push(`BYDAY=${recurrence.daysOfWeek.map((day) => `${prefix}${weekdayCodes[day]}`).join(",")}`);
+    if (recurrence.weekOfMonth && recurrence.weekdaySetPosition) parts.push(`BYSETPOS=${recurrence.weekOfMonth}`);
   }
   if (recurrence.dayOfMonth) parts.push(`BYMONTHDAY=${recurrence.dayOfMonth}`);
   if (recurrence.monthOfYear) parts.push(`BYMONTH=${recurrence.monthOfYear}`);
@@ -276,6 +277,7 @@ function parseRecurrence(raw: string): CalendarRecurrence | null {
     dayOfMonth: parseNumber(fields.get("BYMONTHDAY")),
     monthOfYear: parseNumber(fields.get("BYMONTH")),
     weekOfMonth: parseNumber(fields.get("BYSETPOS")) ?? ordinal,
+    weekdaySetPosition: fields.has("BYSETPOS") ? true : undefined,
     count: parseNumber(fields.get("COUNT")),
     until: untilRaw ? parseIcsDate(untilRaw).slice(0, 10) : undefined
   };
@@ -407,9 +409,8 @@ function addLocalDays(date: Date, days: number): Date {
   return new Date(date.getFullYear(), date.getMonth(), date.getDate() + days);
 }
 
-function startOfLocalWeek(date: Date): Date {
-  const day = date.getDay() || 7;
-  return addLocalDays(startOfLocalDay(date), 1 - day);
+function startOfLocalWeek(date: Date, firstDay = 1): Date {
+  return addLocalDays(startOfLocalDay(date), -((date.getDay() - firstDay + 7) % 7));
 }
 
 function monthsBetween(start: Date, candidate: Date): number {
@@ -421,6 +422,16 @@ function isNthWeekday(date: Date, ordinal: number): boolean {
   return Math.ceil(date.getDate() / 7) === ordinal;
 }
 
+function matchesRelativeDay(date: Date, days: number[], recurrence: CalendarRecurrence): boolean {
+  if (!days.includes(date.getDay())) return false;
+  const ordinal = recurrence.weekOfMonth!;
+  if (!recurrence.weekdaySetPosition || days.length === 1) return isNthWeekday(date, ordinal);
+  const count = new Date(date.getFullYear(), date.getMonth() + 1, 0).getDate();
+  const candidates = Array.from({ length: count }, (_, index) => new Date(date.getFullYear(), date.getMonth(), index + 1)).filter(candidate => days.includes(candidate.getDay()));
+  const target = candidates[ordinal === -1 ? candidates.length - 1 : ordinal - 1];
+  return target?.getDate() === date.getDate();
+}
+
 function matchesRecurrenceDate(date: Date, start: Date, recurrence: CalendarRecurrence): boolean {
   const interval = Math.max(1, recurrence.interval || 1);
   const days = recurrence.daysOfWeek?.length ? recurrence.daysOfWeek : [start.getDay()];
@@ -429,13 +440,14 @@ function matchesRecurrenceDate(date: Date, start: Date, recurrence: CalendarRecu
     return difference >= 0 && difference % interval === 0;
   }
   if (recurrence.frequency === "weekly") {
-    const difference = Math.round((startOfLocalWeek(date).getTime() - startOfLocalWeek(start).getTime()) / (7 * 86_400_000));
+    const firstDay = recurrence.firstDayOfWeek ?? 1;
+    const difference = Math.round((startOfLocalWeek(date, firstDay).getTime() - startOfLocalWeek(start, firstDay).getTime()) / (7 * 86_400_000));
     return difference >= 0 && difference % interval === 0 && days.includes(date.getDay());
   }
   if (recurrence.frequency === "monthly") {
     const difference = monthsBetween(start, date);
     if (difference < 0 || difference % interval !== 0) return false;
-    if (recurrence.weekOfMonth) return days.includes(date.getDay()) && isNthWeekday(date, recurrence.weekOfMonth);
+    if (recurrence.weekOfMonth) return matchesRelativeDay(date, days, recurrence);
     const targetDay = recurrence.dayOfMonth ?? start.getDate();
     const normalizedTargetDay = targetDay < 0
       ? new Date(date.getFullYear(), date.getMonth() + 1, 0).getDate() + targetDay + 1
@@ -444,7 +456,7 @@ function matchesRecurrenceDate(date: Date, start: Date, recurrence: CalendarRecu
   }
   const yearDifference = date.getFullYear() - start.getFullYear();
   if (yearDifference < 0 || yearDifference % interval !== 0 || date.getMonth() + 1 !== (recurrence.monthOfYear ?? start.getMonth() + 1)) return false;
-  if (recurrence.weekOfMonth) return days.includes(date.getDay()) && isNthWeekday(date, recurrence.weekOfMonth);
+  if (recurrence.weekOfMonth) return matchesRelativeDay(date, days, recurrence);
   const targetDay = recurrence.dayOfMonth ?? start.getDate();
   const normalizedTargetDay = targetDay < 0
     ? new Date(date.getFullYear(), date.getMonth() + 1, 0).getDate() + targetDay + 1
@@ -464,6 +476,7 @@ export function expandCalendarEvents(events: CalendarEvent[], rangeStart: Date, 
     }
 
     const duration = Math.max(0, end.getTime() - start.getTime());
+    const allDaySpan = Math.max(1, Math.round((Date.UTC(end.getFullYear(), end.getMonth(), end.getDate()) - Date.UTC(start.getFullYear(), start.getMonth(), start.getDate())) / 86_400_000));
     const excluded = new Set(event.excludedDates ?? []);
     const until = event.recurrence.until ? parseCalendarDate(`${event.recurrence.until}T23:59:59`) : null;
     let cursor = startOfLocalDay(start);
@@ -476,7 +489,7 @@ export function expandCalendarEvents(events: CalendarEvent[], rangeStart: Date, 
         if (event.recurrence.count && occurrenceNumber > event.recurrence.count) break;
         const occurrenceStart = new Date(cursor);
         occurrenceStart.setHours(start.getHours(), start.getMinutes(), start.getSeconds(), start.getMilliseconds());
-        const occurrenceEnd = new Date(occurrenceStart.getTime() + duration);
+        const occurrenceEnd = event.isAllDay ? addLocalDays(occurrenceStart, allDaySpan) : new Date(occurrenceStart.getTime() + duration);
         const dateKey = localDateKey(occurrenceStart);
         if (!excluded.has(dateKey) && occurrenceEnd >= rangeStart && occurrenceStart < rangeEnd) {
           expanded.push({

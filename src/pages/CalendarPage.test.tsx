@@ -16,6 +16,9 @@ vi.mock("../services/db", () => ({
   changeCalendarCategories: vi.fn().mockResolvedValue({ localEvents: 2, exchangeEvents: 2, category: null }),
   saveMicrosoft365MasterCategory: vi.fn().mockImplementation(async (category) => category),
   saveCalendarEvents: vi.fn().mockResolvedValue(undefined),
+  getAppSetting: vi.fn().mockResolvedValue(null),
+  setAppSetting: vi.fn().mockResolvedValue(undefined),
+  listMicrosoft365CalendarSources: vi.fn().mockResolvedValue([]),
   getMicrosoft365ConnectionStatus: vi.fn().mockResolvedValue({ connected: true }),
   getMicrosoft365ReadOnlyTestMode: vi.fn().mockResolvedValue(false),
   listMicrosoft365MasterCategories: vi.fn().mockResolvedValue([{ name: "Black category", color: "gray" }]),
@@ -39,6 +42,8 @@ beforeEach(() => {
   vi.mocked(db.listCalendarEventsInRange).mockResolvedValue([]);
   vi.mocked(db.listCalendarEvents).mockResolvedValue([]);
   vi.mocked(db.getCalendarCategoryOperation).mockResolvedValue(null);
+  vi.mocked(db.getAppSetting).mockResolvedValue(null);
+  vi.mocked(db.listMicrosoft365CalendarSources).mockResolvedValue([]);
   vi.mocked(db.getCalendarCategoryRules).mockResolvedValue([]);
   vi.mocked(db.listMicrosoft365MasterCategories).mockResolvedValue([{ name: "Black category", color: "gray" }]);
   vi.mocked(db.changeCalendarCategories).mockResolvedValue({ localEvents: 2, exchangeEvents: 2, category: null });
@@ -52,6 +57,52 @@ afterEach(() => {
 });
 
 describe("Exchange category repair", () => {
+  it("honors the global import-only direction when editing an Exchange event", async () => {
+    vi.mocked(db.getAppSetting).mockResolvedValue(JSON.stringify({ enabled: true, direction: "import", selectedCalendarSourceIds: ["a"] }));
+    vi.mocked(db.listMicrosoft365CalendarSources).mockResolvedValue([
+      { id: "a", name: "Arbeit", kind: "calendar", editable: true, shared: false, mailbox: null, resourcePath: "/me/calendars/a" }
+    ]);
+    const starts = new Date();
+    starts.setHours(10, 0, 0, 0);
+    vi.mocked(db.getCalendarOverview).mockResolvedValue({ total: 1, sources: ["Microsoft 365 · Arbeit"] });
+    vi.mocked(db.listCalendarEventsInRange).mockResolvedValue([{
+      id: "m365:a:read-only", title: "Nur Import", startsAt: starts.toISOString(), endsAt: new Date(starts.getTime() + 3600000).toISOString(),
+      location: "", description: "", category: "", color: "blue", source: "Microsoft 365 · Arbeit", calendarSourceId: "a"
+    }]);
+    const user = userEvent.setup();
+    render(<CalendarPage advancedMode={false} onAdvancedModeChange={() => undefined} onNavigate={() => undefined} />);
+    await user.click(await screen.findByText("Nur Import"));
+    await screen.findByLabelText("Kalender für diesen Termin");
+    await waitFor(() => expect(screen.getByRole("option", { name: /Microsoft 365 · Arbeit/ })).toBeDisabled());
+    await user.click(screen.getByRole("button", { name: /Speichern/ }));
+    await screen.findByText(/Dieser Kalender erlaubt keine Änderungen/);
+    expect(db.saveCalendarEvents).not.toHaveBeenCalled();
+  });
+
+  it("lists empty Exchange calendars and persists the selected destination ID when saving", async () => {
+    vi.mocked(db.getAppSetting).mockResolvedValue(JSON.stringify({ enabled: true, selectedCalendarSourceIds: ["a"], sharedMailboxAddresses: ["team@example.test"] }));
+    vi.mocked(db.listMicrosoft365CalendarSources).mockResolvedValue([
+      { id: "a", name: "Arbeit", kind: "calendar", editable: true, shared: false, mailbox: null, resourcePath: "/me/calendars/a" },
+      { id: "b", name: "Privat", kind: "calendar", editable: true, shared: false, mailbox: null, resourcePath: "/me/calendars/b" },
+      { id: "c", name: "Team", kind: "calendar", editable: false, shared: true, mailbox: "team@example.test", resourcePath: "/users/team/calendars/c" }
+    ]);
+    const user = userEvent.setup();
+    render(<CalendarPage advancedMode={false} onAdvancedModeChange={() => undefined} onNavigate={() => undefined} />);
+    await user.click(screen.getByRole("button", { name: /Neuer Termin/ }));
+    const selector = await screen.findByLabelText("Kalender für diesen Termin");
+    await waitFor(() => expect(selector).toBeEnabled());
+    expect(db.listMicrosoft365CalendarSources).toHaveBeenCalledWith(["team@example.test"]);
+    expect(screen.getByRole("option", { name: /Microsoft 365 · Team/ })).toBeDisabled();
+    await user.type(screen.getByPlaceholderText("Titel hinzufügen"), "Neuer Zielkalender");
+    await user.selectOptions(selector, "b");
+    await user.click(screen.getByRole("button", { name: /Speichern/ }));
+    await waitFor(() => expect(db.saveCalendarEvents).toHaveBeenCalledWith([expect.objectContaining({ title: "Neuer Zielkalender", calendarSourceId: "b", source: "Microsoft 365 · Privat" })]));
+    expect(db.setAppSetting).toHaveBeenCalledWith("synchronization_config_v1", expect.any(String));
+    const settingCalls = vi.mocked(db.setAppSetting).mock.calls;
+    const savedConfig = JSON.parse(settingCalls[settingCalls.length - 1][1]);
+    expect(savedConfig.selectedCalendarSourceIds).toEqual(["a", "b"]);
+  });
+
   it("loads categories used outside the visible calendar and searches the complete list", async () => {
     vi.mocked(db.listCalendarEvents).mockResolvedValue([{ id: "old", title: "Alter Termin", startsAt: "2020-01-01T10:00", endsAt: "2020-01-01T11:00", location: "", description: "", category: "Historisch", color: "red", source: "Import" }]);
     const user = await openCategories();

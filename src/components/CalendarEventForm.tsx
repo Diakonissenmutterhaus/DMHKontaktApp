@@ -1,19 +1,22 @@
 import {
-  AlignLeft, Bell, CalendarClock, CalendarDays, ChevronLeft, ChevronRight, Clock3, ExternalLink, Eye, Link2, Lock,
+  AlarmClock, AlignLeft, Calendar, CalendarClock, CalendarDays, ChevronDown, ChevronLeft, ChevronRight, Clock3, ExternalLink, Link2, Lock, LockOpen,
   List, ListOrdered, MapPin, MoreHorizontal, Printer, Repeat2, Save, Tag, Trash2, UserPlus, Users, Video, X
 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import type {
-  CalendarAvailability, CalendarEvent, CalendarMeetingOptions, CalendarRecurrence,
+  CalendarAvailability, CalendarDestination, CalendarEvent, CalendarMeetingOptions, CalendarRecurrence,
   CalendarRecurrenceFrequency
 } from "../types/calendar";
-import { calendarColorOptions, calendarColorValue, parseCalendarDate } from "../utils/calendar";
+import { calendarColorOptions, calendarColorValue, expandCalendarEvents, parseCalendarDate } from "../utils/calendar";
 
 interface CalendarEventFormProps {
   value: CalendarEvent;
   isNew: boolean;
   categories: Array<{ name: string; color: string }>;
   events: CalendarEvent[];
+  calendars?: CalendarDestination[];
+  calendarsLoading?: boolean;
+  calendarsError?: string;
   onChange: (value: CalendarEvent) => void;
   onSave: () => void;
   onDelete: () => void;
@@ -29,7 +32,17 @@ const availabilityLabels: Record<CalendarAvailability, string> = {
   free: "Frei", tentative: "Mit Vorbehalt", busy: "Beschäftigt",
   oof: "Abwesend", workingElsewhere: "An anderem Ort"
 };
-const plannerHourHeight = 52;
+const plannerHourHeight = 60;
+const plannerMinimumEventHeight = 28;
+
+function AvailabilityIcon() {
+  return (
+    <svg width={16} height={16} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} aria-hidden="true">
+      <rect x={3} y={3} width={18} height={18} rx={1} />
+      <path d="M3 9 9 3M3 15 15 3M7 21 21 7M13 21 21 13" />
+    </svg>
+  );
+}
 
 function attendeeValues(raw: string): string[] {
   return raw.split(/[;,\n]/).map((entry) => entry.trim()).filter(Boolean);
@@ -69,7 +82,49 @@ function eventDurationMinutes(event: CalendarEvent): number {
   return start && end ? Math.max(15, (end.getTime() - start.getTime()) / 60_000) : 60;
 }
 
-export function CalendarEventForm({ value, isNew, categories, events, onChange, onSave, onDelete, onCancel }: CalendarEventFormProps) {
+function plannerTimeRange(event: CalendarEvent): string {
+  const formatter = new Intl.DateTimeFormat("de-DE", { hour: "2-digit", minute: "2-digit" });
+  const start = parseCalendarDate(event.startsAt);
+  const end = parseCalendarDate(event.endsAt);
+  return start && end ? `${formatter.format(start)}–${formatter.format(end)}` : "";
+}
+
+function plannerEventLayouts(events: CalendarEvent[], date: string) {
+  const dayStart = parseCalendarDate(`${date}T00:00`);
+  if (!dayStart) return [];
+  const dayEnd = new Date(dayStart.getFullYear(), dayStart.getMonth(), dayStart.getDate() + 1);
+  const segments = events.flatMap((event) => {
+    const start = parseCalendarDate(event.startsAt);
+    const end = parseCalendarDate(event.endsAt);
+    if (!start || !end || end <= start || start >= dayEnd || end <= dayStart) return [];
+    const startMinutes = start < dayStart ? 0 : eventMinutes(event.startsAt);
+    const endMinutes = end >= dayEnd ? 1440 : eventMinutes(event.endsAt);
+    const height = Math.max(plannerMinimumEventHeight, (endMinutes - startMinutes) / 60 * plannerHourHeight - 2);
+    return [{ event, startMinutes, height, layoutEnd: startMinutes + (height + 2) / plannerHourHeight * 60 }];
+  }).sort((left, right) => left.startMinutes - right.startMinutes || right.layoutEnd - left.layoutEnd);
+  const groups: Array<typeof segments> = [];
+  let groupEnd = -1;
+  for (const segment of segments) {
+    if (!groups.length || segment.startMinutes >= groupEnd) {
+      groups.push([]);
+      groupEnd = -1;
+    }
+    groups[groups.length - 1].push(segment);
+    groupEnd = Math.max(groupEnd, segment.layoutEnd);
+  }
+  return groups.flatMap((group) => {
+    const laneEnds: number[] = [];
+    const assigned = group.map((segment) => {
+      let lane = laneEnds.findIndex((end) => end <= segment.startMinutes);
+      if (lane < 0) lane = laneEnds.length;
+      laneEnds[lane] = segment.layoutEnd;
+      return { ...segment, lane };
+    });
+    return assigned.map((segment) => ({ ...segment, lanes: laneEnds.length }));
+  });
+}
+
+export function CalendarEventForm({ value, isNew, categories, events, calendars = [], calendarsLoading = false, calendarsError = "", onChange, onSave, onDelete, onCancel }: CalendarEventFormProps) {
   const [optionalVisible, setOptionalVisible] = useState((value.meeting?.optionalAttendees.length ?? 0) > 0);
   const [plannerVisible, setPlannerVisible] = useState(true);
   const [endDateVisible, setEndDateVisible] = useState(false);
@@ -79,11 +134,13 @@ export function CalendarEventForm({ value, isNew, categories, events, onChange, 
   const timelineRef = useRef<HTMLDivElement>(null);
   const update = <Key extends keyof CalendarEvent>(key: Key, fieldValue: CalendarEvent[Key]) => onChange({ ...value, [key]: fieldValue });
   const meeting = { ...defaultMeeting, ...value.meeting };
+  const onlineMeetingLocked = Boolean(meeting.onlineMeetingUrl) || (value.id.startsWith("m365:") && meeting.isOnlineMeeting);
   const updateMeeting = (changes: Partial<CalendarMeetingOptions>) => update("meeting", { ...meeting, ...changes });
   const categoryNames = categories.map((category) => category.name);
   const selectedCategory = categories.find((category) => category.name === value.category);
   const selectedCategoryColor = calendarColorOptions.find((color) => color.value === calendarColorValue(selectedCategory?.color ?? value.color))?.border ?? "#64748b";
   const calendarLabel = value.source.trim() && value.source !== "local" ? value.source : "DMH Backup";
+  const calendarSourceId = value.calendarSourceId ?? calendars.find((calendar) => value.id.startsWith(`m365:${calendar.id}:`))?.id ?? calendars.find((calendar) => calendar.id === `local:${calendarLabel}`)?.id ?? "";
   const recurrence = value.recurrence ?? null;
   const recurrencePreset = !recurrence ? "none" : recurrence.frequency === "monthly" && recurrence.interval === 6 ? "semiannual" : recurrence.frequency;
   const starts = timeParts(value.startsAt);
@@ -180,10 +237,9 @@ export function CalendarEventForm({ value, isNew, categories, events, onChange, 
   const plannerEvents = useMemo(() => {
     const plannerStart = parseCalendarDate(`${starts.date}T00:00:00`);
     const plannerEnd = plannerStart ? new Date(plannerStart.getFullYear(), plannerStart.getMonth(), plannerStart.getDate() + 1) : null;
-    return events
+    if (!plannerStart || !plannerEnd) return [];
+    return expandCalendarEvents(events.filter((event) => event.id !== value.id), plannerStart, plannerEnd)
       .filter((event) => {
-        if (event.id === value.id) return false;
-        if (!event.isAllDay || !plannerStart || !plannerEnd) return event.startsAt.slice(0, 10) === starts.date;
         const eventStart = parseCalendarDate(event.startsAt);
         const eventEnd = parseCalendarDate(event.endsAt);
         return Boolean(eventStart && eventEnd && eventStart < plannerEnd && eventEnd > plannerStart);
@@ -192,10 +248,21 @@ export function CalendarEventForm({ value, isNew, categories, events, onChange, 
   }, [events, starts.date, value.id]);
   const plannerAllDayEvents = plannerEvents.filter((event) => event.isAllDay);
   const plannerTimedEvents = plannerEvents.filter((event) => !event.isAllDay);
+  const plannerLayouts = plannerEventLayouts([...plannerTimedEvents, ...(!value.isAllDay && validRange ? [value] : [])], starts.date);
 
   useEffect(() => {
-    if (timelineRef.current) timelineRef.current.scrollTop = 2 * plannerHourHeight;
-  }, [plannerVisible, starts.date]);
+    if (!plannerVisible || !timelineRef.current) return;
+    const timeline = timelineRef.current;
+    const frame = window.requestAnimationFrame(() => {
+      const start = value.isAllDay ? 8 * plannerHourHeight : eventMinutes(value.startsAt) / 60 * plannerHourHeight;
+      const height = Math.min(24 * plannerHourHeight - start, eventDurationMinutes(value) / 60 * plannerHourHeight);
+      const target = value.isAllDay || height > timeline.clientHeight - plannerHourHeight
+        ? start - plannerHourHeight / 2
+        : start + height / 2 - timeline.clientHeight / 2;
+      timeline.scrollTop = Math.max(0, target);
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [plannerVisible, value.startsAt, value.endsAt, value.isAllDay]);
 
   const addAgenda = () => {
     if (!value.description.trim()) update("description", "Agenda\n• ");
@@ -240,15 +307,18 @@ export function CalendarEventForm({ value, isNew, categories, events, onChange, 
       </header>
 
       <div className="calendar-meeting-commandbar">
-        <label className="calendar-command-select"><Eye size={16} /><select aria-label="Anzeigen als" value={meeting.showAs} onChange={(event) => updateMeeting({ showAs: event.target.value as CalendarAvailability })}>{Object.entries(availabilityLabels).map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select></label>
-        <label className="calendar-command-select"><Bell size={16} /><select aria-label="Erinnerung" value={meeting.reminderMinutes ?? "none"} onChange={(event) => updateMeeting({ reminderMinutes: event.target.value === "none" ? null : Number(event.target.value) })}><option value="none">Keine Erinnerung</option><option value="0">Zum Start</option><option value="5">5 Minuten vorher</option><option value="15">15 Minuten vorher</option><option value="30">30 Minuten vorher</option><option value="60">1 Stunde vorher</option><option value="1440">1 Tag vorher</option></select></label>
-        <label className="calendar-command-select calendar-category-select"><Tag size={16} /><span className="calendar-category-color-dot" aria-hidden="true" style={{ backgroundColor: selectedCategoryColor }} /><select aria-label="Kategorie" value={value.category} onChange={(event) => updateCategory(event.target.value)}><option value="">Keine Kategorie</option>{value.category && !categoryNames.includes(value.category) && <option value={value.category}>{value.category}</option>}{categories.map((category) => <option value={category.name} key={category.name}>{category.name}</option>)}</select></label>
-        <label className="calendar-command-select"><Lock size={16} /><select aria-label="Sichtbarkeit" value={meeting.isPrivate ? "private" : "normal"} onChange={(event) => updateMeeting({ isPrivate: event.target.value === "private" })}><option value="normal">Standard</option><option value="private">Privat</option></select></label>
-        <button className="calendar-command-icon calendar-command-print" type="button" onClick={() => window.print()} aria-label="Drucken" title="Drucken"><Printer size={17} /><span>Drucken</span></button>
+        <div className="calendar-meeting-tabs" role="group" aria-label="Ereignis oder Serie">
+          <button className={!recurrence ? "active" : ""} type="button" aria-pressed={!recurrence} onClick={() => setRecurrencePreset("none")}><Calendar size={16} /> Ereignis</button>
+          <button className={recurrence ? "active" : ""} type="button" aria-pressed={Boolean(recurrence)} onClick={() => { if (!recurrence) setRecurrencePreset("weekly"); }}><Repeat2 size={16} /> Serie</button>
+        </div>
+        <label className="calendar-command-select calendar-command-availability"><AvailabilityIcon /><select aria-label="Anzeigen als" value={meeting.showAs} onChange={(event) => updateMeeting({ showAs: event.target.value as CalendarAvailability })}>{Object.entries(availabilityLabels).map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select></label>
+        <label className="calendar-command-select calendar-command-compact" title={meeting.reminderMinutes == null ? "Keine Erinnerung" : meeting.reminderMinutes === 0 ? "Erinnerung: Zum Start" : `Erinnerung: ${meeting.reminderMinutes} Minuten vorher`}><AlarmClock size={18} /><ChevronDown size={12} /><select aria-label="Erinnerung" value={meeting.reminderMinutes ?? "none"} onChange={(event) => updateMeeting({ reminderMinutes: event.target.value === "none" ? null : Number(event.target.value) })}><option value="none">Keine Erinnerung</option><option value="0">Zum Start</option><option value="5">5 Minuten vorher</option><option value="15">15 Minuten vorher</option><option value="30">30 Minuten vorher</option><option value="60">1 Stunde vorher</option><option value="1440">1 Tag vorher</option></select></label>
+        <label className="calendar-command-select calendar-command-compact" title={`Kategorie: ${value.category || "Keine Kategorie"}`}><Tag size={18} style={{ color: value.category ? selectedCategoryColor : undefined }} /><ChevronDown size={12} /><select aria-label="Kategorie" value={value.category} onChange={(event) => updateCategory(event.target.value)}><option value="">Keine Kategorie</option>{value.category && !categoryNames.includes(value.category) && <option value={value.category}>{value.category}</option>}{categories.map((category) => <option value={category.name} key={category.name}>{category.name}</option>)}</select></label>
+        <label className="calendar-command-select calendar-command-compact" title={`Sichtbarkeit: ${meeting.isPrivate ? "Privat" : "Standard"}`}>{meeting.isPrivate ? <Lock size={18} /> : <LockOpen size={18} />}<ChevronDown size={12} /><select aria-label="Sichtbarkeit" value={meeting.isPrivate ? "private" : "normal"} onChange={(event) => updateMeeting({ isPrivate: event.target.value === "private" })}><option value="normal">Standard</option><option value="private">Privat</option></select></label>
+        <button className="calendar-command-icon calendar-command-print" type="button" onClick={() => window.print()} aria-label="Drucken" title="Drucken"><Printer size={18} /></button>
         <details className="calendar-command-more">
           <summary aria-label="Weitere Terminoptionen" title="Weitere Terminoptionen"><MoreHorizontal size={20} /></summary>
           <div className="calendar-command-more-panel">
-            <button type="button" onClick={(event) => { setRecurrencePreset(recurrence ? "none" : "weekly"); event.currentTarget.closest("details")?.removeAttribute("open"); }}><Repeat2 size={17} />{recurrence ? "Serie entfernen" : "Als Serie planen"}</button>
             <label><input type="checkbox" checked={endDateVisible} onChange={(event) => setEndDateVisible(event.target.checked)} /> Enddatum anzeigen</label>
             {!isNew && <button className="danger" type="button" onClick={onDelete}><Trash2 size={17} /> Termin löschen</button>}
           </div>
@@ -263,9 +333,6 @@ export function CalendarEventForm({ value, isNew, categories, events, onChange, 
               <div className="calendar-meeting-field title-field"><AlignLeft size={20} /><input value={value.title} onChange={(event) => update("title", event.target.value)} placeholder="Titel hinzufügen" autoFocus /></div>
               <div className="calendar-meeting-field attendee-field"><Users size={20} /><input value={requiredAttendeesText} onChange={(event) => { setRequiredAttendeesText(event.target.value); updateMeeting({ requiredAttendees: attendeeValues(event.target.value) }); }} placeholder="Teilnehmer hinzufügen" /><button type="button" aria-expanded={optionalVisible} onClick={() => setOptionalVisible((visible) => !visible)}>{optionalVisible ? "Optional ausblenden" : "+ Optional"}</button></div>
               {optionalVisible && <div className="calendar-meeting-field attendee-field optional"><UserPlus size={20} /><input value={optionalAttendeesText} onChange={(event) => { setOptionalAttendeesText(event.target.value); updateMeeting({ optionalAttendees: attendeeValues(event.target.value) }); }} placeholder="Optionale Teilnehmer einladen" /></div>}
-            </section>
-
-            <section className="calendar-meeting-details-card calendar-meeting-section-card" aria-label="Datum und Ort">
               <div className="calendar-meeting-field calendar-date-field">
                 <CalendarClock size={20} />
                 <div className="calendar-date-editor">
@@ -285,17 +352,16 @@ export function CalendarEventForm({ value, isNew, categories, events, onChange, 
               </div>
               {!validRange && <p className="calendar-meeting-validation">Das Ende muss nach dem Beginn liegen.</p>}
               <div className="calendar-meeting-field"><MapPin size={20} /><input value={value.location} onChange={(event) => update("location", event.target.value)} placeholder="Raum oder Ort hinzufügen" /></div>
-              <div className="calendar-meeting-field online-field"><Video size={20} /><label className="switch"><input id={`online-meeting-${value.id}`} type="checkbox" checked={meeting.isOnlineMeeting} onChange={(event) => updateMeeting({ isOnlineMeeting: event.target.checked })} /><span /></label><span className="online-meeting-copy"><label className="online-meeting-label" htmlFor={`online-meeting-${value.id}`}>Teams-Besprechung</label>{meeting.isOnlineMeeting && !meeting.onlineMeetingUrl && <small>Der Link wird bei der Microsoft-365-Synchronisierung erstellt.</small>}</span>{meeting.onlineMeetingUrl && <a href={meeting.onlineMeetingUrl} target="_blank" rel="noreferrer"><ExternalLink size={15} /> Beitreten</a>}</div>
+              <div className="calendar-meeting-field online-field"><Video size={20} /><label className="switch"><input id={`online-meeting-${value.id}`} type="checkbox" checked={meeting.isOnlineMeeting} disabled={onlineMeetingLocked} aria-describedby={onlineMeetingLocked ? `online-meeting-note-${value.id}` : undefined} onChange={(event) => updateMeeting({ isOnlineMeeting: event.target.checked })} /><span /></label><span className="online-meeting-copy"><label className="online-meeting-label" htmlFor={`online-meeting-${value.id}`}>Teams-Besprechung</label>{onlineMeetingLocked && <small id={`online-meeting-note-${value.id}`}>Exchange erlaubt nicht, eine bestehende Online-Besprechung auszuschalten.</small>}{meeting.isOnlineMeeting && !meeting.onlineMeetingUrl && !onlineMeetingLocked && <small>Der Link wird bei der Microsoft-365-Synchronisierung erstellt.</small>}</span>{meeting.onlineMeetingUrl && <a href={meeting.onlineMeetingUrl} target="_blank" rel="noreferrer"><ExternalLink size={15} /> Beitreten</a>}</div>
+              {recurrence && <section className="calendar-recurrence-panel" aria-label="Serieneinstellungen">
+                <label><span>Wiederholung</span><select value={recurrencePreset} onChange={(event) => setRecurrencePreset(event.target.value)}><option value="daily">Täglich</option><option value="weekly">Wöchentlich</option><option value="monthly">Monatlich</option><option value="semiannual">Halbjährlich</option><option value="yearly">Jährlich</option></select></label>
+                <label><span>Intervall</span><span className="recurrence-interval-field"><span>Alle</span><input type="number" min={1} max={365} value={recurrence.interval} onChange={(event) => updateRecurrence({ interval: Math.max(1, Number(event.target.value) || 1) })} /><span>{recurrence.frequency === "daily" ? "Tag(e)" : recurrence.frequency === "weekly" ? "Woche(n)" : recurrence.frequency === "monthly" ? "Monat(e)" : "Jahr(e)"}</span></span></label>
+                {recurrence.frequency === "weekly" && <div className="field wide"><span>Wochentage</span><div className="recurrence-weekdays">{["So", "Mo", "Di", "Mi", "Do", "Fr", "Sa"].map((label, weekday) => <button className={(recurrence.daysOfWeek ?? [startDate().getDay()]).includes(weekday) ? "active" : ""} type="button" onClick={() => toggleRecurrenceWeekday(weekday)} key={label}>{label}</button>)}</div></div>}
+                <label><span>Serienende</span><select value={recurrence.count ? "count" : recurrence.until ? "until" : "never"} onChange={(event) => { if (event.target.value === "count") updateRecurrence({ count: 10, until: undefined }); else if (event.target.value === "until") updateRecurrence({ until: value.startsAt.slice(0, 4) + "-12-31", count: undefined }); else updateRecurrence({ count: undefined, until: undefined }); }}><option value="never">Kein Enddatum</option><option value="until">Endet am</option><option value="count">Nach Anzahl</option></select></label>
+                {recurrence.until && <label><span>Letzter Termin</span><input type="date" value={recurrence.until} onChange={(event) => updateRecurrence({ until: event.target.value })} /></label>}
+                {recurrence.count && <label><span>Anzahl Termine</span><input type="number" min={1} max={10000} value={recurrence.count} onChange={(event) => updateRecurrence({ count: Math.max(1, Number(event.target.value) || 1) })} /></label>}
+              </section>}
             </section>
-
-            {recurrence && <section className="calendar-recurrence-panel" aria-label="Serieneinstellungen">
-              <label><span>Wiederholung</span><select value={recurrencePreset} onChange={(event) => setRecurrencePreset(event.target.value)}><option value="daily">Täglich</option><option value="weekly">Wöchentlich</option><option value="monthly">Monatlich</option><option value="semiannual">Halbjährlich</option><option value="yearly">Jährlich</option></select></label>
-              <label><span>Intervall</span><span className="recurrence-interval-field"><span>Alle</span><input type="number" min={1} max={365} value={recurrence.interval} onChange={(event) => updateRecurrence({ interval: Math.max(1, Number(event.target.value) || 1) })} /><span>{recurrence.frequency === "daily" ? "Tag(e)" : recurrence.frequency === "weekly" ? "Woche(n)" : recurrence.frequency === "monthly" ? "Monat(e)" : "Jahr(e)"}</span></span></label>
-              {recurrence.frequency === "weekly" && <div className="field wide"><span>Wochentage</span><div className="recurrence-weekdays">{["So", "Mo", "Di", "Mi", "Do", "Fr", "Sa"].map((label, weekday) => <button className={(recurrence.daysOfWeek ?? [startDate().getDay()]).includes(weekday) ? "active" : ""} type="button" onClick={() => toggleRecurrenceWeekday(weekday)} key={label}>{label}</button>)}</div></div>}
-              <label><span>Serienende</span><select value={recurrence.count ? "count" : recurrence.until ? "until" : "never"} onChange={(event) => { if (event.target.value === "count") updateRecurrence({ count: 10, until: undefined }); else if (event.target.value === "until") updateRecurrence({ until: value.startsAt.slice(0, 4) + "-12-31", count: undefined }); else updateRecurrence({ count: undefined, until: undefined }); }}><option value="never">Kein Enddatum</option><option value="until">Endet am</option><option value="count">Nach Anzahl</option></select></label>
-              {recurrence.until && <label><span>Letzter Termin</span><input type="date" value={recurrence.until} onChange={(event) => updateRecurrence({ until: event.target.value })} /></label>}
-              {recurrence.count && <label><span>Anzahl Termine</span><input type="number" min={1} max={10000} value={recurrence.count} onChange={(event) => updateRecurrence({ count: Math.max(1, Number(event.target.value) || 1) })} /></label>}
-            </section>}
 
             <section className="calendar-description-card calendar-meeting-section-card" aria-label="Beschreibung und Agenda">
               <div className="calendar-description-editor"><AlignLeft size={20} /><textarea ref={descriptionRef} value={value.description} onChange={(event) => update("description", event.target.value)} placeholder="Beschreibung hinzufügen" /></div>
@@ -326,15 +392,33 @@ export function CalendarEventForm({ value, isNew, categories, events, onChange, 
             {value.isAllDay && <span className="draft">{value.title || "Neues ganztägiges Ereignis"}</span>}
           </div>}
           <div className="calendar-planner-timeline" ref={timelineRef}>
-            {Array.from({ length: 18 }, (_, index) => index + 6).map((hour) => <div className="calendar-planner-hour" key={hour}><time>{hour}:00</time></div>)}
-            {plannerTimedEvents.map((event) => { const start = eventMinutes(event.startsAt); const duration = eventDurationMinutes(event); return <div className="calendar-planner-event" key={event.id} style={{ top: `${((start - 360) / 60) * plannerHourHeight}px`, height: `${Math.max(24, duration / 60 * plannerHourHeight)}px` }}><strong>{event.title}</strong><span>{timeParts(event.startsAt).time}–{timeParts(event.endsAt).time}</span></div>; })}
-            {!value.isAllDay && <div className="calendar-planner-event draft" style={{ top: `${((eventMinutes(value.startsAt) - 360) / 60) * plannerHourHeight}px`, height: `${Math.max(24, eventDurationMinutes(value) / 60 * plannerHourHeight)}px` }}><strong>{value.title || "Neuer Termin"}</strong><span>{starts.time}–{ends.time}</span></div>}
+            <div className="calendar-planner-grid" style={{ height: `${24 * plannerHourHeight}px`, "--planner-hour-height": `${plannerHourHeight}px` } as CSSProperties}>
+              {Array.from({ length: 24 }, (_, hour) => <div className="calendar-planner-hour" key={hour}><time>{hour}:00</time></div>)}
+              {plannerLayouts.map(({ event, startMinutes, height, lane, lanes }) => {
+                const draft = event.id === value.id;
+                const title = event.title || (draft ? "Neuer Termin" : "Ohne Titel");
+                const timeRange = plannerTimeRange(event);
+                return <div className={`calendar-planner-event${draft ? " draft" : ""}${height < 40 ? " short" : ""}`} key={event.id} title={`${title} · ${timeRange}`} aria-label={`${title}, ${timeRange}`} style={{ top: `${startMinutes / 60 * plannerHourHeight + 1}px`, height: `${height}px`, left: `calc(48px + (100% - 48px) * ${lane / lanes} + 3px)`, width: `calc((100% - 48px) / ${lanes} - 6px)` }}><strong>{title}</strong><span>{timeRange}</span></div>;
+              })}
+            </div>
           </div>
           <footer className="calendar-planner-duration"><Clock3 size={17} /><span>Dauer: {durationLabel}</span></footer>
         </aside>}
       </div>
       <footer className="calendar-meeting-footer">
-        <div className="calendar-source-summary"><CalendarClock size={20} /><span>Kalender:</span><strong>{calendarLabel}</strong></div>
+        <div className="calendar-source-summary">
+          <CalendarClock size={20} />
+          <label htmlFor={`calendar-destination-${value.id}`}>Kalender:</label>
+          <select id={`calendar-destination-${value.id}`} aria-label="Kalender für diesen Termin" value={calendarSourceId} disabled={calendarsLoading} onChange={(event) => {
+            const destination = calendars.find((calendar) => calendar.id === event.target.value);
+            if (destination?.editable) onChange({ ...value, calendarSourceId: destination.id, source: destination.name });
+          }}>
+            {!calendars.some((calendar) => calendar.id === calendarSourceId) && <option value={calendarSourceId}>{calendarLabel}</option>}
+            {calendars.map((calendar) => <option key={calendar.id} value={calendar.id} disabled={!calendar.editable}>{calendar.name}{calendar.editable ? "" : ` (${calendar.reason || "Nur lesen"})`}</option>)}
+          </select>
+          {calendarsLoading && <small role="status">Kalender werden geladen …</small>}
+          {calendarsError && <small role="status">{calendarsError}</small>}
+        </div>
       </footer>
     </section>
   );

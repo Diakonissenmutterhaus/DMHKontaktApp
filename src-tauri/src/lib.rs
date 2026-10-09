@@ -287,7 +287,7 @@ pub struct AuditLogPage {
     pub has_more: bool,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct CalendarRecurrence {
     pub frequency: String,
@@ -295,9 +295,13 @@ pub struct CalendarRecurrence {
     pub interval: u32,
     #[serde(default, deserialize_with = "deserialize_vec_flexible")]
     pub days_of_week: Vec<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub first_day_of_week: Option<u32>,
     pub day_of_month: Option<u32>,
     pub month_of_year: Option<u32>,
     pub week_of_month: Option<i32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub weekday_set_position: Option<bool>,
     pub until: Option<String>,
     pub count: Option<u32>,
 }
@@ -365,6 +369,8 @@ impl Default for CalendarMeetingOptions {
 #[serde(rename_all = "camelCase")]
 pub struct CalendarEvent {
     pub id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub calendar_source_id: Option<String>,
     #[serde(default)]
     pub updated_at: String,
     pub title: String,
@@ -1845,6 +1851,29 @@ fn move_calendar_events_to_trash_in_transaction(
         };
         let mut event: CalendarEvent =
             serde_json::from_str(&json).map_err(|error| error.to_string())?;
+        if event.recurrence.is_some() {
+            let child_ids = {
+                let mut statement = transaction.prepare("SELECT id FROM calendar_events WHERE deleted_at IS NULL AND json_extract(event_json, '$.recurrenceMasterId') = ?1").map_err(|error| error.to_string())?;
+                let children = statement
+                    .query_map([id], |row| row.get::<_, String>(0))
+                    .map_err(|error| error.to_string())?
+                    .collect::<Result<Vec<_>, _>>()
+                    .map_err(|error| error.to_string())?;
+                children
+            };
+            // Deleting the series in Exchange removes its exceptions too. Do
+            // not queue separate Graph deletions for the child appointments.
+            changed +=
+                move_calendar_events_to_trash_in_transaction(transaction, &child_ids, false)?;
+            for child in child_ids {
+                transaction
+                    .execute(
+                        "DELETE FROM calendar_sync_outbox WHERE event_id = ?1",
+                        [child],
+                    )
+                    .map_err(|error| error.to_string())?;
+            }
+        }
         event.deleted_at = Some(timestamp.clone());
         let updated_json = serde_json::to_string(&event).map_err(|error| error.to_string())?;
         changed += transaction
@@ -2080,6 +2109,7 @@ pub fn enqueue_unlinked_calendar_events_for_exchange(
             "SELECT id FROM calendar_events
              WHERE deleted_at IS NULL
                AND id NOT LIKE 'm365:%'
+               AND COALESCE(json_extract(event_json, '$.calendarSourceId'), '') NOT LIKE 'local:%'
                AND id NOT IN (SELECT event_id FROM calendar_sync_outbox)
              ORDER BY updated_at DESC, starts_at DESC
              LIMIT ?1",
@@ -2276,6 +2306,12 @@ fn link_calendar_event_after_exchange_create_in_db(
         .execute(
             "DELETE FROM calendar_sync_outbox WHERE event_id = ?1",
             params![previous_id],
+        )
+        .map_err(|error| error.to_string())?;
+    transaction
+        .execute(
+            "DELETE FROM app_settings WHERE key = ?1",
+            params![format!("m365_calendar_transfer_v1:{previous_id}")],
         )
         .map_err(|error| error.to_string())?;
     transaction
@@ -10170,6 +10206,7 @@ fn read_outlook_classic_appointments_for_import(
         .collect::<Vec<_>>()
         .join(" · ");
         events.push(CalendarEvent {
+            calendar_source_id: None,
             id,
             updated_at: now(),
             title,
@@ -10566,6 +10603,7 @@ pub fn run() {
             m365::test_m365_connection,
             m365::disconnect_m365_account,
             m365::list_m365_sync_sources,
+            m365::list_m365_calendar_sources,
             m365::preview_m365_sync,
             m365::apply_m365_sync,
             m365::flush_m365_contact_outbox,
@@ -10700,6 +10738,7 @@ mod tests {
                event_json TEXT NOT NULL, updated_at TEXT NOT NULL, deleted_at TEXT
              );
              CREATE TABLE calendar_sync_outbox (event_id TEXT PRIMARY KEY);
+             CREATE TABLE app_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
              CREATE TRIGGER audit_calendar_changed AFTER UPDATE ON calendar_events
                WHEN OLD.deleted_at IS NEW.deleted_at AND NEW.deleted_at IS NULL
                  AND (SELECT source FROM audit_context WHERE id = 1) != 'm365-link' BEGIN
@@ -10713,6 +10752,7 @@ mod tests {
         )
         .expect("calendar audit schema");
         let local = CalendarEvent {
+            calendar_source_id: None,
             id: "local-dentist".to_string(),
             updated_at: "2026-10-02T09:00:00Z".to_string(),
             title: "Praxis Sanos".to_string(),
@@ -10750,6 +10790,11 @@ mod tests {
         .unwrap();
 
         let mut remote = local.clone();
+        conn.execute(
+            "INSERT INTO app_settings(key, value) VALUES (?1, 'checkpoint')",
+            [format!("m365_calendar_transfer_v1:{}", local.id)],
+        )
+        .unwrap();
         remote.id = "m365:calendar:remote-dentist".to_string();
         remote.title.clear(); // Sparse Graph responses must not erase the title.
         link_calendar_event_after_exchange_create_in_db(&conn, &local.id, &remote)
@@ -10765,6 +10810,12 @@ mod tests {
         assert_eq!(stored.title, local.title);
         assert_eq!(stored.description, local.description);
         assert_eq!(stored.deleted_at, None);
+        assert_eq!(
+            conn.query_row("SELECT COUNT(*) FROM app_settings", [], |row| row
+                .get::<_, usize>(0))
+                .unwrap(),
+            0
+        );
         let actions: Vec<(String, String)> = conn
             .prepare("SELECT action, source FROM audit_log ORDER BY id")
             .unwrap()
@@ -10783,6 +10834,7 @@ mod tests {
         );
 
         let another_local = CalendarEvent {
+            calendar_source_id: None,
             id: "another-local".to_string(),
             ..local
         };
@@ -10833,6 +10885,7 @@ mod tests {
         )
         .expect("calendar and delta tables");
         let event = CalendarEvent {
+            calendar_source_id: None,
             id: "local-event".to_string(),
             updated_at: "2026-10-01T09:00:00Z".to_string(),
             title: "Besprechung".to_string(),
@@ -10887,6 +10940,47 @@ mod tests {
             .expect("stored calendar event");
         assert!(deleted_at.is_some());
         assert_eq!(count("m365_calendar_delta_changes"), 0);
+    }
+
+    #[test]
+    fn deleting_a_series_trashes_its_exceptions_and_queues_only_the_master() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch("CREATE TABLE audit_context(id INTEGER PRIMARY KEY, actor TEXT, source TEXT); INSERT INTO audit_context VALUES (1, 'test', 'user'); CREATE TABLE calendar_events(id TEXT PRIMARY KEY, starts_at TEXT, duplicate_key TEXT, event_json TEXT, updated_at TEXT, deleted_at TEXT); CREATE TABLE calendar_sync_outbox(event_id TEXT PRIMARY KEY, action TEXT, queued_at TEXT, attempts INTEGER, last_error TEXT);").unwrap();
+        let master: CalendarEvent = serde_json::from_value(serde_json::json!({"id":"m365:cal:master", "title":"Serie", "startsAt":"2026-10-09T09:00", "endsAt":"2026-10-09T10:00", "description":"", "location":"", "source":"M365", "recurrence":{"frequency":"weekly","interval":1,"daysOfWeek":[5]}})).unwrap();
+        let mut child = master.clone();
+        child.id = "m365:cal:exception".into();
+        child.recurrence = None;
+        child.recurrence_master_id = Some(master.id.clone());
+        write_calendar_events(&conn, &[master.clone(), child], false).unwrap();
+        let tx = conn.unchecked_transaction().unwrap();
+        assert_eq!(
+            move_calendar_events_to_trash_in_transaction(&tx, &[master.id.clone()], true).unwrap(),
+            2
+        );
+        tx.commit().unwrap();
+        assert_eq!(
+            conn.query_row(
+                "SELECT COUNT(*) FROM calendar_events WHERE deleted_at IS NOT NULL",
+                [],
+                |row| row.get::<_, u32>(0)
+            )
+            .unwrap(),
+            2
+        );
+        let queued: String = conn
+            .query_row("SELECT event_id FROM calendar_sync_outbox", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(queued, master.id);
+        assert_eq!(
+            conn.query_row("SELECT COUNT(*) FROM calendar_sync_outbox", [], |row| row
+                .get::<_, u32>(
+                0
+            ))
+            .unwrap(),
+            1
+        );
     }
 
     #[test]
@@ -11389,6 +11483,7 @@ mod tests {
         .expect("calendar table");
         let events = (0..200_000)
             .map(|index| CalendarEvent {
+                calendar_source_id: None,
                 id: format!("large-calendar-{index}"),
                 updated_at: "2026-09-10T10:00:00Z".to_string(),
                 title: format!("Termin {index}"),
@@ -12127,6 +12222,7 @@ mod tests {
             deleted_at: None,
         };
         let previous_event = CalendarEvent {
+            calendar_source_id: None,
             id: "event-7".to_string(),
             updated_at: "2026-08-18T10:00:00Z".to_string(),
             title: "Besprechung".to_string(),
@@ -12235,6 +12331,7 @@ mod tests {
             deleted_at: None,
         };
         let event = |id: &str, title: &str| CalendarEvent {
+            calendar_source_id: None,
             id: id.to_string(),
             updated_at: "2026-08-18T10:00:00Z".to_string(),
             title: title.to_string(),
@@ -12429,6 +12526,7 @@ mod tests {
             deleted_at: None,
         };
         let event = |id: &str| CalendarEvent {
+            calendar_source_id: None,
             id: id.to_string(),
             updated_at: "2026-01-01T10:00:00Z".to_string(),
             title: id.to_string(),

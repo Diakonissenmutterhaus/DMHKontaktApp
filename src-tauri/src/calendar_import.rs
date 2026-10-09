@@ -987,9 +987,11 @@ fn parse_recurrence(raw: &str) -> Option<CalendarRecurrence> {
             .unwrap_or(1)
             .max(1),
         days_of_week,
+        first_day_of_week: None,
         day_of_month: parse_number::<u32>(fields.get("BYMONTHDAY")),
         month_of_year: parse_number::<u32>(fields.get("BYMONTH")),
         week_of_month: parse_number::<i32>(fields.get("BYSETPOS")).or(ordinal),
+        weekday_set_position: fields.get("BYSETPOS").map(|_| true),
         until: fields
             .get("UNTIL")
             .map(|value| parse_ics_date(value).chars().take(10).collect()),
@@ -1180,6 +1182,7 @@ fn parse_ics_event(
         .collect::<Vec<_>>();
     ParsedItem::Event(ParsedEvent {
         event: CalendarEvent {
+            calendar_source_id: None,
             id: if recurrence_id.is_empty() {
                 uid.clone()
             } else {

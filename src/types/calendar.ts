@@ -4,9 +4,11 @@ export interface CalendarRecurrence {
   frequency: CalendarRecurrenceFrequency;
   interval: number;
   daysOfWeek?: number[];
+  firstDayOfWeek?: number;
   dayOfMonth?: number;
   monthOfYear?: number;
   weekOfMonth?: number;
+  weekdaySetPosition?: boolean;
   until?: string;
   count?: number;
 }
@@ -25,6 +27,7 @@ export interface CalendarMeetingOptions {
 
 export interface CalendarEvent {
   id: string;
+  calendarSourceId?: string;
   updatedAt?: string;
   title: string;
   startsAt: string;
@@ -48,6 +51,13 @@ export interface CalendarEventMergeResult {
   skippedSameId: number;
   skippedExactDuplicates: number;
   total: number;
+}
+
+export interface CalendarDestination {
+  id: string;
+  name: string;
+  editable: boolean;
+  reason?: string;
 }
 
 export type CalendarFileImportJobState = "prepared" | "running" | "paused" | "failed" | "completed";

@@ -5,7 +5,8 @@ import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, 
 import { CalendarReconciliationDialog } from "../components/CalendarReconciliationDialog";
 import { CalendarEventForm } from "../components/CalendarEventForm";
 import { CalendarCategoryManager } from "../components/CalendarCategoryManager";
-import type { CalendarCategoryOperation } from "../types/m365";
+import type { CalendarCategoryOperation, Microsoft365SyncSource } from "../types/m365";
+import { parseSyncConfig } from "../types/sync";
 import { applyCalendarCategoryRules, calendarCategoryRulesStorageKey, mergeImportedCalendarCategories } from "../utils/calendar";
 import { ActionResultDialog, type ActionResult } from "../components/ActionResultDialog";
 import { EasyImportDialog } from "../components/EasyImportDialog";
@@ -20,10 +21,14 @@ import {
   calendarAutomaticSyncStatusEventName,
   calendarChangedEventName,
   calendarStorageUpdatedEventName,
+  synchronizationConfigKey,
   type CalendarAutomaticSyncStatus
 } from "../utils/automaticCalendarSync";
 import {
   listCalendarEvents,
+  getAppSetting,
+  setAppSetting,
+  listMicrosoft365CalendarSources,
   changeCalendarCategories,
   getCalendarCategoryOperation,
   getCalendarCategoryRules,
@@ -465,8 +470,13 @@ export function CalendarPage({ advancedMode, onAdvancedModeChange, onNavigate }:
   const [advancedFiltersOpen, setAdvancedFiltersOpen] = useState(false);
   const [view, setView] = useState<CalendarView>(storedCalendarView);
   const [cursor, setCursor] = useState(() => startOfDay(new Date()));
+  const [currentTime, setCurrentTime] = useState(() => new Date());
   const [editingEvent, setEditingEvent] = useState<CalendarEvent | null>(null);
   const [editingIsNew, setEditingIsNew] = useState(false);
+  const [destinationCalendars, setDestinationCalendars] = useState<Microsoft365SyncSource[]>([]);
+  const [destinationDirections, setDestinationDirections] = useState<Record<string, string>>({});
+  const [destinationsLoading, setDestinationsLoading] = useState(false);
+  const [destinationsError, setDestinationsError] = useState("");
   const [categoryFilter, setCategoryFilter] = useState(allCategoriesValue);
   const [showCategoryDialog, setShowCategoryDialog] = useState(false);
   const [showDuplicateDialog, setShowDuplicateDialog] = useState(false);
@@ -584,8 +594,59 @@ export function CalendarPage({ advancedMode, onAdvancedModeChange, onNavigate }:
   }, [view]);
 
   useEffect(() => {
+    const timer = window.setInterval(() => setCurrentTime(new Date()), 60_000);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  useEffect(() => {
     localStorage.setItem(advancedCalendarSettingsStorageKey, JSON.stringify(advancedSettings));
   }, [advancedSettings]);
+
+  const editingEventId = editingEvent?.id;
+  useEffect(() => {
+    if (!editingEventId || !("__TAURI_INTERNALS__" in window)) return;
+    let cancelled = false;
+    setDestinationCalendars([]);
+    setDestinationDirections({});
+    setDestinationsLoading(true);
+    setDestinationsError("");
+    void (async () => {
+      const [rawConfig, connection] = await Promise.all([getAppSetting(synchronizationConfigKey), getMicrosoft365ConnectionStatus()]);
+      const config = parseSyncConfig(rawConfig);
+      const calendars = connection.connected ? await listMicrosoft365CalendarSources(config.sharedMailboxAddresses) : [];
+      if (!cancelled) {
+        setDestinationCalendars(calendars);
+        setDestinationDirections(Object.fromEntries(calendars.map((calendar) => [calendar.id, config.sourceDirections[calendar.id] ?? config.direction])));
+        const defaultDestination = calendars.find((calendar) => calendar.editable && config.selectedCalendarSourceIds.includes(calendar.id) && (config.sourceDirections[calendar.id] ?? config.direction) !== "import");
+        if (defaultDestination) setEditingEvent((current) => current && editingIsNew && !current.calendarSourceId ? { ...current, calendarSourceId: defaultDestination.id, source: `Microsoft 365 · ${defaultDestination.name}` } : current);
+        if (!connection.connected) setDestinationsError("Microsoft 365 ist nicht verbunden.");
+      }
+    })().catch(() => {
+      if (!cancelled) setDestinationsError("Exchange-Kalender konnten nicht geladen werden. Termin erneut öffnen, um es nochmals zu versuchen.");
+    }).finally(() => { if (!cancelled) setDestinationsLoading(false); });
+    return () => { cancelled = true; };
+  }, [editingEventId, editingIsNew]);
+
+  const calendarDestinations = useMemo(() => {
+    const localNames = new Set(["DMH Backup", ...calendarSources.filter((source) => source !== "local" && !source.startsWith("Microsoft 365 · "))]);
+    if (editingEvent && !editingEvent.id.startsWith("m365:") && !editingEvent.source.startsWith("Microsoft 365 · ")) localNames.add(editingEvent.source && editingEvent.source !== "local" ? editingEvent.source : "DMH Backup");
+    const currentExchange = destinationCalendars.find((calendar) => editingEvent?.id.startsWith(`m365:${calendar.id}:`));
+    const originReadOnly = Boolean(editingEvent?.id.startsWith("m365:") && (!currentExchange?.editable || destinationDirections[currentExchange.id] === "import"));
+    const protectedMeeting = Boolean(editingEvent?.id.startsWith("m365:") && (
+      editingEvent.recurrence || editingEvent.recurrenceMasterId || editingEvent.excludedDates?.length
+      || editingEvent.meeting?.isOnlineMeeting
+      || editingEvent.meeting?.requiredAttendees.length || editingEvent.meeting?.optionalAttendees.length
+    ));
+    return [
+      ...Array.from(localNames).map((name) => ({ id: `local:${name}`, name, editable: !originReadOnly && !protectedMeeting, reason: protectedMeeting ? "Besprechung oder Serie: in Outlook verschieben" : "Quellkalender ist schreibgeschützt" })),
+      ...destinationCalendars.map((calendar) => ({
+        id: calendar.id,
+        name: `Microsoft 365 · ${calendar.name}${calendar.mailbox ? ` · ${calendar.mailbox}` : ""}`,
+        editable: calendar.editable && destinationDirections[calendar.id] !== "import" && ((!originReadOnly && !protectedMeeting) || calendar.id === currentExchange?.id),
+        reason: protectedMeeting ? "Besprechung oder Serie: in Outlook verschieben" : destinationDirections[calendar.id] === "import" ? "Nur Import" : "Nur lesen"
+      }))
+    ];
+  }, [calendarSources, destinationCalendars, destinationDirections, editingEvent]);
 
   useEffect(() => {
     const closeContextMenu = () => setEventContextMenu(null);
@@ -674,19 +735,29 @@ export function CalendarPage({ advancedMode, onAdvancedModeChange, onNavigate }:
     [cursor, sortedEvents]
   );
 
+  const timeGridVisible = calendarLoaded && totalCalendarEvents > 0 && view !== "month";
   useEffect(() => {
-    if ((view !== "week" && view !== "workweek" && view !== "day") || !timeGridScrollRef.current) return;
+    if (!timeGridVisible || !timeGridScrollRef.current) return;
     const now = new Date();
     const weekBasedView = view === "week" || view === "workweek";
     const rangeStart = weekBasedView ? weekDays[0] : startOfDay(cursor);
     const rangeEnd = weekBasedView ? addDays(weekDays[weekDays.length - 1], 1) : addDays(startOfDay(cursor), 1);
-    const visibleHour = now >= rangeStart && now < rangeEnd ? Math.max(0, now.getHours() - 1) : 7;
+    const showsToday = now >= rangeStart && now < rangeEnd;
+    const hourHeight = advancedMode ? advancedSettings.hourHeight : compactCalendarHourHeight;
     const scroll = timeGridScrollRef.current;
     const frame = window.requestAnimationFrame(() => {
-      scroll.scrollTop = visibleHour * compactCalendarHourHeight;
+      const timeline = scroll.querySelector<HTMLElement>(".calendar-week-timeline, .calendar-day-timeline");
+      if (!timeline) return;
+      const pinnedHeight = Array.from(scroll.querySelectorAll<HTMLElement>(".calendar-week-head, .calendar-day-head, .calendar-all-day-strip"))
+        .reduce((height, element) => height + element.getBoundingClientRect().height, 0);
+      const timelineTop = timeline.getBoundingClientRect().top - scroll.getBoundingClientRect().top - scroll.clientTop + scroll.scrollTop;
+      const minutes = showsToday ? now.getHours() * 60 + now.getMinutes() : 7 * 60;
+      const targetY = timelineTop + (minutes / 60) * hourHeight;
+      const viewportY = showsToday ? pinnedHeight + (scroll.clientHeight - pinnedHeight) / 2 : pinnedHeight;
+      scroll.scrollTop = Math.max(0, targetY - viewportY);
     });
     return () => window.cancelAnimationFrame(frame);
-  }, [advancedMode, advancedSettings.hourHeight, cursor, view, weekDays]);
+  }, [advancedMode, advancedSettings.hourHeight, cursor, view, weekDays, timeGridVisible]);
 
   const eventsForDay = (day: Date) => sortedEvents.filter((event) => {
     if (event.isAllDay) return eventOverlapsDay(event, day);
@@ -1368,7 +1439,8 @@ export function CalendarPage({ advancedMode, onAdvancedModeChange, onNavigate }:
       recurrence: null,
       recurrenceMasterId: undefined,
       recurrenceId: undefined,
-      excludedDates: []
+      excludedDates: [],
+      meeting: { ...source.meeting!, onlineMeetingUrl: "" }
     });
     setEditingIsNew(true);
     setEventContextMenu(null);
@@ -1418,8 +1490,27 @@ export function CalendarPage({ advancedMode, onAdvancedModeChange, onNavigate }:
     }
   };
 
-  const saveEvent = () => {
+  const saveEvent = async () => {
     if (!editingEvent) return;
+    const targetId = editingEvent.calendarSourceId ?? destinationCalendars.find((calendar) => editingEvent.id.startsWith(`m365:${calendar.id}:`))?.id;
+    const target = destinationCalendars.find((calendar) => calendar.id === targetId);
+    if (target && "__TAURI_INTERNALS__" in window) {
+      try {
+        const config = parseSyncConfig(await getAppSetting(synchronizationConfigKey));
+        if (!target.editable || (config.sourceDirections[target.id] ?? config.direction) === "import") throw new Error("Dieser Kalender erlaubt keine Änderungen. Bitte einen beschreibbaren Kalender mit ausgehender Synchronisierung wählen.");
+        if (!config.selectedCalendarSourceIds.includes(target.id)) {
+          await setAppSetting(synchronizationConfigKey, JSON.stringify({
+            ...config,
+            selectedCalendarSourceIds: [...config.selectedCalendarSourceIds, target.id],
+            sourceDirections: { ...config.sourceDirections, [target.id]: config.sourceDirections[target.id] ?? "bidirectional" },
+            sharedCalendars: config.sharedCalendars || target.shared
+          }));
+        }
+      } catch (error) {
+        setDestinationsError(String(error));
+        return;
+      }
+    }
     const matchingCategory = categories.find((category) => category.name === editingEvent.category.trim());
     persistSingleEvent({ ...editingEvent, updatedAt: new Date().toISOString(), color: matchingCategory?.color ?? editingEvent.color, source: editingEvent.source || "DMH Backup" });
     const date = eventDate(editingEvent);
@@ -1584,6 +1675,9 @@ export function CalendarPage({ advancedMode, onAdvancedModeChange, onNavigate }:
               isNew={editingIsNew}
               categories={categories}
               events={events}
+              calendars={calendarDestinations}
+              calendarsLoading={destinationsLoading}
+              calendarsError={destinationsError}
               onChange={setEditingEvent}
               onSave={saveEvent}
               onDelete={() => deleteEvent()}
@@ -1757,7 +1851,7 @@ export function CalendarPage({ advancedMode, onAdvancedModeChange, onNavigate }:
               </div>
               <div className="calendar-week-day-tracks">
                 {weekDays.map((day, dayIndex) => {
-                  const now = new Date();
+                  const now = currentTime;
                   const nowMinutes = now.getHours() * 60 + now.getMinutes();
                   return (
                     <div
@@ -1856,7 +1950,7 @@ export function CalendarPage({ advancedMode, onAdvancedModeChange, onNavigate }:
                 onLostPointerCapture={() => { if (timeSelectionRef.current) setActiveTimeSelection(null); }}
               >
                 {sameDay(cursor, new Date()) && (() => {
-                  const now = new Date();
+                  const now = currentTime;
                   const nowMinutes = now.getHours() * 60 + now.getMinutes();
                   return <span className="calendar-current-time-line" style={{ top: `${(nowMinutes / 60) * (advancedMode ? advancedSettings.hourHeight : compactCalendarHourHeight)}px` }}><i /></span>;
                 })()}

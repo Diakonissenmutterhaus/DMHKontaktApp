@@ -1290,6 +1290,7 @@ async fn repair_blank_calendar_titles(
             }
         }
     }
+    let resolved = event_sync::normalize_series(app, access_token, source, resolved).await?;
     queue_calendar_delta_page(app, &source.id, &resolved)?;
     defer_calendar_title_repairs(app, source, &retries)
 }
@@ -1300,6 +1301,7 @@ async fn refresh_calendar_delta_queue(
     source: &Microsoft365SyncSource,
 ) -> Result<(), String> {
     let now = Utc::now();
+    event_sync::prepare_series_upgrade(app, source)?;
     let windows = calendar_delta_quarters(now.year(), now.month());
     let current =
         refresh_calendar_delta_period(app, access_token, source, &windows[0].0, &windows[0].1)
@@ -1424,6 +1426,8 @@ async fn refresh_calendar_delta_period(
                 "Microsoft Graph hat keinen Delta-Merker geliefert. Es wurden keine Änderungen verworfen."
                     .to_string()
             })?;
+            let resolved =
+                event_sync::normalize_series(app, access_token, source, resolved).await?;
             checkpoint_calendar_delta_window_page(
                 &mut open_db(app)?,
                 &source.id,
@@ -1571,6 +1575,18 @@ pub async fn list_m365_sync_sources(
     shared_mailbox_addresses: Option<Vec<String>>,
 ) -> Result<Microsoft365SyncSources, String> {
     list_m365_sync_sources_filtered(app, shared_mailbox_addresses, true, true).await
+}
+
+#[tauri::command]
+pub async fn list_m365_calendar_sources(
+    app: AppHandle,
+    shared_mailbox_addresses: Option<Vec<String>>,
+) -> Result<Vec<Microsoft365SyncSource>, String> {
+    Ok(
+        list_m365_sync_sources_filtered(app, shared_mailbox_addresses, false, true)
+            .await?
+            .calendars,
+    )
 }
 
 async fn list_m365_sync_sources_filtered(
@@ -2228,7 +2244,7 @@ fn remote_event_description(value: &Value) -> String {
         .and_then(Value::as_str)
         .is_some_and(|content_type| content_type.eq_ignore_ascii_case("html"))
     {
-        html_to_plain_text(content)
+        html_to_plain_text(event_sync::description_html(value))
     } else {
         content.to_string()
     }
@@ -2459,7 +2475,9 @@ fn expected_calendar_category_preset(
         .to_string()
 }
 
+mod calendar_transfer;
 pub mod category_management;
+mod event_sync;
 
 async fn ensure_calendar_default_blue(
     token: &str,
@@ -2862,6 +2880,7 @@ fn remote_event_to_local(
     };
     let imported_color = value_text(value, "_dmhCategoryColor");
     crate::CalendarEvent {
+        calendar_source_id: Some(source.id.clone()),
         id: existing
             .filter(|event| linked_calendar_remote_id(event, &source.id).is_some())
             .map(|event| event.id.clone())
@@ -2926,13 +2945,36 @@ fn remote_event_to_local(
         },
         category,
         source: format!("Microsoft 365 · {}", source.name),
-        recurrence: existing.and_then(|event| event.recurrence.clone()),
-        excluded_dates: existing
-            .map(|event| event.excluded_dates.clone())
-            .unwrap_or_default(),
+        recurrence: if matches!(value_text(value, "type"), "occurrence" | "exception") {
+            None
+        } else if value.get("recurrence").is_some() {
+            event_sync::recurrence_from_graph(&value["recurrence"])
+        } else {
+            existing.and_then(|event| event.recurrence.clone())
+        },
+        excluded_dates: value
+            .get("_dmhExcludedDates")
+            .and_then(Value::as_array)
+            .map(|dates| {
+                dates
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .map(str::to_string)
+                    .collect()
+            })
+            .unwrap_or_else(|| {
+                existing
+                    .map(|event| event.excluded_dates.clone())
+                    .unwrap_or_default()
+            }),
         deleted_at: None,
-        recurrence_master_id: existing.and_then(|event| event.recurrence_master_id.clone()),
-        recurrence_id: existing.and_then(|event| event.recurrence_id.clone()),
+        recurrence_master_id: value
+            .get("seriesMasterId")
+            .and_then(Value::as_str)
+            .map(|id| format!("m365:{}:{id}", source.id))
+            .or_else(|| existing.and_then(|event| event.recurrence_master_id.clone())),
+        recurrence_id: event_sync::original_occurrence_date(value)
+            .or_else(|| existing.and_then(|event| event.recurrence_id.clone())),
         meeting: crate::CalendarMeetingOptions {
             required_attendees: if value.get("attendees").is_some() {
                 remote_event_attendees(value, "required")
@@ -3056,6 +3098,9 @@ fn event_equivalent(
         && local.meeting.reminder_minutes == remote_local.meeting.reminder_minutes
         && local.meeting.is_private == remote_local.meeting.is_private
         && local.meeting.is_online_meeting == remote_local.meeting.is_online_meeting
+        && event_sync::recurrence_to_graph(local) == event_sync::recurrence_to_graph(&remote_local)
+        && local.excluded_dates == remote_local.excluded_dates
+        && local.recurrence_master_id == remote_local.recurrence_master_id
 }
 
 fn merge_event(
@@ -3096,6 +3141,18 @@ fn merge_event(
         );
     }
     merged.meeting = remote_local.meeting;
+    if merged.recurrence.is_none() {
+        merged.recurrence = remote_local.recurrence;
+    }
+    merged.excluded_dates.extend(remote_local.excluded_dates);
+    merged.excluded_dates.sort();
+    merged.excluded_dates.dedup();
+    if merged.recurrence_master_id.is_none() {
+        merged.recurrence_master_id = remote_local.recurrence_master_id;
+    }
+    if merged.recurrence_id.is_none() {
+        merged.recurrence_id = remote_local.recurrence_id;
+    }
     merged
 }
 
@@ -3138,12 +3195,14 @@ fn graph_event_payload(event: &crate::CalendarEvent) -> Value {
         "location": {"displayName": event.location},
         "body": {"contentType": "text", "content": html_to_plain_text(&event.description)},
         "categories": categories,
+        "recurrence": event_sync::recurrence_to_graph(&event),
         "attendees": attendees,
         "showAs": event.meeting.show_as,
         "isReminderOn": event.meeting.reminder_minutes.is_some(),
         "reminderMinutesBeforeStart": event.meeting.reminder_minutes.unwrap_or(15),
         "sensitivity": if event.meeting.is_private { "private" } else { "normal" }
     });
+    payload["transactionId"] = json!(event.id);
     if event.meeting.is_online_meeting {
         payload["isOnlineMeeting"] = Value::Bool(true);
         payload["onlineMeetingProvider"] = Value::String("teamsForBusiness".to_string());
@@ -3231,6 +3290,17 @@ fn local_event_belongs_to_calendar_source(
     export_target_id: Option<&str>,
 ) -> bool {
     match linked_calendar_source_id(event, sources) {
+        Some(linked)
+            if event
+                .calendar_source_id
+                .as_deref()
+                .is_some_and(|target| target != linked) =>
+        {
+            false
+        }
+        _ if event.calendar_source_id.is_some() => {
+            event.calendar_source_id.as_deref() == Some(source.id.as_str())
+        }
         Some(linked_source_id) => linked_source_id == source.id,
         None => export_target_id == Some(source.id.as_str()),
     }
@@ -3506,6 +3576,7 @@ async fn build_m365_sync_plan(
 ) -> Result<Microsoft365SyncPlan, String> {
     if request.calendars {
         category_management::ensure_no_pending_operation(app)?;
+        calendar_transfer::ensure_no_pending_transfer(app)?;
     }
     let sources = list_m365_sync_sources_filtered(
         app.clone(),
@@ -4013,8 +4084,26 @@ async fn build_m365_sync_plan(
                 pending_delta_ids.insert(source.id.clone(), ids);
                 (batch.values, batch.removed_ids)
             } else {
-                let url = format!("{}/events?$select=id,subject,start,end,isAllDay,lastModifiedDateTime,location,body,categories,attendees,showAs,isReminderOn,reminderMinutesBeforeStart,sensitivity,isOnlineMeeting,onlineMeeting,onlineMeetingUrl,recurrence&$top=100", source.resource_path);
-                (graph_collection(access_token, &url).await?, HashSet::new())
+                let url = format!("{}/events?$select=id,subject,start,end,isAllDay,lastModifiedDateTime,location,body,categories,attendees,showAs,isReminderOn,reminderMinutesBeforeStart,sensitivity,isOnlineMeeting,onlineMeeting,onlineMeetingUrl,recurrence,type,seriesMasterId,originalStart,occurrenceId&$top=100", source.resource_path);
+                let normalized = event_sync::normalize_series(
+                    app,
+                    access_token,
+                    source,
+                    graph_collection(access_token, &url).await?,
+                )
+                .await?;
+                let removed = normalized
+                    .iter()
+                    .filter(|value| value.get("@removed").is_some())
+                    .map(|value| value_text(value, "id").to_string())
+                    .collect();
+                (
+                    normalized
+                        .into_iter()
+                        .filter(|value| value.get("@removed").is_none())
+                        .collect(),
+                    removed,
+                )
             };
             category_management::apply_category_rules(app, &mut values)?;
             for value in &mut values {
@@ -4087,6 +4176,11 @@ async fn build_m365_sync_plan(
                     &sources.calendars,
                     calendar_export_target_id,
                 ) {
+                    if pending_calendar_content_ids.contains(&local.id) {
+                        if let Some(remote_id) = linked_calendar_remote_id(local, &source.id) {
+                            deferred_remote_ids.insert(remote_id.to_string());
+                        }
+                    }
                     continue;
                 }
                 if use_delta && pending_calendar_content_ids.contains(&local.id) {
@@ -4835,14 +4929,23 @@ async fn find_matching_exchange_event_for_outbox(
     let (start, end) = calendar_outbox_lookup_window(&event.starts_at)?;
     let start = encode_graph_path_segment(&start);
     let end = encode_graph_path_segment(&end);
-    let url = format!(
-        "{}/calendarView?startDateTime={start}&endDateTime={end}&$select=id,subject,start,end,isAllDay,lastModifiedDateTime,location,body,categories,attendees,showAs,isReminderOn,reminderMinutesBeforeStart,sensitivity,isOnlineMeeting,onlineMeeting,onlineMeetingUrl&$top=50",
-        source.resource_path
-    );
+    let fields = "id,subject,start,end,isAllDay,lastModifiedDateTime,location,body,categories,attendees,showAs,isReminderOn,reminderMinutesBeforeStart,sensitivity,isOnlineMeeting,onlineMeeting,onlineMeetingUrl,recurrence,type,seriesMasterId";
+    let url = if event.recurrence.is_some() {
+        format!("{}/events?$select={fields}&$top=100", source.resource_path)
+    } else {
+        format!(
+            "{}/calendarView?startDateTime={start}&endDateTime={end}&$select={fields}&$top=50",
+            source.resource_path
+        )
+    };
     let values = graph_collection(access_token, &url).await?;
-    Ok(values
-        .into_iter()
-        .find(|remote| remote_event_key(remote) == local_event_key(&event)))
+    Ok(values.into_iter().find(|remote| {
+        remote_event_key(remote) == local_event_key(&event)
+            && event_sync::recurrence_to_graph(&remote_event_to_local(remote, source, None))
+                == event_sync::recurrence_to_graph(&event)
+            && (!matches!(value_text(remote, "type"), "occurrence" | "exception")
+                || event.recurrence_master_id.is_some())
+    }))
 }
 
 #[tauri::command]
@@ -4936,7 +5039,12 @@ pub async fn flush_m365_calendar_outbox(
             linked_calendar_remote_id(&event, &source.id)
                 .map(|remote_id| (source, remote_id.to_string()))
         });
+        let requested_target = event.calendar_source_id.as_deref();
+        let transfer_requested = linked_source
+            .as_ref()
+            .is_some_and(|(source, _)| requested_target.is_some_and(|target| target != source.id));
         let outcome = if entry.action == "delete" {
+            calendar_transfer::discard_pending_transfer(&app, &access_token, &event.id).await?;
             match linked_source {
                 Some((source, remote_id))
                     if outbox_source_direction(&request, &source.id) != "import" =>
@@ -4953,12 +5061,41 @@ pub async fn flush_m365_calendar_outbox(
                 // A local-only event has no remote copy that could be deleted.
                 Some(_) | None => Ok("ignored"),
             }
-        } else {
-            let update_payload = if entry.action == "category" {
-                json!({ "categories": graph_category_values(&master_category_for_event(&event, &master_category_names)) })
+        } else if transfer_requested {
+            let (origin, remote_id) = linked_source.as_ref().unwrap();
+            if !outbox_source_is_available(&request, origin)
+                || outbox_source_direction(&request, &origin.id) == "import"
+            {
+                Err("Der Quellkalender erlaubt keine ausgehenden Änderungen.".to_string())
             } else {
-                graph_event_payload_for_master(&event, &master_category_names)
-            };
+                let target_id = requested_target.unwrap();
+                let target = sources.calendars.iter().find(|source| {
+                    source.id == target_id
+                        && outbox_source_is_available(&request, source)
+                        && outbox_source_direction(&request, &source.id) != "import"
+                });
+                if target.is_none() && !target_id.starts_with("local:") {
+                    Err("Der gewählte Zielkalender ist nicht beschreibbar oder nicht zur Synchronisierung ausgewählt.".to_string())
+                } else {
+                    calendar_transfer::transfer_event(
+                        &app,
+                        &access_token,
+                        origin,
+                        remote_id,
+                        target,
+                        &event,
+                        &master_category_names,
+                    )
+                    .await
+                    .map(|_| "created")
+                }
+            }
+        } else if requested_target.is_some_and(|target| target.starts_with("local:"))
+            && linked_source.is_none()
+        {
+            Ok("ignored")
+        } else {
+            calendar_transfer::discard_pending_transfer(&app, &access_token, &event.id).await?;
             match linked_source {
                 Some((source, remote_id))
                     if outbox_source_direction(&request, &source.id) != "import" =>
@@ -4968,15 +5105,22 @@ pub async fn flush_m365_calendar_outbox(
                         source.resource_path,
                         encode_graph_path_segment(&remote_id)
                     );
-                    graph_write(&access_token, reqwest::Method::PATCH, &url, &update_payload)
-                        .await
-                        .map(|_| "updated")
+                    event_sync::patch_event(
+                        &access_token,
+                        &url,
+                        &event,
+                        &master_category_names,
+                        entry.action == "category",
+                    )
+                    .await
+                    .map(|_| "updated")
                 }
                 Some(_) => Ok("ignored"),
                 None => {
                     let target = sources.calendars.iter().find(|source| {
                         outbox_source_is_available(&request, source)
                             && outbox_source_direction(&request, &source.id) != "import"
+                            && requested_target.map_or(true, |target| target == source.id)
                     });
                     if let Some(target) = target {
                         match find_matching_exchange_event_for_outbox(&access_token, target, &event)
@@ -4989,11 +5133,12 @@ pub async fn flush_m365_calendar_outbox(
                                     target.resource_path,
                                     encode_graph_path_segment(remote_id)
                                 );
-                                match graph_write(
+                                match event_sync::patch_event(
                                     &access_token,
-                                    reqwest::Method::PATCH,
                                     &url,
-                                    &update_payload,
+                                    &event,
+                                    &master_category_names,
+                                    entry.action == "category",
                                 )
                                 .await
                                 {
@@ -5011,11 +5156,11 @@ pub async fn flush_m365_calendar_outbox(
                             }
                             Ok(None) => {
                                 let url = format!("{}/events", target.resource_path);
-                                match graph_write(
+                                match event_sync::create_event(
                                     &access_token,
-                                    reqwest::Method::POST,
                                     &url,
-                                    &graph_event_payload_for_master(&event, &master_category_names),
+                                    &event,
+                                    &master_category_names,
                                 )
                                 .await
                                 {
@@ -5485,13 +5630,8 @@ pub async fn apply_m365_sync(
                 "createRemote",
             ) => {
                 let url = format!("{}/events", operation.source.resource_path);
-                match graph_write(
-                    &access_token,
-                    reqwest::Method::POST,
-                    &url,
-                    &graph_event_payload_for_master(local, &master_category_names),
-                )
-                .await
+                match event_sync::create_event(&access_token, &url, local, &master_category_names)
+                    .await
                 {
                     Ok(remote) => {
                         if value_text(&remote, "id").is_empty() {
@@ -5556,16 +5696,11 @@ pub async fn apply_m365_sync(
                     operation.source.resource_path,
                     encode_graph_path_segment(value_text(remote, "id"))
                 );
-                graph_write(
-                    &access_token,
-                    reqwest::Method::PATCH,
-                    &url,
-                    &graph_event_payload_for_master(local, &master_category_names),
-                )
-                .await
-                .map(|_| {
-                    result.updated += 1;
-                })
+                event_sync::patch_event(&access_token, &url, local, &master_category_names, false)
+                    .await
+                    .map(|_| {
+                        result.updated += 1;
+                    })
             }
             (
                 PlannedPayload::Calendar {
@@ -5595,11 +5730,12 @@ pub async fn apply_m365_sync(
                     operation.source.resource_path,
                     encode_graph_path_segment(value_text(remote, "id"))
                 );
-                match graph_write(
+                match event_sync::patch_event(
                     &access_token,
-                    reqwest::Method::PATCH,
                     &url,
-                    &graph_event_payload_for_master(&merged, &master_category_names),
+                    &merged,
+                    &master_category_names,
+                    false,
                 )
                 .await
                 {
@@ -6874,6 +7010,7 @@ mod tests {
 
     fn calendar_event(id: &str) -> crate::CalendarEvent {
         crate::CalendarEvent {
+            calendar_source_id: None,
             id: id.to_string(),
             updated_at: "2026-09-01T00:00:00Z".to_string(),
             title: "Besprechung".to_string(),
@@ -7033,6 +7170,54 @@ mod tests {
             &sources[1],
             &sources,
             target
+        ));
+    }
+
+    #[test]
+    fn explicit_calendar_destination_overrides_the_default_export_target() {
+        let sources = vec![calendar_source("a"), calendar_source("b")];
+        let mut event = calendar_event("draft");
+        event.calendar_source_id = Some("b".to_string());
+        assert!(!local_event_belongs_to_calendar_source(
+            &event,
+            &sources[0],
+            &sources,
+            Some("a")
+        ));
+        assert!(local_event_belongs_to_calendar_source(
+            &event,
+            &sources[1],
+            &sources,
+            Some("a")
+        ));
+        event.calendar_source_id = Some("local:DMH Backup".to_string());
+        assert!(!local_event_belongs_to_calendar_source(
+            &event,
+            &sources[0],
+            &sources,
+            Some("a")
+        ));
+        assert!(!local_event_belongs_to_calendar_source(
+            &event,
+            &sources[1],
+            &sources,
+            Some("a")
+        ));
+        event.id = "m365:a:existing".to_string();
+        event.calendar_source_id = Some("b".to_string());
+        // Existing appointments move through the durable outbox, not a second
+        // create operation in a simultaneous/manual reconciliation plan.
+        assert!(!local_event_belongs_to_calendar_source(
+            &event,
+            &sources[0],
+            &sources,
+            Some("a")
+        ));
+        assert!(!local_event_belongs_to_calendar_source(
+            &event,
+            &sources[1],
+            &sources,
+            Some("a")
         ));
     }
 

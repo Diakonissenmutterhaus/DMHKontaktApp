@@ -340,6 +340,7 @@ mod tests {
     #[test]
     fn calendar_export_skips_deleted_and_invalid_events() {
         let event = |id: &str, starts_at: &str, deleted_at: Option<&str>| CalendarEvent {
+            calendar_source_id: None,
             id: id.to_string(),
             updated_at: String::new(),
             title: id.to_string(),

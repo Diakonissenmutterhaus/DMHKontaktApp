@@ -401,6 +401,10 @@ export function listMicrosoft365SyncSources(sharedMailboxAddresses: string[] = [
   return invoke("list_m365_sync_sources", { sharedMailboxAddresses });
 }
 
+export function listMicrosoft365CalendarSources(sharedMailboxAddresses: string[] = []): Promise<Microsoft365SyncSources["calendars"]> {
+  return invoke("list_m365_calendar_sources", { sharedMailboxAddresses });
+}
+
 export function previewMicrosoft365Sync(request: {
   direction: string;
   base: string;

@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import type { CalendarEvent } from "../src/types/calendar";
 
 type MockContact = {
   id: number;
@@ -50,7 +51,7 @@ function mockContact(id: number, firstName: string, lastName: string): MockConta
   };
 }
 
-async function installTauriMock(page: Page, contacts: MockContact[], options: { loadDelayMs?: number; calendarEvents?: Array<{ id: string; title: string; startsAt: string; endsAt: string; location: string; description: string; color: string; category: string; source: string }> } = {}) {
+async function installTauriMock(page: Page, contacts: MockContact[], options: { loadDelayMs?: number; calendarEvents?: CalendarEvent[] } = {}) {
   await page.addInitScript(({ seedContacts, seedCalendarEvents, loadDelayMs }) => {
     let callbackId = 0;
     const callbacks = new Map<number, (...args: unknown[]) => void>();
@@ -169,6 +170,47 @@ test("seleção múltipla, menu e alterações não salvas funcionam juntos", as
   await expect(page.getByLabel("Vorname")).toHaveValue("Berta");
 });
 
+test.describe("rolagem inicial do calendário", () => {
+  test.use({ timezoneId: "Europe/Berlin" });
+  for (const scenario of [
+    { view: "week", advanced: false, hourHeight: 60, width: 1440 },
+    { view: "day", advanced: false, hourHeight: 60, width: 760 },
+    { view: "workweek", advanced: true, hourHeight: 52, width: 1440 },
+    { view: "week", advanced: true, hourHeight: 84, width: 1440 }
+  ]) {
+    test(`centraliza 14:37 ao entrar e voltar: ${scenario.view}, escala ${scenario.hourHeight}px`, async ({ page }) => {
+      await page.clock.setFixedTime("2026-10-09T14:37:00+02:00");
+      await page.setViewportSize({ width: scenario.width, height: 900 });
+      await installTauriMock(page, [], { loadDelayMs: 250, calendarEvents: Array.from({ length: 3 }, (_, index) => ({
+        id: `all-day-${index}`, title: `Ganztägig ${index}`, startsAt: "2026-10-09T00:00", endsAt: "2026-10-10T00:00",
+        isAllDay: true, location: "", description: "", color: "blue", category: "", source: "DMH Backup"
+      })) });
+      await page.addInitScript(({ view, advanced, hourHeight }) => {
+        localStorage.setItem("agendakontakte.calendarView.v1", view);
+        localStorage.setItem("dmh.calendar.advanced.v1", String(advanced));
+        localStorage.setItem("agendakontakte.calendarAdvancedSettings.v1", JSON.stringify({ hourHeight, hiddenSources: [] }));
+      }, scenario);
+      await page.goto("/");
+      const grid = page.locator(".calendar-week-scroll, .calendar-day-scroll");
+      const checkCentered = async () => {
+        await expect(grid.locator(".calendar-current-time-line")).toBeVisible();
+        await expect.poll(() => grid.evaluate((element) => {
+          const pinnedHeight = Array.from(element.querySelectorAll(".calendar-week-head, .calendar-day-head, .calendar-all-day-strip"))
+            .reduce((height, header) => height + header.getBoundingClientRect().height, 0);
+          const center = element.getBoundingClientRect().top + element.clientTop + pinnedHeight + (element.clientHeight - pinnedHeight) / 2;
+          return Math.abs(element.querySelector(".calendar-current-time-line")!.getBoundingClientRect().top - center);
+        })).toBeLessThan(2);
+      };
+      await page.getByRole("button", { name: "Kalender", exact: true }).click();
+      await checkCentered();
+      await grid.evaluate((element) => { element.scrollTop = 0; });
+      await page.getByRole("button", { name: "Kontakte", exact: true }).click();
+      await page.getByRole("button", { name: "Kalender", exact: true }).click();
+      await checkCentered();
+    });
+  }
+});
+
 test("evento de dia inteiro usa a faixa superior e esconde horários", async ({ page }) => {
   await installTauriMock(page, [mockContact(1, "Anna", "Adler")]);
   await page.goto("/");
@@ -203,8 +245,9 @@ test("novo evento mantém fontes uniformes e o formulário cabe em diferentes ja
   await page.getByLabel("Endzeit").fill("10:45");
 
   const editor = page.locator(".calendar-meeting-editor");
-  const fontSizes = await editor.locator('.calendar-meeting-field input:not([type="checkbox"]), textarea').evaluateAll((fields) => fields.map((field) => getComputedStyle(field).fontSize));
-  expect([...new Set(fontSizes)]).toEqual(["16px"]);
+  const fontSizes = await editor.locator('.calendar-meeting-field input:not([type="checkbox"])').evaluateAll((fields) => fields.map((field) => getComputedStyle(field).fontSize));
+  expect([...new Set(fontSizes)]).toEqual(["15px"]);
+  await expect(editor.locator("textarea")).toHaveCSS("font-size", "16px");
   await expect(page.locator(".calendar-meeting-commandbar").getByRole("button", { name: /Speichern/ })).toBeVisible();
   const saveBox = await editor.getByRole("button", { name: /Speichern/ }).boundingBox();
   const categoryBox = await editor.getByLabel("Kategorie", { exact: true }).boundingBox();
@@ -223,6 +266,82 @@ test("novo evento mantém fontes uniformes e o formulário cabe em diferentes ja
   await expect(page.locator(".calendar-meeting-footer")).toBeInViewport();
   await expect(editor.getByRole("button", { name: /Speichern/ })).toBeEnabled();
   await page.locator(".calendar-event-dialog").screenshot({ path: testInfo.outputPath("novo-evento-compacto.png") });
+});
+
+test("Tagesübersicht mostra a madrugada, separa eventos e o editor ocupa a altura disponível", async ({ page }, testInfo) => {
+  await page.clock.setFixedTime("2026-10-08T14:00:00+02:00");
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await installTauriMock(page, [], { calendarEvents: [
+    { title: "Mittagspause", start: "12:00", end: "13:00" },
+    { title: "Kita", start: "13:00", end: "14:00" },
+    { title: "Rebekka Kita", start: "13:30", end: "14:00" }
+  ].map((event, index) => ({ id: `planner-${index}`, title: event.title, startsAt: `2026-10-08T${event.start}`, endsAt: `2026-10-08T${event.end}`, location: "", description: "", color: "blue", category: "", source: "DMH Backup" })) });
+  await page.goto("/");
+  await page.getByRole("button", { name: "Kalender", exact: true }).click();
+  await page.getByRole("button", { name: /Neuer Termin/ }).click();
+  await page.getByPlaceholder("Titel hinzufügen").fill("Neuer Termin Test");
+  await page.getByLabel("Startzeit").fill("02:45");
+  await page.getByLabel("Endzeit").fill("04:15");
+  const timeline = page.locator(".calendar-planner-timeline");
+  const draft = timeline.locator(".draft");
+  const draftFits = () => draft.evaluate((element) => {
+    const viewport = element.closest(".calendar-planner-timeline")!.getBoundingClientRect();
+    const box = element.getBoundingClientRect();
+    return box.top >= viewport.top && box.bottom <= viewport.bottom;
+  });
+  await expect(draft).toContainText("02:45–04:15");
+  await expect.poll(draftFits).toBe(true);
+  const sizes = await page.locator(".calendar-meeting-editor").evaluate((editor) => ({
+    descriptionBottom: editor.querySelector(".calendar-description-card")!.getBoundingClientRect().bottom,
+    plannerBottom: editor.querySelector(".calendar-meeting-planner")!.getBoundingClientRect().bottom,
+    textareaHeight: editor.querySelector("textarea")!.getBoundingClientRect().height
+  }));
+  expect(Math.abs(sizes.descriptionBottom - sizes.plannerBottom)).toBeLessThan(5);
+  expect(sizes.textareaHeight).toBeGreaterThan(180);
+  await page.locator(".calendar-event-dialog").screenshot({ path: testInfo.outputPath("planner-madrugada.png") });
+
+  await page.getByLabel("Startzeit").fill("15:00");
+  await page.getByLabel("Endzeit").fill("16:00");
+  await expect(draft).toContainText("15:00–16:00");
+  await expect.poll(draftFits).toBe(true);
+  for (const [title, times] of [["Mittagspause", "12:00–13:00"], ["Kita", "13:00–14:00"], ["Rebekka Kita", "13:30–14:00"]]) {
+    const card = timeline.getByLabel(`${title}, ${times}`, { exact: true });
+    await expect(card).toBeVisible();
+    await expect(card.locator("span")).toHaveText(times);
+    expect(await card.evaluate((element) => element.querySelector("span")!.getBoundingClientRect().bottom <= element.getBoundingClientRect().bottom)).toBe(true);
+  }
+  const kita = await timeline.getByLabel("Kita, 13:00–14:00", { exact: true }).boundingBox();
+  const rebekka = await timeline.getByLabel("Rebekka Kita, 13:30–14:00", { exact: true }).boundingBox();
+  expect(kita!.x + kita!.width + 2).toBeLessThanOrEqual(rebekka!.x);
+  await page.locator(".calendar-event-dialog").screenshot({ path: testInfo.outputPath("planner-eventos-separados.png") });
+  await page.setViewportSize({ width: 760, height: 900 });
+  const overflow = await page.locator(".calendar-meeting-editor").evaluate((element) => element.scrollWidth > element.clientWidth + 1);
+  expect(overflow).toBe(false);
+});
+
+test("série recebida do Exchange abre com repetição e preserva o link do Teams", async ({ page }, testInfo) => {
+  const today = new Date();
+  const day = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
+  await installTauriMock(page, [], { calendarEvents: [{
+    id: "m365:calendar-a:series-1", title: "Série do Exchange", startsAt: `${day}T09:00`, endsAt: `${day}T10:00`,
+    location: "SR2", description: "Descrição da série", color: "blue", category: "", source: "Microsoft 365 · Arbeit",
+    recurrence: { frequency: "weekly", interval: 2, daysOfWeek: [today.getDay()], firstDayOfWeek: 1, count: 4 },
+    meeting: { requiredAttendees: [], optionalAttendees: [], showAs: "busy", reminderMinutes: 15, isPrivate: false, isOnlineMeeting: true, onlineMeetingUrl: "https://teams.microsoft.com/l/meetup-join/example" }
+  }] });
+  await page.goto("/");
+  await page.getByRole("button", { name: "Kalender", exact: true }).click();
+  await page.getByRole("button", { name: /Série do Exchange/ }).first().click();
+  const editor = page.locator(".calendar-meeting-editor");
+  await expect(editor.getByRole("button", { name: "Serie", exact: true })).toHaveAttribute("aria-pressed", "true");
+  await expect(editor.getByLabel("Wiederholung")).toHaveValue("weekly");
+  await expect(editor.getByLabel("Intervall")).toHaveValue("2");
+  await expect(editor.getByLabel("Anzahl Termine")).toHaveValue("4");
+  await expect(editor.getByRole("checkbox", { name: "Teams-Besprechung", exact: true })).toBeChecked();
+  await expect(editor.getByRole("checkbox", { name: "Teams-Besprechung", exact: true })).toBeDisabled();
+  await expect(editor.getByRole("link", { name: "Beitreten" })).toHaveAttribute("href", "https://teams.microsoft.com/l/meetup-join/example");
+  await editor.getByPlaceholder("Beschreibung hinzufügen").fill("Descrição editada");
+  await expect(editor.getByRole("button", { name: /Speichern/ })).toBeEnabled();
+  await page.locator(".calendar-event-dialog").screenshot({ path: testInfo.outputPath("serie-exchange-teams.png") });
 });
 
 test("menu de contexto mantém os ícones alinhados à esquerda e as setas à direita", async ({ page }, testInfo) => {

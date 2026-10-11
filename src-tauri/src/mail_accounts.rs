@@ -320,28 +320,108 @@ pub struct MailAccount {
     pub updated_at: String,
 }
 
-fn current_outlook_profile_name() -> Result<String, String> {
-    let script = r#"
+const OUTLOOK_PROFILE_LOOKUP_SCRIPT: &str = r#"
 $ErrorActionPreference = 'Stop'
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
-$outlook = New-Object -ComObject Outlook.Application
-[Console]::Write([string]$outlook.Session.CurrentProfileName)
+
+function Get-DefaultOutlookProfile {
+  foreach ($version in @('16.0', '15.0', '14.0')) {
+    $outlookKey = "HKCU:\Software\Microsoft\Office\$version\Outlook"
+    $profile = Get-ItemPropertyValue -LiteralPath $outlookKey -Name 'DefaultProfile' -ErrorAction SilentlyContinue
+    if (-not [string]::IsNullOrWhiteSpace([string]$profile)) {
+      return [string]$profile
+    }
+  }
+
+  $legacyKey = 'HKCU:\Software\Microsoft\Windows NT\CurrentVersion\Windows Messaging Subsystem\Profiles'
+  $profile = Get-ItemPropertyValue -LiteralPath $legacyKey -Name 'DefaultProfile' -ErrorAction SilentlyContinue
+  if (-not [string]::IsNullOrWhiteSpace([string]$profile)) {
+    return [string]$profile
+  }
+
+  foreach ($version in @('16.0', '15.0', '14.0')) {
+    $profilesKey = "HKCU:\Software\Microsoft\Office\$version\Outlook\Profiles"
+    $profiles = @(Get-ChildItem -LiteralPath $profilesKey -ErrorAction SilentlyContinue | ForEach-Object { $_.PSChildName })
+    if ($profiles.Count -eq 1 -and -not [string]::IsNullOrWhiteSpace([string]$profiles[0])) {
+      return [string]$profiles[0]
+    }
+  }
+
+  return ''
+}
+
+$registryProfile = Get-DefaultOutlookProfile
+$outlookRunning = @(Get-Process -Name 'OUTLOOK' -ErrorAction SilentlyContinue).Count -gt 0
+$lastComError = $null
+
+if ($outlookRunning) {
+  for ($attempt = 1; $attempt -le 10; $attempt++) {
+    $outlook = $null
+    try {
+      $outlook = [Runtime.InteropServices.Marshal]::GetActiveObject('Outlook.Application')
+      $activeProfile = [string]$outlook.Session.CurrentProfileName
+      if (-not [string]::IsNullOrWhiteSpace($activeProfile)) {
+        [Console]::Write($activeProfile)
+        exit 0
+      }
+    } catch {
+      $lastComError = $_.Exception
+    } finally {
+      if ($null -ne $outlook) {
+        [void][Runtime.InteropServices.Marshal]::ReleaseComObject($outlook)
+      }
+    }
+
+    if ($attempt -lt 10) {
+      Start-Sleep -Milliseconds 500
+    }
+  }
+}
+
+# Extended MAPI only needs the profile name. Falling back to the registered
+# default avoids starting Outlook solely to discover that name and also covers
+# the normal RPC_E_CALL_REJECTED startup window.
+if (-not [string]::IsNullOrWhiteSpace($registryProfile)) {
+  [Console]::Write($registryProfile)
+  exit 0
+}
+
+if ($outlookRunning -and $null -ne $lastComError) {
+  [Console]::Error.Write("OUTLOOK_BUSY|0x{0:X8}" -f ($lastComError.HResult -band 0xffffffffL))
+  exit 21
+}
+
+[Console]::Error.Write('PROFILE_NOT_FOUND')
+exit 22
 "#;
+
+fn outlook_profile_lookup_error(stderr: &[u8]) -> String {
+    let detail = String::from_utf8_lossy(stderr);
+    if detail.contains("OUTLOOK_BUSY|") {
+        return "Outlook Classic reagiert gerade nicht auf lokale Anfragen. Schließen Sie offene Outlook-Dialoge, warten Sie kurz und versuchen Sie es erneut."
+            .to_string();
+    }
+    if detail.contains("PROFILE_NOT_FOUND") {
+        return "Es wurde kein eingerichtetes Outlook-Classic-Profil gefunden. Öffnen Sie Outlook Classic einmal, schließen Sie die Einrichtung ab und versuchen Sie es erneut."
+            .to_string();
+    }
+    "Das Outlook-Classic-Profil konnte nicht gelesen werden. Öffnen Sie Outlook Classic und versuchen Sie es erneut."
+        .to_string()
+}
+
+fn current_outlook_profile_name() -> Result<String, String> {
     let output = hidden_command("powershell")
         .args([
             "-NoProfile",
             "-ExecutionPolicy",
             "Bypass",
             "-Command",
-            script,
+            OUTLOOK_PROFILE_LOOKUP_SCRIPT,
         ])
         .output()
         .map_err(|_| "Outlook Classic konnte nicht gestartet werden.".to_string())?;
     if !output.status.success() {
-        return Err(
-            "Das aktuelle Outlook-Classic-Profil konnte nicht ermittelt werden. Outlook Classic muss installiert und eingerichtet sein."
-                .to_string(),
-        );
+        return Err(outlook_profile_lookup_error(&output.stderr));
     }
 
     let profile = String::from_utf8_lossy(&output.stdout).trim().to_string();
@@ -1339,6 +1419,19 @@ mod tests {
         assert!(!sanitized.contains('\r'));
         assert!(!sanitized.contains('\n'));
         assert_eq!(sanitized.chars().count(), 160);
+    }
+
+    #[test]
+    fn outlook_profile_lookup_errors_are_actionable() {
+        let busy = outlook_profile_lookup_error(b"OUTLOOK_BUSY|0x80010001");
+        assert!(busy.contains("reagiert gerade nicht"));
+        assert!(!busy.contains("installiert"));
+
+        let missing = outlook_profile_lookup_error(b"PROFILE_NOT_FOUND");
+        assert!(missing.contains("kein eingerichtetes Outlook-Classic-Profil"));
+
+        let unknown = outlook_profile_lookup_error(b"unexpected failure");
+        assert!(unknown.contains("konnte nicht gelesen werden"));
     }
 
     #[test]

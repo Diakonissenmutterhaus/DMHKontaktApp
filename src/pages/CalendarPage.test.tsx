@@ -182,15 +182,14 @@ describe("Exchange category repair", () => {
     expect(db.repairMicrosoft365CalendarCategories).not.toHaveBeenCalled();
   });
 
-  it("reports only verified appointments and surfaces a persisted-category mismatch", async () => {
+  it("does not show category diagnostics as a general user popup", async () => {
     const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
     const user = await openCategories();
     await user.click(screen.getByRole("button", { name: "Farben prüfen und reparieren" }));
-    await screen.findByRole("heading", { name: "Exchange-Kategorien teilweise bestätigt" });
-    expect(screen.getByText(/bei 1 von 2 erneut gelesenen Terminen/)).toBeInTheDocument();
-    expect(screen.getByText(/am erneut gelesenen Termin nicht bestätigt/)).toBeInTheDocument();
     expect(confirm).toHaveBeenCalledOnce();
     await waitFor(() => expect(db.repairMicrosoft365CalendarCategories).toHaveBeenCalledOnce());
+    expect(screen.queryByRole("heading", { name: "Exchange-Kategorien teilweise bestätigt" })).not.toBeInTheDocument();
+    expect(screen.queryByText(/am erneut gelesenen Termin nicht bestätigt/)).not.toBeInTheDocument();
   });
 
   it("updates an open category manager when a Teams color change is received", async () => {

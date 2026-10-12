@@ -1,3 +1,4 @@
+import { useDiagnosticMessage } from "../hooks/useDiagnosticMessage";
 import { open } from "@tauri-apps/plugin-dialog";
 import { readFile } from "@tauri-apps/plugin-fs";
 import { listen } from "@tauri-apps/api/event";
@@ -35,7 +36,7 @@ export function ImportPage({ embedded = false, initialMode }: ImportPageProps) {
   const [calendarImportBusy, setCalendarImportBusy] = useState(false);
   const [groups, setGroups] = useState<Group[]>([]);
   const [selectedGroupId, setSelectedGroupId] = useState<number | "">("");
-  const [message, setMessage] = useState("");
+  const [message, setMessage] = useDiagnosticMessage("ImportPage:message", "notification");
   const [actionResult, setActionResult] = useState<ActionResult | null>(null);
   const [showGroupCard, setShowGroupCard] = useState(false);
   const [newGroupName, setNewGroupName] = useState("");

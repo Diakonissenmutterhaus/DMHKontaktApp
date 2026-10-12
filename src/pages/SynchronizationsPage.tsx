@@ -1,3 +1,4 @@
+import { useDiagnosticMessage } from "../hooks/useDiagnosticMessage";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   CalendarDays,
@@ -56,7 +57,7 @@ export function SynchronizationsPage({ onNavigate, embedded = false, onClose }: 
   const [m365Sources, setM365Sources] = useState<Microsoft365SyncSources | null>(null);
   const [preview, setPreview] = useState<Microsoft365SyncPreview | null>(null);
   const [busy, setBusy] = useState(false);
-  const [message, setMessage] = useState("");
+  const [message, setMessage] = useDiagnosticMessage("SynchronizationsPage:message", "notification");
   const [messageType, setMessageType] = useState<"success" | "error" | "info">("info");
   const [sharedMailboxAddress, setSharedMailboxAddress] = useState("");
   const [conflictDecisions, setConflictDecisions] = useState<Record<string, Microsoft365ConflictDecision>>({});

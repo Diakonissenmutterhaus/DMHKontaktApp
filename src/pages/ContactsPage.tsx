@@ -1,3 +1,4 @@
+import { useDiagnosticMessage } from "../hooks/useDiagnosticMessage";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { Check, Download, Ellipsis, Folder, FolderOpen, FolderPlus, Info, ListChecks, Mail, Minus, Pencil, Plus, RefreshCw, Search, ShieldCheck, SlidersHorizontal, Trash2, Upload, UserPlus, X } from "lucide-react";
 import { type CSSProperties, type FormEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -257,9 +258,9 @@ export function ContactsPage({ onNavigate, onRegisterNavigationBlocker }: Contac
   const [groupForm, setGroupForm] = useState<Group>(blankGroup);
   const [groupCreateOpen, setGroupCreateOpen] = useState(false);
   const [groupCreateBusy, setGroupCreateBusy] = useState(false);
-  const [groupCreateError, setGroupCreateError] = useState("");
+  const [groupCreateError, setGroupCreateError] = useDiagnosticMessage("ContactsPage:groupCreateError", "inline");
   const [renamingGroup, setRenamingGroup] = useState<Group | null>(null);
-  const [groupRenameError, setGroupRenameError] = useState("");
+  const [groupRenameError, setGroupRenameError] = useDiagnosticMessage("ContactsPage:groupRenameError", "inline");
   const [testMenuOpen, setTestMenuOpen] = useState(false);
   const [m365SyncDialogOpen, setM365SyncDialogOpen] = useState(false);
   const [easyImportOpen, setEasyImportOpen] = useState(false);
@@ -268,7 +269,7 @@ export function ContactsPage({ onNavigate, onRegisterNavigationBlocker }: Contac
   const [duplicateGroups, setDuplicateGroups] = useState<ContactDuplicateGroup[]>([]);
   const [duplicateCleanupConfirmOpen, setDuplicateCleanupConfirmOpen] = useState(false);
   const [duplicateCleanupBusy, setDuplicateCleanupBusy] = useState(false);
-  const [message, setMessage] = useState("");
+  const [message, setMessage] = useDiagnosticMessage("ContactsPage:message", "notification");
   const [messageType, setMessageType] = useState<"success" | "error" | "info">("info");
   const [actionResult, setActionResult] = useState<ActionResult | null>(null);
   const [confirmDeletions, setConfirmDeletions] = useState(true);

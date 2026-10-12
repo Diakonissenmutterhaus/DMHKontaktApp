@@ -1,3 +1,4 @@
+import { useDiagnosticMessage } from "../hooks/useDiagnosticMessage";
 import {
   Armchair,
   ArrowLeft,
@@ -151,7 +152,7 @@ export function DienstleistungenPage() {
   const [bookings, setBookings] = useState<Booking[]>(() => readStored(bookingsKey, []));
   const [tickets, setTickets] = useState<ServiceTicket[]>(() => readStored(ticketsKey, []));
   const [checkins, setCheckins] = useState<MealCheckin[]>(() => readStored(checkinsKey, []));
-  const [message, setMessage] = useState("");
+  const [message, setMessage] = useDiagnosticMessage("DienstleistungenPage:message", "notification");
   const [messageType, setMessageType] = useState<"success" | "error" | "info">("info");
   const [bookingForm, setBookingForm] = useState({ resource: "Raum" as BookingResource, details: "", date: today, from: "09:00", to: "12:00", requester: "", note: "" });
   const [ticketForm, setTicketForm] = useState({ category: "IT" as ServiceTicket["category"], title: "", message: "", assignee: "" });
@@ -537,7 +538,7 @@ interface TicketRecordDialogProps {
 function TicketRecordDialog({ ticket, onClose, onUpdate, onOpenSection }: TicketRecordDialogProps) {
   const [editing, setEditing] = useState(false);
   const [comment, setComment] = useState("");
-  const [attachmentMessage, setAttachmentMessage] = useState("");
+  const [attachmentMessage, setAttachmentMessage] = useDiagnosticMessage("DienstleistungenPage:attachmentMessage", "notification");
   const [draft, setDraft] = useState(() => ticketDraft(ticket));
   const comments = ticket.comments ?? [];
   const attachments = ticket.attachments ?? [];

@@ -1,3 +1,4 @@
+import { useDiagnosticMessage } from "./hooks/useDiagnosticMessage";
 import { LoaderCircle, RefreshCw } from "lucide-react";
 import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -9,6 +10,9 @@ import { CalendarPage } from "./pages/CalendarPage";
 import { TrashPage } from "./pages/TrashPage";
 import { UpdateNotifier } from "./components/UpdateNotifier";
 import { ActivityCenter } from "./components/ActivityCenter";
+import { StatusMessage } from "./components/StatusMessage";
+import { migrateLegacyActivityDiagnostics } from "./utils/activityLog";
+import { invokeWithDiagnostics, publicNotification, reportDiagnostic } from "./utils/notificationPolicy";
 import { SettingsPage } from "./pages/SettingsPage";
 import { PasswordsPage } from "./pages/PasswordsPage";
 import { AuthenticatorPage } from "./pages/AuthenticatorPage";
@@ -77,8 +81,26 @@ export default function App() {
   const [settingsSection, setSettingsSection] = useState<SettingsSection>("general");
   const [featureAvailability, setFeatureAvailability] = useState(readFeatureAvailability);
   const [vaultStatus, setVaultStatus] = useState<VaultStatus | null>(null);
-  const [startupError, setStartupError] = useState("");
+  const [startupError, setStartupError] = useDiagnosticMessage("App:startupError", "inline");
   const [edvUnlocked, setEdvUnlocked] = useState(false);
+  const [exchangeMessage, setExchangeMessage] = useDiagnosticMessage("App:exchangeMessage");
+  const noticeKind = useRef<"exchange" | "local">("exchange");
+  useEffect(() => {
+    const receive = (event: Event) => {
+      const detail = (event as CustomEvent<CalendarAutomaticSyncStatus>).detail;
+      if (detail?.publicMessage) { noticeKind.current = "exchange"; setExchangeMessage(detail.publicMessage); }
+      else if (detail?.state === "success" && detail.pendingOutbound === 0 && noticeKind.current === "exchange") setExchangeMessage("");
+    };
+    const unhandled = (event: PromiseRejectionEvent) => {
+      const raw = event.reason instanceof Error ? event.reason.message : String(event.reason);
+      void reportDiagnostic({ origin: "App:unhandled", level: "error", message: raw });
+      const notice = publicNotification(String(event.reason));
+      if (notice) { noticeKind.current = "local"; setExchangeMessage(notice); }
+    };
+    window.addEventListener(calendarAutomaticSyncStatusEventName, receive);
+    window.addEventListener("unhandledrejection", unhandled);
+    return () => { window.removeEventListener(calendarAutomaticSyncStatusEventName, receive); window.removeEventListener("unhandledrejection", unhandled); };
+  }, [setExchangeMessage]);
   const [pendingEdvNavigation, setPendingEdvNavigation] = useState<{ page: Page; section?: SettingsSection } | null>(null);
   const safetyBackupPromise = useRef<Promise<void> | null>(null);
   const backupDirty = useRef(true);
@@ -116,7 +138,10 @@ export default function App() {
     if (nextPage === "authenticator" && !featureAvailability.authenticator) return;
     if (nextPage === "passwords" && !featureAvailability.passwords) return;
     if (nextPage === "documents" && !featureAvailability.documents) return;
-    if (!edvPages.has(nextPage)) setEdvUnlocked(false);
+    if (!edvPages.has(nextPage)) {
+      if (edvUnlocked) void invokeWithDiagnostics("lock_edv_tools").catch(() => undefined);
+      setEdvUnlocked(false);
+    }
     setPage(nextPage);
     if (nextSection) {
       setSettingsSection(nextSection);
@@ -210,6 +235,7 @@ export default function App() {
             // replacing the calendar's useful message with "already synced".
             if (currentTrigger !== "calendar-poll" || status.state !== "success"
               || status.message !== "Microsoft 365 ist bereits synchron.") {
+              void reportDiagnostic({ origin: `Microsoft 365:${currentTrigger}`, operation: currentTrigger, level: status.state, message: status.message });
               window.dispatchEvent(new CustomEvent<CalendarAutomaticSyncStatus>(calendarAutomaticSyncStatusEventName, { detail: status }));
             }
           }
@@ -252,6 +278,7 @@ export default function App() {
 
   useEffect(() => {
     loadVaultStatus();
+    void migrateLegacyActivityDiagnostics();
   }, []);
 
   useEffect(() => {
@@ -403,7 +430,8 @@ export default function App() {
         ]);
       } catch (error) {
         closing.current = false;
-        window.alert(`Die App konnte nicht im Hintergrund weiterlaufen: ${error}`);
+        void reportDiagnostic({ origin: "App:background", level: "error", message: String(error) });
+        window.alert("Die App konnte nicht im Hintergrund weiterlaufen. Bitte die App geöffnet lassen und die EDV informieren.");
       }
     });
 
@@ -459,6 +487,7 @@ export default function App() {
         />
         {settingsAreaOpen && <SettingsSubtabs activePage={page} activeSection={settingsSection} onNavigate={navigate} />}
         <main className="content">
+          <StatusMessage message={exchangeMessage} type="error" recordInActivity={false} />
           {page === "welcome" && <WelcomePage onNavigate={navigate} />}
           {page === "contacts" && !hiddenDataSections.includes("contacts") && (
             <ContactsPage onNavigate={navigate} onRegisterNavigationBlocker={registerNavigationBlocker} />
@@ -500,7 +529,7 @@ export default function App() {
           {page === "synchronizations" && <SynchronizationsPage onNavigate={navigate} />}
         </main>
         <UpdateNotifier />
-        {activityCenterEnabled ? <ActivityCenter /> : null}
+        {edvUnlocked && activityCenterEnabled ? <ActivityCenter /> : null}
       </div>
       {pendingEdvNavigation && <EdvAccessDialog onCancel={() => setPendingEdvNavigation(null)} onUnlocked={unlockEdvTools} />}
     </div>

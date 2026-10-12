@@ -101,7 +101,7 @@ describe("automatic Microsoft 365 calendar polling", () => {
 
     const status = await runAutomaticCalendarSync("change");
 
-    expect(status).toEqual({ state: "success", message: "1 Änderung(en) sicher an Exchange übertragen." });
+    expect(status).toMatchObject({ state: "success", pendingOutbound: 0, message: "1 Änderung(en) sicher an Exchange übertragen." });
     expect(mocks.flushMicrosoft365CalendarOutbox).toHaveBeenCalledOnce();
     expect(mocks.flushMicrosoft365ContactOutbox).not.toHaveBeenCalled();
     expect(mocks.applyMicrosoft365Sync).not.toHaveBeenCalled();

@@ -1,3 +1,4 @@
+import { useDiagnosticMessage } from "../hooks/useDiagnosticMessage";
 import { readText, writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import {
@@ -61,7 +62,7 @@ export function PasswordsPage({ status, onStatusChanged }: PasswordsPageProps) {
   const [protectionPassword, setProtectionPassword] = useState("");
   const [protectionPasswordAgain, setProtectionPasswordAgain] = useState("");
   const [busy, setBusy] = useState(false);
-  const [message, setMessage] = useState("");
+  const [message, setMessage] = useDiagnosticMessage("PasswordsPage:message", "notification");
   const [messageType, setMessageType] = useState<"success" | "error" | "info">("info");
   const [confirmDeletions, setConfirmDeletions] = useState(true);
   const [deleteRequest, setDeleteRequest] = useState<PasswordDeleteRequest | null>(null);

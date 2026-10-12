@@ -1,3 +1,4 @@
+import { useDiagnosticMessage } from "../hooks/useDiagnosticMessage";
 import type { LucideIcon } from "lucide-react";
 import {
   ArrowLeft,
@@ -94,7 +95,7 @@ export function OnboardingDialog({ onComplete }: OnboardingDialogProps) {
   const [importing, setImporting] = useState(false);
   const [scanResult, setScanResult] = useState<ScanResult | null>(null);
   const [selection, setSelection] = useState<Record<ImportSelectionKey, boolean>>(EMPTY_SELECTION);
-  const [message, setMessage] = useState("");
+  const [message, setMessage] = useDiagnosticMessage("OnboardingDialog:message", "notification");
   const [importSummary, setImportSummary] = useState<string[]>([]);
 
   const tourItems = BASE_TOUR;

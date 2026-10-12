@@ -1,35 +1,32 @@
+import { useDiagnosticMessage } from "../hooks/useDiagnosticMessage";
 import { Eye, EyeOff, LockKeyhole, ShieldCheck, X } from "lucide-react";
 import { useState, type FormEvent } from "react";
-
-const edvPasswordSha256 = "923d72f89f878899e8324c05323c9d925ec895b57bf593f287e30f4a31b47c35";
+import { invokeWithDiagnostics } from "../utils/notificationPolicy";
 
 interface EdvAccessDialogProps {
   onCancel: () => void;
   onUnlocked: () => void;
 }
 
-async function sha256(value: string): Promise<string> {
-  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));
-  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
-}
-
 export function EdvAccessDialog({ onCancel, onUnlocked }: EdvAccessDialogProps) {
   const [password, setPassword] = useState("");
   const [visible, setVisible] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
+  const [error, setError] = useDiagnosticMessage("EdvAccessDialog:error", "inline");
 
   const unlock = async (event: FormEvent) => {
     event.preventDefault();
     setBusy(true);
     setError("");
     try {
-      if (await sha256(password) !== edvPasswordSha256) {
+      if (!(await invokeWithDiagnostics<boolean>("unlock_edv_tools", { password }))) {
         setError("Das EDV-Kennwort ist nicht korrekt.");
         setPassword("");
         return;
       }
       onUnlocked();
+    } catch {
+      setError("Der EDV-Zugang konnte nicht geprüft werden. Bitte erneut versuchen.");
     } finally {
       setBusy(false);
     }

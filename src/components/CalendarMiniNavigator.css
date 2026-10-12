@@ -1,0 +1,33 @@
+.calendar-mini { min-width:0; font-size:12px; }
+.calendar-mini-header { display:flex; align-items:center; gap:2px; margin-bottom:6px; }
+.calendar-mini button { background:transparent; border:0; border-radius:4px; color:var(--text); font-size:12px; min-height:26px; padding:0; }
+.calendar-mini button:not(:disabled):hover { background:var(--soft); }
+.calendar-mini button:focus-visible { outline:2px solid var(--primary); outline-offset:-2px; }
+.calendar-mini-header .calendar-mini-month-title { flex:1; font-size:12px; font-weight:700; justify-content:start; white-space:nowrap; text-align:left; }
+.calendar-mini-collapse,.calendar-mini-arrow { flex:none; width:22px; }
+.calendar-mini-months { display:grid; gap:14px; }
+.calendar-mini-month h4 { font-size:12px; font-weight:700; margin:0 0 6px; }
+.calendar-mini-row { display:grid; grid-template-columns:20px repeat(7,minmax(0,1fr)); gap:0; align-items:center; }
+.calendar-mini-row > div { display:flex; justify-content:center; min-width:0; }
+.calendar-mini-weekdays { color:var(--muted); font-size:11px; font-weight:700; text-align:center; height:22px; }
+.calendar-mini-row button { width:24px; max-width:100%; min-height:24px; height:24px; border-radius:50%; }
+.calendar-mini-row .calendar-mini-week { color:var(--muted); font-size:10px; border-radius:3px; }
+.calendar-mini-row > .in-period { background:var(--selected-surface); }
+.calendar-mini-row > .in-period:nth-child(2) { border-radius:4px 0 0 4px; }
+.calendar-mini-row > .in-period:last-child { border-radius:0 4px 4px 0; }
+.calendar-mini-row .calendar-mini-week.in-period { color:var(--primary); font-weight:700; }
+.calendar-mini-row button.outside { color:var(--muted); opacity:.6; }
+.calendar-mini-row button.today { box-shadow:inset 0 0 0 1px var(--primary); }
+.calendar-mini-row button.selected { background:var(--primary); color:var(--on-primary); font-weight:700; opacity:1; }
+.calendar-mini-row button.selected:not(:disabled):hover,
+.calendar-mini-month-picker button[aria-pressed="true"]:not(:disabled):hover { background:var(--primary-dark); color:var(--on-primary); }
+.calendar-mini .calendar-mini-today { border:1px solid var(--border); margin-top:10px; width:100%; min-height:26px; }
+.calendar-mini-picker { border:1px solid var(--border); border-radius:6px; padding:8px; background:var(--surface); }
+.calendar-mini-year { display:flex; justify-content:space-between; align-items:center; gap:6px; }
+.calendar-mini-year label { display:flex; flex-direction:column; font-size:11px; gap:4px; min-width:0; text-align:center; }
+.calendar-mini-year input { width:100%; min-width:0; min-height:30px; padding:3px; text-align:center; font-size:13px; border:1px solid var(--border); border-radius:4px; }
+.calendar-mini-year > button { flex:none; width:25px; }
+.calendar-mini-month-picker { display:grid; grid-template-columns:repeat(3,1fr); gap:4px; margin:8px 0; }
+.calendar-mini-month-picker button { min-height:32px; }
+.calendar-mini-month-picker button[aria-pressed="true"] { background:var(--primary); color:var(--on-primary); }
+.calendar-mini-picker-back { width:100%; }

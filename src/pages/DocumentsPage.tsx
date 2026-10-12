@@ -1,3 +1,4 @@
+import { useDiagnosticMessage } from "../hooks/useDiagnosticMessage";
 import { isTauri } from "@tauri-apps/api/core";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
@@ -70,12 +71,12 @@ export function DocumentsPage() {
   const [reconnectCode, setReconnectCode] = useState<Microsoft365DeviceCode | null>(null);
   const [reconnectBusy, setReconnectBusy] = useState(false);
   const [showReconnectCodeFallback, setShowReconnectCodeFallback] = useState(false);
-  const [reconnectError, setReconnectError] = useState("");
+  const [reconnectError, setReconnectError] = useDiagnosticMessage("DocumentsPage:reconnectError", "inline");
   const [busy, setBusy] = useState(false);
   const [sourcesLoading, setSourcesLoading] = useState(false);
-  const [sourcesError, setSourcesError] = useState("");
-  const [message, setMessage] = useState("");
-  const [error, setError] = useState("");
+  const [sourcesError, setSourcesError] = useDiagnosticMessage("DocumentsPage:sourcesError", "inline");
+  const [message, setMessage] = useDiagnosticMessage("DocumentsPage:message", "notification");
+  const [error, setError] = useDiagnosticMessage("DocumentsPage:error", "inline");
   const [menuItemId, setMenuItemId] = useState<string | null>(null);
   const [contextMenu, setContextMenu] = useState<DocumentsContextMenuState | null>(null);
   const [search, setSearch] = useState("");

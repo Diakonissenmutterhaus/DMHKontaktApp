@@ -1,3 +1,4 @@
+import { useDiagnosticMessage } from "../hooks/useDiagnosticMessage";
 import {
   ArrowLeft,
   ArrowRight,
@@ -38,7 +39,7 @@ export function WelcomeSignIn({ onAuthenticated }: WelcomeSignInProps) {
   const [showPassword, setShowPassword] = useState(false);
   const [rememberForOneWeek, setRememberForOneWeek] = useState(true);
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
+  const [error, setError] = useDiagnosticMessage("WelcomeSignIn:error", "inline");
 
   const normalizedEmail = email.trim().toLocaleLowerCase("de-DE");
   const emailIsValid = normalizedEmail.length > 0 && isValidEmail(normalizedEmail);

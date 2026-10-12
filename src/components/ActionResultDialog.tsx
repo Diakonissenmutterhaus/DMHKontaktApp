@@ -1,6 +1,7 @@
 import { AlertCircle, CheckCircle2, Info, X } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { recordActivity } from "../utils/activityLog";
+import { publicNotification, reportDiagnostic } from "../utils/notificationPolicy";
 
 export type ActionResultTone = "success" | "info" | "error";
 
@@ -22,7 +23,14 @@ interface ActionResultDialogProps {
   onClose: () => void;
 }
 
-export function ActionResultDialog({ result, onClose }: ActionResultDialogProps) {
+export function ActionResultDialog({ result: originalResult, onClose }: ActionResultDialogProps) {
+  const summary = publicNotification(originalResult?.summary ?? "") ?? publicNotification(originalResult?.title ?? "");
+  const result = useMemo<ActionResult | null>(() => originalResult && summary ? { ...originalResult, summary, details: undefined, items: undefined } : null, [originalResult, summary]);
+  useEffect(() => {
+    if (!originalResult) return;
+    void reportDiagnostic({ origin: "ActionResultDialog", level: originalResult.tone ?? "info", title: originalResult.title, message: [originalResult.summary, ...(originalResult.details ?? []), ...(originalResult.items ?? []).map((item) => `${item.label}: ${item.detail ?? ""}`)].join("\n") });
+    if (!summary) onClose();
+  }, [originalResult, onClose, summary]);
   const [visibleItemCount, setVisibleItemCount] = useState(100);
   const [dismissFutureResults, setDismissFutureResults] = useState(false);
 

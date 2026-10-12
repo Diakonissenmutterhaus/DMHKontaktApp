@@ -1,6 +1,8 @@
+import { useDiagnosticMessage } from "../hooks/useDiagnosticMessage";
 import { useEffect, useMemo, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import { AlertCircle, AlertTriangle, Bell, CalendarDays, CheckCircle2, ChevronDown, Cloud, ContactRound, Database, Download, Eye, EyeOff, HeartPulse, Mail, RefreshCw, Search, Trash2, X } from "lucide-react";
 import { AuditHistoryPanel } from "../components/AuditHistoryPanel";
+import { BulkRemovalPanel } from "../components/BulkRemovalPanel";
 import { PrinterSettings } from "../components/PrinterSettings";
 import { StatusMessage } from "../components/StatusMessage";
 import { updateAvailableEvent } from "../components/UpdateNotifier";
@@ -50,6 +52,7 @@ interface SystemCheckItem {
 }
 
 const settingsSearchItems: SettingsSearchItem[] = [
+  { id: "bulk-removal", label: "Massenlöschung", description: "Massenlöschung → Kalender & Kontakte", keywords: "löschen entfernen masse mehrere auswahl kalender termine kontakte", page: "settings", section: "bulk-removal", adminOnly: true },
   { id: "mail", label: "E-Mail-Konten verwalten", description: "E-Mail & Konten → Konten", keywords: "e-mail mail konto konten outlook verwalten kennwort", page: "settings", section: "mail", targetId: "settings-mail-accounts" },
   { id: "printer", label: "Drucker hinzufügen", description: "Drucker → Netzwerkdrucker", keywords: "drucker printer netzwerk freigabe ip hinzufügen", page: "settings", section: "printer" },
   { id: "backup", label: "Sicherung öffnen", description: "Sicherung → Öffnen", keywords: "sicherung backup daten wiederherstellen export", page: "backup", section: "backup" },
@@ -71,7 +74,7 @@ export function SettingsPage({
   const [accounts, setAccounts] = useState<MailAccount[]>([]);
   const [candidates, setCandidates] = useState<OutlookAccountCandidate[]>([]);
   const [busyAction, setBusyAction] = useState<string | null>(null);
-  const [message, setMessage] = useState("");
+  const [message, setMessage] = useDiagnosticMessage("SettingsPage:message", "notification");
   const [messageType, setMessageType] = useState<"success" | "error" | "info">("info");
   const [searchQuery, setSearchQuery] = useState("");
   const [searchIndex, setSearchIndex] = useState(0);
@@ -565,6 +568,7 @@ export function SettingsPage({
       )}
 
       {section === "history" && <AuditHistoryPanel />}
+      {section === "bulk-removal" && <BulkRemovalPanel />}
 
       {section === "printer" && <PrinterSettings />}
 

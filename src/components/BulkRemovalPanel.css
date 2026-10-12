@@ -1,0 +1,33 @@
+.bulk-removal { padding: 20px; min-width: 0; }
+.bulk-removal h3 { display:flex; align-items:center; gap:8px; }
+.bulk-tabs { display:flex; gap:6px; padding-bottom:12px; border-bottom:1px solid var(--border); margin-bottom:16px; }
+.bulk-tabs button[aria-pressed="true"] { background:var(--primary); color:var(--on-primary); border-color:var(--primary); }
+.bulk-controls { border:0; padding:0; margin:0; display:flex; flex-wrap:wrap; gap:10px 14px; align-items:end; }
+.bulk-controls label { display:flex; flex-direction:column; gap:5px; font-size:13px; font-weight:600; min-width:140px; flex:1; }
+.bulk-controls input:not([type="checkbox"]),.bulk-controls select { min-height:36px; height:36px; padding:5px 9px; font-size:14px; border:1px solid var(--border); border-radius:5px; background:var(--surface); color:var(--text); width:100%; }
+.bulk-controls .bulk-search { flex:2; min-width:240px; }
+.bulk-controls label:has(input[type="date"]) { flex:0 1 160px; }
+.bulk-controls button { min-height:36px; padding:5px 9px; font-size:13px; border-width:1px; border-radius:5px; }
+.bulk-search span { display:flex; align-items:center; gap:6px; }
+.bulk-controls .bulk-exact { flex-direction:row; align-items:center; min-height:36px; flex:0 1 220px; font-weight:400; }
+.bulk-removal input[type="checkbox"] { appearance:auto; accent-color:var(--primary); width:16px; height:16px; min-height:0; margin:0; flex:none; }
+.bulk-actions { display:flex; flex-wrap:wrap; gap:8px; margin-top:16px; }
+.bulk-actions button,.bulk-pagination button,.bulk-tabs button { min-height:34px; padding:6px 10px; font-size:13px; border-width:1px; border-radius:5px; }
+.bulk-actions .danger-button { margin-left:auto; }
+.bulk-count,.bulk-note { color:var(--muted); font-size:13px; margin:12px 0; }
+.bulk-table-wrap { border:1px solid var(--border); border-radius:6px; overflow:auto; max-height:52vh; background:var(--surface); }
+.bulk-table { width:100%; border-collapse:collapse; font-size:13px; table-layout:auto; min-width:720px; }
+.bulk-table th { position:sticky; top:0; z-index:1; background:var(--surface-alt); border-bottom:1px solid var(--border); text-align:left; font-weight:600; padding:6px 10px; white-space:nowrap; }
+.bulk-table th button { border:0; background:transparent; min-height:24px; padding:0; justify-content:start; font-size:inherit; border-radius:0; }
+.bulk-table td { border-bottom:1px solid color-mix(in srgb,var(--border) 40%,transparent); padding:5px 10px; height:30px; white-space:nowrap; max-width:300px; overflow:hidden; text-overflow:ellipsis; }
+.bulk-table td svg { vertical-align:middle; color:var(--muted); margin-right:5px; }
+.bulk-table tr:hover { background:var(--surface-alt); }
+.bulk-table tr.selected { background:var(--selected-surface); }
+.bulk-table .bulk-check { width:36px; text-align:center; padding:6px; }
+.bulk-series { margin-left:8px; padding:1px 5px; border:1px solid var(--border); border-radius:3px; color:var(--muted); font-size:11px; }
+.bulk-pagination { display:flex; align-items:center; justify-content:end; gap:8px; padding-top:12px; font-size:13px; }
+.bulk-pagination span { margin-right:auto; }
+.bulk-error,.bulk-result { padding:10px; border-radius:5px; font-size:14px; }
+.bulk-error { background:var(--danger-surface); color:var(--danger-text); }
+.bulk-result { background:var(--success-surface); color:var(--success-text); }
+@media (max-width:760px) { .bulk-removal {padding:12px;} .bulk-actions .danger-button {margin-left:0;} .bulk-controls label {min-width:160px;} }

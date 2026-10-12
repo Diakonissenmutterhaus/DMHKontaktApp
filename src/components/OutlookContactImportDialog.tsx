@@ -1,3 +1,4 @@
+import { useDiagnosticMessage } from "../hooks/useDiagnosticMessage";
 import { open } from "@tauri-apps/plugin-dialog";
 import { readFile } from "@tauri-apps/plugin-fs";
 import {
@@ -62,7 +63,7 @@ export function OutlookContactImportDialog({ open: isOpen, cleanImportedNames, o
   const [page, setPage] = useState(1);
   const [busy, setBusy] = useState<"scan" | "import" | null>(null);
   const [busyElapsedSeconds, setBusyElapsedSeconds] = useState(0);
-  const [error, setError] = useState("");
+  const [error, setError] = useDiagnosticMessage("OutlookContactImportDialog:error", "inline");
   const [result, setResult] = useState<OutlookContactImportResult | null>(null);
   const [csvFileName, setCsvFileName] = useState("");
   const csvContacts = useRef(new Map<string, ContactInput>());

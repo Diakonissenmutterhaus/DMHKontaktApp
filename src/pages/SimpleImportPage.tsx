@@ -1,3 +1,4 @@
+import { useDiagnosticMessage } from "../hooks/useDiagnosticMessage";
 import { AlertTriangle, ArrowLeft, ArrowRight, Bird, CalendarDays, CalendarRange, CloudCog, Download, FileUp, LoaderCircle, Settings2, Undo2, UsersRound } from "lucide-react";
 import { useState } from "react";
 import { EasyImportDialog } from "../components/EasyImportDialog";
@@ -25,7 +26,7 @@ interface SimpleImportPageProps {
 
 export function SimpleImportPage({ embedded = false, onOpenFileImport, onManageSync }: SimpleImportPageProps) {
   const [busyAction, setBusyAction] = useState<string | null>(null);
-  const [message, setMessage] = useState("");
+  const [message, setMessage] = useDiagnosticMessage("SimpleImportPage:message", "notification");
   const [messageType, setMessageType] = useState<"success" | "error" | "info">("info");
   const [actionResult, setActionResult] = useState<ActionResult | null>(null);
   const [contactImportDialogOpen, setContactImportDialogOpen] = useState(false);

@@ -1,3 +1,4 @@
+import { useDiagnosticMessage } from "../hooks/useDiagnosticMessage";
 import { Eye, EyeOff, KeyRound, LoaderCircle, Mail, ShieldCheck } from "lucide-react";
 import { FormEvent, useState } from "react";
 import {
@@ -22,7 +23,7 @@ export function AppLockScreen({ status, onUnlocked }: AppLockScreenProps) {
   const [confirmPassword, setConfirmPassword] = useState("");
   const [delivery, setDelivery] = useState<VaultRecoveryDelivery | null>(null);
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
+  const [error, setError] = useDiagnosticMessage("AppLockScreen:error", "inline");
 
   const login = async (event: FormEvent) => {
     event.preventDefault();

@@ -1,3 +1,4 @@
+import { useDiagnosticMessage } from "../hooks/useDiagnosticMessage";
 import { useState } from "react";
 import { Palette, Pencil, Plus, RefreshCw, Search, Trash2, X } from "lucide-react";
 import type { CalendarCategoryDefinition } from "../utils/calendar";
@@ -32,8 +33,8 @@ export function CalendarCategoryManager(props: Props) {
   const [editing, setEditing] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
   const [deleting, setDeleting] = useState<string[] | null>(null);
-  const [notice, setNotice] = useState("");
-  const [error, setError] = useState("");
+  const [notice, setNotice] = useDiagnosticMessage("CalendarCategoryManager:notice", "notification");
+  const [error, setError] = useDiagnosticMessage("CalendarCategoryManager:error", "inline");
   const disabled = props.busy || props.loading || props.repairing || props.readOnly || Boolean(props.pending) || Boolean(props.loadError);
   const filtered = props.categories.filter((category) => category.name.toLocaleLowerCase("de").includes(query.trim().toLocaleLowerCase("de")));
   const chosen = selected.filter((name) => props.categories.some((category) => category.name === name));

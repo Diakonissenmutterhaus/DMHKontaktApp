@@ -15,6 +15,18 @@ const records: AuditLogEntry[] = [
 ];
 
 describe("AuditHistoryPanel", () => {
+  it("filters diagnostic error text and displays the exact event and timestamp", async () => {
+    listAuditLogMock.mockReset().mockResolvedValue({ entries: [{ id: 9, occurredAt: "2026-10-12T09:32:41Z", actor: "EDV", source: "diagnostic", action: "error", entityKind: "calendar", entityId: "event-1", summary: "Mittagspause\nItem: event-1\nTermin: 2026-10-12T12:00\nVorgang: upsert\nMeldung: HTTP 404 ErrorItemNotFound" }], hasMore: false });
+    const user = userEvent.setup();
+    render(<AuditHistoryPanel />);
+    await screen.findByText(/ErrorItemNotFound/);
+    await user.selectOptions(screen.getByLabelText("Aktion"), "error");
+    await user.selectOptions(screen.getByLabelText("Herkunft"), "diagnostic");
+    await user.type(screen.getByRole("searchbox", { name: "Historie durchsuchen" }), "404 event-1");
+    await waitFor(() => expect(listAuditLogMock).toHaveBeenCalledWith(expect.objectContaining({ action: "error", source: "diagnostic", search: "404 event-1" })));
+    expect(screen.getByText(/Item: event-1/)).toHaveTextContent("2026-10-12T12:00");
+    expect(document.querySelector('time[datetime="2026-10-12T09:32:41Z"]')).not.toBeNull();
+  });
   it("kennzeichnet eine automatische Exchange-Verknüpfung statt einer Löschung", async () => {
     listAuditLogMock.mockReset();
     listAuditLogMock.mockResolvedValue({

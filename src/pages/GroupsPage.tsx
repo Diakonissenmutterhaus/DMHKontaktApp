@@ -1,3 +1,4 @@
+import { useDiagnosticMessage } from "../hooks/useDiagnosticMessage";
 import { Plus, Trash2 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { StatusMessage } from "../components/StatusMessage";
@@ -12,7 +13,7 @@ const blankGroup: Group = { name: "", description: "", createdAt: "", updatedAt:
 export function GroupsPage() {
   const [groups, setGroups] = useState<Group[]>([]);
   const [form, setForm] = useState<Group>(blankGroup);
-  const [message, setMessage] = useState("");
+  const [message, setMessage] = useDiagnosticMessage("GroupsPage:message", "notification");
   const [confirmDeletions, setConfirmDeletions] = useState(true);
   const [pendingDelete, setPendingDelete] = useState<Group | null>(null);
 

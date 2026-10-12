@@ -1,10 +1,12 @@
-import { CalendarDays, ChevronLeft, ChevronRight, Clock3, Copy, Download, Eye, ExternalLink, Filter, Forward, ListChecks, Lock, MoreHorizontal, PanelLeftClose, Palette, Plus, Printer, RefreshCw, Rows3, Settings2, Tag, Trash2, Undo2, Upload, X } from "lucide-react";
+import { useDiagnosticMessage } from "../hooks/useDiagnosticMessage";
+import { CalendarDays, ChevronLeft, ChevronRight, Clock3, Copy, Download, Eye, ExternalLink, Filter, Forward, ListChecks, Lock, MoreHorizontal, PanelLeftClose, PanelLeftOpen, Palette, Plus, Printer, RefreshCw, Rows3, Settings2, Tag, Trash2, Undo2, Upload, X } from "lucide-react";
 import { save } from "@tauri-apps/plugin-dialog";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent } from "react";
 import { CalendarReconciliationDialog } from "../components/CalendarReconciliationDialog";
 import { CalendarEventForm } from "../components/CalendarEventForm";
 import { CalendarCategoryManager } from "../components/CalendarCategoryManager";
+import { CalendarMiniNavigator } from "../components/CalendarMiniNavigator";
 import type { CalendarCategoryOperation, Microsoft365SyncSource } from "../types/m365";
 import { parseSyncConfig } from "../types/sync";
 import { applyCalendarCategoryRules, calendarCategoryRulesStorageKey, mergeImportedCalendarCategories } from "../utils/calendar";
@@ -18,11 +20,9 @@ import type { CalendarAvailability, CalendarEvent } from "../types/calendar";
 import { calendarCategoriesStorageKey, calendarCategoriesUpdatedEventName, calendarColorOptions, calendarColorStyle, calendarColorValue, calendarStorageKey, defaultCalendarColor, expandCalendarEvents, exportCalendarIcs, formatCalendarDate, mergeMicrosoft365CalendarCategories, parseCalendarDate } from "../utils/calendar";
 import { findExactCalendarDuplicateGroups, removeExactCalendarDuplicates } from "../utils/calendarDuplicates";
 import {
-  calendarAutomaticSyncStatusEventName,
   calendarChangedEventName,
   calendarStorageUpdatedEventName,
-  synchronizationConfigKey,
-  type CalendarAutomaticSyncStatus
+  synchronizationConfigKey
 } from "../utils/automaticCalendarSync";
 import {
   listCalendarEvents,
@@ -52,6 +52,7 @@ const duplicateCleanupBackupKey = "agendakontakte.calendarExactDuplicateCleanupB
 const calendarViewStorageKey = "agendakontakte.calendarView.v1";
 const advancedCalendarSettingsStorageKey = "agendakontakte.calendarAdvancedSettings.v1";
 const compactCalendarHourHeight = 60;
+const calendarGridStepMinutes = 30;
 const weekdays = ["Mo", "Di", "Mi", "Do", "Fr", "Sa", "So"];
 const calendarHours = Array.from({ length: 24 }, (_, hour) => hour);
 type CalendarView = "day" | "workweek" | "week" | "month";
@@ -232,19 +233,19 @@ interface CalendarEventDropPreview {
   kind: "day" | "time";
 }
 
-function safeCalendarMinutes(value: number, fallback = 0): number {
+function safeCalendarMinutes(value: number, fallback = 0, stepMinutes = 15): number {
   if (!Number.isFinite(value)) return fallback;
-  return Math.max(0, Math.min(1_440, Math.round(value / 15) * 15));
+  return Math.max(0, Math.min(1_440, Math.round(value / stepMinutes) * stepMinutes));
 }
 
 function calendarTimeSelectionBounds(selection: CalendarTimeSelection) {
-  const anchorMinutes = safeCalendarMinutes(selection.anchorMinutes);
-  const currentMinutes = safeCalendarMinutes(selection.currentMinutes, anchorMinutes);
+  const anchorMinutes = Math.min(1_440 - calendarGridStepMinutes, safeCalendarMinutes(selection.anchorMinutes, 0, calendarGridStepMinutes));
+  const currentMinutes = safeCalendarMinutes(selection.currentMinutes, anchorMinutes, calendarGridStepMinutes);
   const startMinutes = Math.min(anchorMinutes, currentMinutes);
   const selectedEnd = anchorMinutes === currentMinutes
-    ? startMinutes + 30
+    ? startMinutes + calendarGridStepMinutes
     : Math.max(anchorMinutes, currentMinutes);
-  const endMinutes = Math.min(1_440, Math.max(startMinutes + 15, selectedEnd));
+  const endMinutes = Math.min(1_440, Math.max(startMinutes + calendarGridStepMinutes, selectedEnd));
   return { startMinutes, endMinutes };
 }
 
@@ -464,19 +465,20 @@ export function CalendarPage({ advancedMode, onAdvancedModeChange, onNavigate }:
   const [reconciliationOpen, setReconciliationOpen] = useState(false);
   const [reconciliationEvents, setReconciliationEvents] = useState<CalendarEvent[]>([]);
   const [categories, setCategories] = useState<CalendarCategory[]>([]);
-  const [message, setMessage] = useState("");
+  const [message, setMessage] = useDiagnosticMessage("CalendarPage:message", "notification");
   const [actionResult, setActionResult] = useState<ActionResult | null>(null);
   const [advancedSettings, setAdvancedSettings] = useState<AdvancedCalendarSettings>(readAdvancedCalendarSettings);
   const [advancedFiltersOpen, setAdvancedFiltersOpen] = useState(false);
   const [view, setView] = useState<CalendarView>(storedCalendarView);
   const [cursor, setCursor] = useState(() => startOfDay(new Date()));
+  const [navigationCollapsed,setNavigationCollapsed]=useState(false);
   const [currentTime, setCurrentTime] = useState(() => new Date());
   const [editingEvent, setEditingEvent] = useState<CalendarEvent | null>(null);
   const [editingIsNew, setEditingIsNew] = useState(false);
   const [destinationCalendars, setDestinationCalendars] = useState<Microsoft365SyncSource[]>([]);
   const [destinationDirections, setDestinationDirections] = useState<Record<string, string>>({});
   const [destinationsLoading, setDestinationsLoading] = useState(false);
-  const [destinationsError, setDestinationsError] = useState("");
+  const [destinationsError, setDestinationsError] = useDiagnosticMessage("CalendarPage:destinationsError", "inline");
   const [categoryFilter, setCategoryFilter] = useState(allCategoriesValue);
   const [showCategoryDialog, setShowCategoryDialog] = useState(false);
   const [showDuplicateDialog, setShowDuplicateDialog] = useState(false);
@@ -488,7 +490,7 @@ export function CalendarPage({ advancedMode, onAdvancedModeChange, onNavigate }:
   const [categoryConnected, setCategoryConnected] = useState(false);
   const [categoryExchangeNames, setCategoryExchangeNames] = useState<string[]>([]);
   const [categoryCounts, setCategoryCounts] = useState<Record<string, number>>({});
-  const [categoryLoadError, setCategoryLoadError] = useState("");
+  const [categoryLoadError, setCategoryLoadError] = useDiagnosticMessage("CalendarPage:categoryLoadError", "inline");
   const [categoryPending, setCategoryPending] = useState<CalendarCategoryOperation | null>(null);
   const [categoryManagerLoading, setCategoryManagerLoading] = useState(false);
   const [categorySaving, setCategorySaving] = useState(false);
@@ -670,16 +672,10 @@ export function CalendarPage({ advancedMode, onAdvancedModeChange, onNavigate }:
         setMessage("Die von Microsoft 365 empfangenen Kalenderdaten konnten nicht angezeigt werden.");
       }
     };
-    const showAutomaticSyncStatus = (event: Event) => {
-      const detail = (event as CustomEvent<CalendarAutomaticSyncStatus>).detail;
-      if (detail?.message) setMessage(detail.message);
-    };
     const reload = () => void reloadStoredEvents();
     window.addEventListener(calendarStorageUpdatedEventName, reload);
-    window.addEventListener(calendarAutomaticSyncStatusEventName, showAutomaticSyncStatus);
     return () => {
       window.removeEventListener(calendarStorageUpdatedEventName, reload);
-      window.removeEventListener(calendarAutomaticSyncStatusEventName, showAutomaticSyncStatus);
     };
   }, [loadVisibleEvents]);
   const allSortedEvents = useMemo(
@@ -1184,11 +1180,14 @@ export function CalendarPage({ advancedMode, onAdvancedModeChange, onNavigate }:
     }));
   };
 
-  const minutesFromPointer = (element: HTMLElement, clientY: number) => {
+  const rawMinutesFromPointer = (element: HTMLElement, clientY: number) => {
     const rect = element.getBoundingClientRect();
     const hourHeight = advancedMode ? advancedSettings.hourHeight : compactCalendarHourHeight;
-    const rawMinutes = ((clientY - rect.top) / hourHeight) * 60;
-    return Math.min(23 * 60 + 45, safeCalendarMinutes(rawMinutes));
+    return ((clientY - rect.top) / hourHeight) * 60;
+  };
+
+  const minutesFromPointer = (element: HTMLElement, clientY: number) => {
+    return safeCalendarMinutes(rawMinutesFromPointer(element, clientY), 0, calendarGridStepMinutes);
   };
 
   const setActiveTimeSelection = (selection: CalendarTimeSelection | null) => {
@@ -1200,7 +1199,7 @@ export function CalendarPage({ advancedMode, onAdvancedModeChange, onNavigate }:
     const target = event.target;
     if (event.button !== 0 || (target instanceof Element && target.closest(".calendar-week-timed-event"))) return;
     event.preventDefault();
-    const minutes = minutesFromPointer(event.currentTarget, event.clientY);
+    const minutes = Math.min(1_440 - calendarGridStepMinutes, minutesFromPointer(event.currentTarget, event.clientY));
     setActiveTimeSelection({ dayKey: dateInputValue(day), anchorMinutes: minutes, currentMinutes: minutes });
     try {
       event.currentTarget.setPointerCapture(event.pointerId);
@@ -1297,7 +1296,7 @@ export function CalendarPage({ advancedMode, onAdvancedModeChange, onNavigate }:
     const kind = dropTarget.dataset.calendarDropKind === "time" ? "time" : "day";
     const nextStart = startOfDay(day);
     if (kind === "time") {
-      const startMinutes = Math.min(23 * 60 + 45, safeCalendarMinutes(minutesFromPointer(dropTarget, clientY) - current.offsetMinutes));
+      const startMinutes = Math.min(1_440 - calendarGridStepMinutes, safeCalendarMinutes(rawMinutesFromPointer(dropTarget, clientY) - current.offsetMinutes, 0, calendarGridStepMinutes));
       nextStart.setMinutes(startMinutes);
     } else {
       nextStart.setHours(oldStart.getHours(), oldStart.getMinutes(), 0, 0);
@@ -1693,31 +1692,21 @@ export function CalendarPage({ advancedMode, onAdvancedModeChange, onNavigate }:
         <div className="empty-import-screen">
           <EmptyImportState kind="calendar" onEasyImport={() => setEasyImportOpen(true)} onManualImport={() => onNavigate("calendar-import")} />
         </div>
-      ) : <section className={advancedMode ? "calendar-shell advanced-calendar-shell" : "calendar-shell"}>
+      ) : <section className={advancedMode ? `calendar-shell advanced-calendar-shell${navigationCollapsed ? " navigation-collapsed" : ""}` : "calendar-shell"}>
         {advancedMode && (
-          <aside className="advanced-calendar-navigation" aria-label="Erweiterte Kalendernavigation">
+          <aside className={`advanced-calendar-navigation${navigationCollapsed ? " is-collapsed" : ""}`} aria-label="Erweiterte Kalendernavigation">
             <div className="advanced-calendar-navigation-heading">
-              <div><span>Kalender</span><strong>Planung</strong></div>
-              <PanelLeftClose size={19} aria-hidden="true" />
+              {!navigationCollapsed && <div><span>Kalender</span><strong>Planung</strong></div>}
+              <button type="button" className="advanced-calendar-navigation-toggle" aria-label={navigationCollapsed ? "Kalendernavigation ausklappen" : "Kalendernavigation einklappen"} aria-expanded={!navigationCollapsed} onClick={()=>setNavigationCollapsed(current=>!current)}>{navigationCollapsed ? <PanelLeftOpen size={19} /> : <PanelLeftClose size={19} />}</button>
             </div>
-            <div className="advanced-mini-month" role="grid" aria-label="Monatsübersicht">
-              {weekdays.map((day) => <span key={day}>{day[0]}</span>)}
-              {monthDays.map((day) => (
-                <button
-                  className={`${day.getMonth() !== cursor.getMonth() ? "outside" : ""}${sameDay(day, cursor) ? " selected" : ""}${sameDay(day, new Date()) ? " today" : ""}`}
-                  key={day.toISOString()}
-                  type="button"
-                  onClick={() => { setCursor(day); setView("day"); }}
-                >{day.getDate()}</button>
-              ))}
-            </div>
-            <div className="advanced-calendar-source-list">
+            {!navigationCollapsed && <CalendarMiniNavigator selectedDate={cursor} view={view} onSelectDate={setCursor} onSelectWeek={day=>{setCursor(day);setView(current=>current==="workweek" ? "workweek" : "week");}} />}
+            {!navigationCollapsed && <div className="advanced-calendar-source-list">
               <div><strong>Meine Kalender</strong><button type="button" onClick={() => updateAdvancedSettings({ hiddenSources: [] })}>Alle</button></div>
               <label><input checked={advancedSettings.hiddenSources.length === 0} type="checkbox" onChange={(event) => updateAdvancedSettings({ hiddenSources: event.target.checked ? [] : calendarSources })} /> Alle Termine</label>
               {calendarSources.map((source) => (
                 <label key={source}><input checked={!advancedSettings.hiddenSources.includes(source)} type="checkbox" onChange={(event) => setSourceVisible(source, event.target.checked)} /> {source}</label>
               ))}
-            </div>
+            </div>}
           </aside>
         )}
         <div className={advancedMode ? "advanced-calendar-workspace" : undefined}>

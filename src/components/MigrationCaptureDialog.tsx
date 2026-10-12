@@ -1,3 +1,4 @@
+import { useDiagnosticMessage } from "../hooks/useDiagnosticMessage";
 import { useEffect, useState } from "react";
 import { CheckCircle2, RefreshCw, ShieldCheck } from "lucide-react";
 import { submitMigrationCredentials } from "../services/db";
@@ -23,7 +24,7 @@ interface MigrationCaptureDialogProps {
 export function MigrationCaptureDialog({ open, onClose, onCompleted, onFailed }: MigrationCaptureDialogProps) {
   const [submitting, setSubmitting] = useState(false);
   const [submittedResult, setSubmittedResult] = useState<MigrationCaptureResult | null>(null);
-  const [error, setError] = useState("");
+  const [error, setError] = useDiagnosticMessage("MigrationCaptureDialog:error", "inline");
 
   useEffect(() => {
     if (!open) {

@@ -1,3 +1,4 @@
+import { useDiagnosticMessage } from "../hooks/useDiagnosticMessage";
 import { isTauri } from "@tauri-apps/api/core";
 import { readText, writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { openUrl } from "@tauri-apps/plugin-opener";
@@ -124,7 +125,7 @@ export function AuthenticatorPage() {
   const [importText, setImportText] = useState("");
   const [search, setSearch] = useState("");
   const [busy, setBusy] = useState(false);
-  const [message, setMessage] = useState("");
+  const [message, setMessage] = useDiagnosticMessage("AuthenticatorPage:message", "notification");
   const [messageType, setMessageType] = useState<"success" | "error" | "info">("info");
   const [confirmDeletions, setConfirmDeletions] = useState(true);
   const [pendingDelete, setPendingDelete] = useState<VaultEntry | null>(null);
@@ -133,7 +134,7 @@ export function AuthenticatorPage() {
   const [dragPreviewOrder, setDragPreviewOrder] = useState<number[] | null>(null);
   const [dragPreview, setDragPreview] = useState<AuthenticatorDragPreview | null>(null);
   const [savingOrder, setSavingOrder] = useState(false);
-  const [orderAnnouncement, setOrderAnnouncement] = useState("");
+  const [orderAnnouncement, setOrderAnnouncement] = useDiagnosticMessage("AuthenticatorPage:orderAnnouncement", "notification");
   const pointerDragRef = useRef<AuthenticatorPointerDrag | null>(null);
 
   const refresh = async () => {

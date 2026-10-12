@@ -1,3 +1,4 @@
+import { useDiagnosticMessage } from "../hooks/useDiagnosticMessage";
 import {
   ArrowLeft,
   CalendarCheck2,
@@ -61,8 +62,8 @@ export function CalendarReconciliationDialog({ open, events, onClose, onChanged 
   const [sourceCount, setSourceCount] = useState(0);
   const [conflictChoices, setConflictChoices] = useState<Record<string, "local" | "external">>({});
   const [busy, setBusy] = useState<"scan" | "apply" | "undo" | null>(null);
-  const [error, setError] = useState("");
-  const [resultMessage, setResultMessage] = useState("");
+  const [error, setError] = useDiagnosticMessage("CalendarReconciliationDialog:error", "inline");
+  const [resultMessage, setResultMessage] = useDiagnosticMessage("CalendarReconciliationDialog:resultMessage", "notification");
   const [undoBackup, setUndoBackup] = useState<BackupData | null>(null);
   const [undone, setUndone] = useState(false);
 

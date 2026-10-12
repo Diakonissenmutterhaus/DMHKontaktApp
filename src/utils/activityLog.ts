@@ -1,8 +1,11 @@
 import { readActivityCenterEnabled } from "./settings";
+import { isTechnicalMessage, publicNotification, reportDiagnostic } from "./notificationPolicy";
+import { invoke } from "@tauri-apps/api/core";
 
 export type ActivityTone = "success" | "info" | "error";
 
 export interface ActivityEntry {
+  userVisible?: boolean;
   id: string;
   title: string;
   summary: string;
@@ -45,7 +48,7 @@ export function readActivities(): ActivityEntry[] {
     return parsed.filter((entry): entry is ActivityEntry => {
       if (!entry || typeof entry !== "object") return false;
       const candidate = entry as Partial<ActivityEntry>;
-      return typeof candidate.id === "string"
+      return candidate.userVisible === true && !isTechnicalMessage(candidate.summary ?? "") && typeof candidate.id === "string"
         && typeof candidate.title === "string"
         && typeof candidate.summary === "string"
         && typeof candidate.createdAt === "string"
@@ -66,6 +69,12 @@ function persistActivities(entries: ActivityEntry[]): void {
 }
 
 export function recordActivity(activity: NewActivity): void {
+  const publicMessage = publicNotification(activity.summary);
+  if (!publicMessage) {
+    void reportDiagnostic({ origin: "ActivityCenter", level: activity.tone ?? "info", title: activity.title, message: activity.summary });
+    return;
+  }
+  activity = { ...activity, summary: publicMessage, details: undefined, items: undefined };
   if (!readActivityCenterEnabled()) return;
   const summary = boundedText(activity.summary, 1_000);
   if (!summary) return;
@@ -94,6 +103,7 @@ export function recordActivity(activity: NewActivity): void {
   }
 
   persistActivities([{
+    userVisible: true,
     id: createActivityId(),
     title: boundedText(activity.title, 160),
     summary,
@@ -107,6 +117,20 @@ export function recordActivity(activity: NewActivity): void {
 
 export function markAllActivitiesRead(): void {
   persistActivities(readActivities().map((entry) => ({ ...entry, read: true })));
+}
+
+export async function migrateLegacyActivityDiagnostics(): Promise<void> {
+  if (!("__TAURI_INTERNALS__" in window)) return;
+  try {
+    const raw = JSON.parse(localStorage.getItem(activityStorageKey) ?? "[]") as ActivityEntry[];
+    if (!Array.isArray(raw)) return;
+    const old = raw.filter((entry) => !entry.userVisible && typeof entry.summary === "string");
+    for (const entry of old) await invoke("record_ui_diagnostic", { entry: { origin: "ActivityCenter:legacy", level: entry.tone, title: entry.title, occurredAt: entry.createdAt, message: [entry.summary, ...(entry.details ?? [])].join("\n") } });
+    if (old.length) {
+      const current = JSON.parse(localStorage.getItem(activityStorageKey) ?? "[]") as ActivityEntry[];
+      if (Array.isArray(current)) persistActivities(current.filter((entry) => entry.userVisible));
+    }
+  } catch { /* Keep originals if migration cannot be committed. */ }
 }
 
 export function clearActivities(): void {

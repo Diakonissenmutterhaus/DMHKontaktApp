@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { invokeWithDiagnostics as invoke } from "../utils/notificationPolicy";
 import type { CalendarDirectImportResult, CalendarEvent, CalendarEventMergeResult, CalendarFileImportResult, CalendarFileImportStatus, CalendarOverview, DetectedCalendarSourcesResult, OutlookCalendarExportResult, OutlookCalendarPreview, OutlookOneTimeCalendarImportResult, ThunderbirdCalendarImportResult } from "../types/calendar";
 import type {
   BackupData,
@@ -343,6 +343,16 @@ export function listMicrosoft365MasterCategories(): Promise<Microsoft365Calendar
 
 export function saveMicrosoft365MasterCategory(category: Microsoft365CalendarCategory): Promise<Microsoft365CalendarCategory> {
   return invoke("save_m365_master_category", { name: category.name, color: category.color });
+}
+
+export function listEdvBulkItems(filter: import("../types/bulkRemoval").BulkFilter): Promise<import("../types/bulkRemoval").BulkPage> {
+  return invoke("list_edv_bulk_items", { filter });
+}
+export function previewEdvBulkRemoval(selection: import("../types/bulkRemoval").BulkSelection): Promise<import("../types/bulkRemoval").BulkPreview> {
+  return invoke("preview_edv_bulk_removal", { selection });
+}
+export function executeEdvBulkRemoval(selection: import("../types/bulkRemoval").BulkSelection, expectedRevision: string): Promise<number> {
+  return invoke("execute_edv_bulk_removal", { selection, expectedRevision });
 }
 
 export function changeCalendarCategories(operation: import("../types/m365").CalendarCategoryOperation): Promise<import("../types/m365").CalendarCategoryOperationResult> {

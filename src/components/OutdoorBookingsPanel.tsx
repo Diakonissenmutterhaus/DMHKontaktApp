@@ -1,3 +1,4 @@
+import { useDiagnosticMessage } from "../hooks/useDiagnosticMessage";
 import {
   AlertTriangle,
   CalendarDays,
@@ -98,7 +99,7 @@ function createForm(): OutdoorBookingForm {
 export function OutdoorBookingsPanel() {
   const [bookings, setBookings] = useState<OutdoorBooking[]>(() => readStoredBookings());
   const [form, setForm] = useState<OutdoorBookingForm>(() => createForm());
-  const [message, setMessage] = useState("");
+  const [message, setMessage] = useDiagnosticMessage("OutdoorBookingsPanel:message", "notification");
   const [messageType, setMessageType] = useState<"success" | "error" | "info">("info");
 
   const selectedRequirements = useMemo(

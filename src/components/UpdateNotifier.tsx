@@ -1,3 +1,4 @@
+import { useDiagnosticMessage } from "../hooks/useDiagnosticMessage";
 import { CheckCircle2, CircleAlert, DownloadCloud, LoaderCircle } from "lucide-react";
 import { useEffect, useState } from "react";
 import { isTauri } from "@tauri-apps/api/core";
@@ -32,8 +33,9 @@ function updateIsSnoozed(version: string): boolean {
 
 export function UpdateNotifier() {
   const [availableUpdate, setAvailableUpdate] = useState<AvailableUpdate | null>(null);
+  const [manualRequested, setManualRequested] = useState(false);
   const [status, setStatus] = useState<UpdateStatus>("available");
-  const [message, setMessage] = useState("");
+  const [message, setMessage] = useDiagnosticMessage("UpdateNotifier:message", "notification");
   const [progress, setProgress] = useState<number | null>(null);
 
   useEffect(() => {
@@ -87,6 +89,7 @@ export function UpdateNotifier() {
         return;
       }
       setAvailableUpdate(nextUpdate);
+      setManualRequested(Boolean(detail?.force));
       setStatus("available");
       setMessage("");
       setProgress(null);
@@ -103,7 +106,7 @@ export function UpdateNotifier() {
     };
   }, []);
 
-  if (!availableUpdate) {
+  if (!availableUpdate || !manualRequested) {
     return null;
   }
 

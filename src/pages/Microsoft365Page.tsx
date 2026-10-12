@@ -1,3 +1,4 @@
+import { useDiagnosticMessage } from "../hooks/useDiagnosticMessage";
 import { useEffect, useRef, useState } from "react";
 import {
   CalendarDays,
@@ -64,7 +65,7 @@ export function Microsoft365Page() {
   const [deviceCode, setDeviceCode] = useState<Microsoft365DeviceCode | null>(null);
   const [busyAction, setBusyAction] = useState<string | null>(null);
   const [showCodeFallback, setShowCodeFallback] = useState(false);
-  const [message, setMessage] = useState("");
+  const [message, setMessage] = useDiagnosticMessage("Microsoft365Page:message", "notification");
   const [messageType, setMessageType] = useState<"success" | "error" | "info">("info");
   const [syncConfig, setSyncConfig] = useState<SyncConfig>(defaultSyncConfig);
   const [syncRuntimeStatus, setSyncRuntimeStatus] = useState<Microsoft365SynchronizationRuntimeStatus>(emptyMicrosoft365SynchronizationRuntimeStatus);

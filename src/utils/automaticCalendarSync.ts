@@ -8,9 +8,10 @@ import {
   setAppSetting
 } from "../services/db";
 import type { CalendarEvent } from "../types/calendar";
-import type { Microsoft365SyncHistoryEntry, Microsoft365SyncResult } from "../types/m365";
+import type { CalendarOutboxSyncResult, Microsoft365SyncHistoryEntry, Microsoft365SyncResult } from "../types/m365";
 import { parseSyncConfig, type SyncConfig } from "../types/sync";
 import { calendarCategoryRulesStorageKey, mergeImportedCalendarCategories, mergeMicrosoft365CalendarCategories } from "./calendar";
+import { notifyExchangeFailures, reportDiagnostic } from "./notificationPolicy";
 
 export const synchronizationConfigKey = "synchronization_config_v1";
 export const synchronizationHistoryKey = "synchronization_history_v1";
@@ -24,6 +25,8 @@ export const m365DataUpdatedEventName = "dmh:m365-data-updated";
 export const m365SafeImportTestMode = import.meta.env.VITE_DMH_M365_SAFE_IMPORT === "true";
 
 export interface CalendarAutomaticSyncStatus {
+  pendingOutbound?: number;
+  publicMessage?: string;
   state: "success" | "error";
   message: string;
 }
@@ -74,6 +77,7 @@ export function describeMicrosoft365SyncFailure(errors: number, messages: string
 }
 
 export async function recordMicrosoft365SynchronizationError(error: unknown): Promise<void> {
+  await reportDiagnostic({ origin: "Microsoft 365:automatic", level: "error", operation: "synchronize", message: error instanceof Error ? error.message : String(error) });
   const previous = parseSynchronizationRuntimeStatus(await getAppSetting(synchronizationRuntimeStatusKey));
   await saveRuntimeStatus({
     ...previous,
@@ -87,6 +91,7 @@ export async function recordMicrosoft365SynchronizationSuccess(
   result: Microsoft365SyncResult,
   checked = { contacts: config.contacts, calendars: config.calendars }
 ): Promise<void> {
+  if (result.errorMessages.length) await reportDiagnostic({ origin: "Microsoft 365:automatic", level: "error", operation: "reconcile", message: result.errorMessages.join("\n") });
   const previous = parseSynchronizationRuntimeStatus(await getAppSetting(synchronizationRuntimeStatusKey));
   const exchangeCount = result.created + result.updated + result.deleted;
   const successful = result.errors === 0;
@@ -162,7 +167,7 @@ export async function runAutomaticCalendarSync(trigger: AutomaticSyncTrigger): P
   // and are only removed after Microsoft Graph confirms the write. This avoids
   // re-scanning a 50,000-item calendar before a newly saved appointment can
   // leave the app.
-  const emptyOutbox = { processed: 0, created: 0, updated: 0, deleted: 0, pending: 0, errors: 0, errorMessages: [] as string[] };
+  const emptyOutbox: CalendarOutboxSyncResult = { processed: 0, created: 0, updated: 0, deleted: 0, pending: 0, errors: 0, errorMessages: [], failures: [] };
   const queued = m365SafeImportTestMode || !calendars ? emptyOutbox : await flushMicrosoft365CalendarOutbox({
     direction: config.direction,
     selectedCalendarSourceIds: config.selectedCalendarSourceIds,
@@ -184,6 +189,7 @@ export async function runAutomaticCalendarSync(trigger: AutomaticSyncTrigger): P
       })
     : emptyOutbox;
   const queuedContactCount = queuedContacts.created + queuedContacts.updated + queuedContacts.deleted;
+  const pendingOutbound = queued.pending + queuedContacts.pending;
 
   // Outbound calendar writes and inbound reconciliation are two independent
   // halves of the same cycle.  Finishing the cycle after flushing the outbox
@@ -214,7 +220,8 @@ export async function runAutomaticCalendarSync(trigger: AutomaticSyncTrigger): P
       const messages = [...queued.errorMessages, ...queuedContacts.errorMessages];
       const message = messages.join(" · ") || "Die ausstehenden Änderungen werden erneut versucht.";
       await recordMicrosoft365SynchronizationError(message);
-      return { state: "error", message: describeMicrosoft365SyncFailure(queueErrors, messages) };
+      const publicMessage = notifyExchangeFailures([...(queued.failures ?? []), ...(queuedContacts.failures ?? [])]);
+      return { state: "error", message: describeMicrosoft365SyncFailure(queueErrors, messages), ...(publicMessage ? { publicMessage } : {}) };
     }
     const processed = queued.processed + queuedContacts.processed;
     const transferred = queuedExchangeCount + queuedContactCount;
@@ -222,11 +229,12 @@ export async function runAutomaticCalendarSync(trigger: AutomaticSyncTrigger): P
     return processed > 0
       ? {
           state: "success",
+          pendingOutbound,
           message: transferred > 0
             ? `${transferred} Änderung(en) sicher an Exchange übertragen.`
             : "Lokale Änderungen wurden abgeglichen."
         }
-      : { state: "success", message: "Microsoft 365 ist bereits synchron." };
+      : { state: "success", pendingOutbound, message: "Microsoft 365 ist bereits synchron." };
   }
 
   // The native synchronizer reads its compact backup directly from SQLite. This
@@ -283,7 +291,8 @@ export async function runAutomaticCalendarSync(trigger: AutomaticSyncTrigger): P
   });
 
   if (combinedResult.errors > 0) {
-    return { state: "error", message: describeMicrosoft365SyncFailure(combinedResult.errors, combinedResult.errorMessages) };
+    const publicMessage = notifyExchangeFailures([...(queued.failures ?? []), ...(queuedContacts.failures ?? []), ...(result.failures ?? [])]);
+    return { state: "error", message: describeMicrosoft365SyncFailure(combinedResult.errors, combinedResult.errorMessages), ...(publicMessage ? { publicMessage } : {}) };
   }
   if (result.conflicts > 0) {
     return {
@@ -292,10 +301,11 @@ export async function runAutomaticCalendarSync(trigger: AutomaticSyncTrigger): P
     };
   }
   if (exchangeCount === 0) {
-    return { state: "success", message: "Microsoft 365 ist bereits synchron." };
+    return { state: "success", pendingOutbound, message: "Microsoft 365 ist bereits synchron." };
   }
   return {
     state: "success",
+    pendingOutbound,
     message: `${exchangeCount} Änderung(en) automatisch mit Microsoft 365 synchronisiert.`
   };
 }

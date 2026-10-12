@@ -1,3 +1,4 @@
+import { useDiagnosticMessage } from "../hooks/useDiagnosticMessage";
 import { ArrowRight, CalendarDays, Check, LoaderCircle, MailCheck, MailOpen, UsersRound } from "lucide-react";
 import { useEffect, useState } from "react";
 import { MigrationCaptureDialog } from "../components/MigrationCaptureDialog";
@@ -17,7 +18,7 @@ export function WelcomePage({ onNavigate }: WelcomePageProps) {
   const [migrationStatus, setMigrationStatus] = useState<MigrationCaptureStatus | null>(null);
   const [statusLoading, setStatusLoading] = useState(true);
   const [migrationDialogOpen, setMigrationDialogOpen] = useState(false);
-  const [migrationError, setMigrationError] = useState("");
+  const [migrationError, setMigrationError] = useDiagnosticMessage("WelcomePage:migrationError", "inline");
   const [contactCount, setContactCount] = useState(0);
   const [calendarCount, setCalendarCount] = useState(0);
 

@@ -1,6 +1,7 @@
 import { AlertCircle, CheckCircle2, Info, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { recordActivity } from "../utils/activityLog";
+import { notificationDetails, publicNotification, reportDiagnostic } from "../utils/notificationPolicy";
 
 interface StatusMessageProps {
   message: string;
@@ -20,7 +21,11 @@ function isProgressMessage(message: string): boolean {
   return /(?:wird|werden|läuft|liest|lädt|vorbereitet|geprüft|synchronisiert).*(?:…|\.\.\.)/i.test(message);
 }
 
-export function StatusMessage({ message, type, autoDismissMs, recordInActivity = true }: StatusMessageProps) {
+export function StatusMessage({ message: originalMessage, type, autoDismissMs, recordInActivity = true }: StatusMessageProps) {
+  const message = publicNotification(originalMessage) ?? "";
+  useEffect(() => {
+    if (originalMessage) void reportDiagnostic({ origin: "StatusMessage", level: type ?? inferTone(originalMessage), message: originalMessage });
+  }, [originalMessage, type]);
   const [visible, setVisible] = useState(Boolean(message));
   const tone = useMemo(() => type ?? inferTone(message), [message, type]);
 
@@ -46,7 +51,10 @@ export function StatusMessage({ message, type, autoDismissMs, recordInActivity =
   return (
     <div className={`status ${tone}`} role={tone === "error" ? "alert" : "status"} aria-live={tone === "error" ? "assertive" : "polite"}>
       <Icon className="status-icon" size={21} aria-hidden="true" />
-      <span>{message}</span>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <span style={{ whiteSpace: "pre-line" }}>{message}</span>
+        {notificationDetails(message).length > 0 && <details><summary>Weitere betroffene Einträge anzeigen</summary><ul>{notificationDetails(message).map((item) => <li key={item}>{item}</li>)}</ul></details>}
+      </div>
       <button className="status-close" type="button" onClick={() => setVisible(false)} aria-label="Hinweis schließen">
         <X size={18} />
       </button>

@@ -22,7 +22,9 @@ use tauri_plugin_deep_link::DeepLinkExt;
 use uuid::Uuid;
 use zeroize::Zeroize;
 
+mod bulk_removal;
 mod calendar_import;
+mod diagnostics;
 mod documents;
 mod file_icons;
 mod m365;
@@ -84,6 +86,7 @@ fn url_encode_component(value: &str) -> String {
 }
 
 struct AppState {
+    edv_unlocked: AtomicBool,
     db_path: Mutex<PathBuf>,
     vault: Mutex<vault::VaultRuntime>,
     outlook_contact_cache: Mutex<Option<CachedOutlookContacts>>,
@@ -6647,6 +6650,7 @@ fn get_app_setting(app: AppHandle, key: String) -> Result<Option<String>, String
 
 #[tauri::command]
 fn list_audit_log(app: AppHandle, filter: AuditLogFilter) -> Result<AuditLogPage, String> {
+    diagnostics::require_edv(&app)?;
     query_audit_log(&open_db(&app)?, filter)
 }
 
@@ -10462,6 +10466,7 @@ pub fn run() {
         }))
         .plugin(tauri_plugin_deep_link::init())
         .manage(AppState {
+            edv_unlocked: AtomicBool::new(false),
             db_path: Mutex::new(PathBuf::new()),
             vault: Mutex::new(vault::VaultRuntime::default()),
             outlook_contact_cache: Mutex::new(None),
@@ -10526,6 +10531,9 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            bulk_removal::list_edv_bulk_items,
+            bulk_removal::preview_edv_bulk_removal,
+            bulk_removal::execute_edv_bulk_removal,
             list_contacts,
             get_contact_overview_counts,
             list_deleted_contacts,
@@ -10561,6 +10569,9 @@ pub fn run() {
             undo_last_import,
             undo_last_outlook_contact_import,
             list_audit_log,
+            diagnostics::unlock_edv_tools,
+            diagnostics::lock_edv_tools,
+            diagnostics::record_ui_diagnostic,
             get_backup_data,
             get_sync_backup_data,
             create_automatic_safety_backup,

@@ -655,8 +655,8 @@ fn prepare_series_upgrade_in_db(
         )
         .map_err(|error| error.to_string())?;
         tx.execute(
-            "INSERT INTO app_settings(key, value) VALUES (?1, 'complete')",
-            [&key],
+            "INSERT INTO app_settings(key, value, updated_at) VALUES (?1, 'complete', ?2)",
+            params![key, Utc::now().to_rfc3339()],
         )
         .map_err(|error| error.to_string())?;
     }
@@ -819,8 +819,15 @@ mod tests {
     #[test]
     fn upgrade_replays_only_this_calendar_once_and_keeps_outgoing_changes() {
         let conn = rusqlite::Connection::open_in_memory().unwrap();
-        conn.execute_batch("CREATE TABLE app_settings(key TEXT PRIMARY KEY, value TEXT); CREATE TABLE m365_calendar_delta_state(source_id TEXT); CREATE TABLE m365_calendar_delta_changes(source_id TEXT); CREATE TABLE calendar_sync_outbox(event_id TEXT); INSERT INTO m365_calendar_delta_state VALUES ('cal:period:old'), ('cal2:period:old'); INSERT INTO m365_calendar_delta_changes VALUES ('cal'), ('cal2'); INSERT INTO calendar_sync_outbox VALUES ('pending-edit');").unwrap();
+        // Match the installed database: updated_at has no default and is required.
+        conn.execute_batch("CREATE TABLE app_settings(key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at TEXT NOT NULL); CREATE TABLE m365_calendar_delta_state(source_id TEXT); CREATE TABLE m365_calendar_delta_changes(source_id TEXT); CREATE TABLE calendar_sync_outbox(event_id TEXT); INSERT INTO m365_calendar_delta_state VALUES ('cal:period:old'), ('cal2:period:old'); INSERT INTO m365_calendar_delta_changes VALUES ('cal'), ('cal2'); INSERT INTO calendar_sync_outbox VALUES ('pending-edit');").unwrap();
         prepare_series_upgrade_in_db(&conn, "cal").unwrap();
+        let (marker, timestamp): (String, String) = conn.query_row(
+            "SELECT value, updated_at FROM app_settings WHERE key = 'm365_calendar_series_v1:cal'",
+            [], |row| Ok((row.get(0)?, row.get(1)?)),
+        ).unwrap();
+        assert_eq!(marker, "complete");
+        assert!(chrono::DateTime::parse_from_rfc3339(&timestamp).is_ok());
         assert_eq!(
             conn.query_row(
                 "SELECT count(*) FROM m365_calendar_delta_state",
@@ -846,12 +853,99 @@ mod tests {
         prepare_series_upgrade_in_db(&conn, "cal").unwrap();
         assert_eq!(
             conn.query_row(
+                "SELECT updated_at FROM app_settings WHERE key = 'm365_calendar_series_v1:cal'",
+                [],
+                |row| row.get::<_, String>(0)
+            )
+            .unwrap(),
+            timestamp
+        );
+        assert_eq!(
+            conn.query_row(
                 "SELECT count(*) FROM m365_calendar_delta_state",
                 [],
                 |row| row.get::<_, u32>(0)
             )
             .unwrap(),
             2
+        );
+    }
+
+    #[test]
+    fn failed_upgrade_marker_preserves_inbound_checkpoints_and_outgoing_changes() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch("CREATE TABLE app_settings(key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at TEXT NOT NULL);
+            CREATE TABLE m365_calendar_delta_state(source_id TEXT);
+            CREATE TABLE m365_calendar_delta_changes(source_id TEXT);
+            CREATE TABLE calendar_sync_outbox(event_id TEXT);
+            INSERT INTO m365_calendar_delta_state VALUES ('cal:period:old');
+            INSERT INTO m365_calendar_delta_changes VALUES ('cal');
+            INSERT INTO calendar_sync_outbox VALUES ('pending-edit');
+            CREATE TRIGGER fail_marker BEFORE INSERT ON app_settings BEGIN SELECT RAISE(ABORT, 'marker write failed'); END;").unwrap();
+        assert!(prepare_series_upgrade_in_db(&conn, "cal")
+            .unwrap_err()
+            .contains("marker write failed"));
+        for table in [
+            "m365_calendar_delta_state",
+            "m365_calendar_delta_changes",
+            "calendar_sync_outbox",
+        ] {
+            assert_eq!(
+                conn.query_row(&format!("SELECT count(*) FROM {table}"), [], |row| row
+                    .get::<_, u32>(0))
+                    .unwrap(),
+                1
+            );
+        }
+        conn.execute_batch("DROP TRIGGER fail_marker;").unwrap();
+        prepare_series_upgrade_in_db(&conn, "cal").unwrap();
+        assert_eq!(
+            conn.query_row(
+                "SELECT count(*) FROM m365_calendar_delta_changes",
+                [],
+                |row| row.get::<_, u32>(0)
+            )
+            .unwrap(),
+            0
+        );
+        assert_eq!(
+            conn.query_row("SELECT count(*) FROM calendar_sync_outbox", [], |row| row
+                .get::<_, u32>(
+                0
+            ))
+            .unwrap(),
+            1
+        );
+    }
+
+    #[test]
+    fn blue_colour_fallback_patches_only_categories_preserving_the_teams_meeting() {
+        let remote = online_remote();
+        let local = remote_event_to_local(&remote, &source(), None);
+        let fallback = super::super::color_fallback::blue(&local);
+        let (url, server) = mock_graph(vec![remote.clone(), json!({"id":"one","categories":[]})]);
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        runtime
+            .block_on(patch_event(
+                "mock-token",
+                &url,
+                &fallback,
+                &HashMap::new(),
+                true,
+            ))
+            .unwrap();
+        let requests = server.join().unwrap();
+        assert!(requests[0].0.starts_with("GET "));
+        assert!(requests[1].0.starts_with("PATCH "));
+        assert_eq!(requests[1].1, json!({"categories":[]}));
+        assert_eq!(fallback.title, local.title);
+        assert_eq!(fallback.starts_at, local.starts_at);
+        assert_eq!(
+            fallback.meeting.online_meeting_url,
+            local.meeting.online_meeting_url
         );
     }
 

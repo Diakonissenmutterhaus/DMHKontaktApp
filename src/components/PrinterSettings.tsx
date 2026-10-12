@@ -1,3 +1,4 @@
+import { useDiagnosticMessage } from "../hooks/useDiagnosticMessage";
 import { Building2, CheckCircle2, LoaderCircle, MapPin, Network, Printer, RefreshCw, Router, Share2, ShieldCheck, SlidersHorizontal } from "lucide-react";
 import { FormEvent, useCallback, useEffect, useState } from "react";
 import { addNetworkPrinter, installDmhKopierraumPrinter, listPrinterDrivers, listPrinters } from "../services/db";
@@ -27,7 +28,7 @@ export function PrinterSettings() {
   const [loading, setLoading] = useState(true);
   const [adding, setAdding] = useState(false);
   const [installingKopierraum, setInstallingKopierraum] = useState(false);
-  const [message, setMessage] = useState("");
+  const [message, setMessage] = useDiagnosticMessage("PrinterSettings:message", "notification");
   const [messageType, setMessageType] = useState<"success" | "error" | "info">("info");
 
   const refresh = useCallback(async () => {

@@ -1,3 +1,4 @@
+import { useDiagnosticMessage } from "../hooks/useDiagnosticMessage";
 import { CalendarDays, CheckCircle2, ChevronRight, Circle, CircleAlert, RotateCcw, Send, ShieldCheck, UsersRound } from "lucide-react";
 import { useEffect, useState } from "react";
 import { MigrationCaptureDialog } from "../components/MigrationCaptureDialog";
@@ -16,7 +17,7 @@ export function ExtrasPage() {
   const [migrationStatus, setMigrationStatus] = useState<MigrationCaptureStatus | null>(null);
   const [migrationStatusUnknown, setMigrationStatusUnknown] = useState(false);
   const [migrationDialogOpen, setMigrationDialogOpen] = useState(false);
-  const [migrationError, setMigrationError] = useState("");
+  const [migrationError, setMigrationError] = useDiagnosticMessage("ExtrasPage:migrationError", "inline");
   const [hiddenDataSections, setHiddenDataSections] = useState<DataSection[]>(readHiddenDataSections);
 
   useEffect(() => {

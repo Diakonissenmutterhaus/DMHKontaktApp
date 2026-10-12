@@ -1,3 +1,4 @@
+import { useDiagnosticMessage } from "../hooks/useDiagnosticMessage";
 import {
   ArrowLeft,
   CheckCircle2,
@@ -50,8 +51,8 @@ export function ContactReconciliationDialog({ open, onClose, onChanged }: Contac
   const [outlookPreview, setOutlookPreview] = useState<OutlookContactImportPreview | null>(null);
   const [thunderbirdPreview, setThunderbirdPreview] = useState<ThunderbirdContactReconciliationPreview | null>(null);
   const [busy, setBusy] = useState<"scan" | "apply" | "undo" | null>(null);
-  const [error, setError] = useState("");
-  const [resultMessage, setResultMessage] = useState("");
+  const [error, setError] = useDiagnosticMessage("ContactReconciliationDialog:error", "inline");
+  const [resultMessage, setResultMessage] = useDiagnosticMessage("ContactReconciliationDialog:resultMessage", "notification");
   const [undoBackup, setUndoBackup] = useState<BackupData | null>(null);
   const [undone, setUndone] = useState(false);
 

@@ -1,13 +1,11 @@
 import { render, screen } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ActionResultDialog } from "./ActionResultDialog";
 
 describe("ActionResultDialog", () => {
   beforeEach(() => localStorage.clear());
 
-  it("persists the per-action choice to hide a repeated success dialog", async () => {
-    const user = userEvent.setup();
+  it("keeps routine successes out of user dialogs", async () => {
     const onClose = vi.fn();
     const result = {
       title: "Kontakte verschoben",
@@ -19,10 +17,7 @@ describe("ActionResultDialog", () => {
 
     render(<ActionResultDialog result={result} onClose={onClose} />);
 
-    await user.click(screen.getByRole("checkbox", { name: result.dismissalLabel }));
-    await user.click(screen.getByRole("button", { name: "Verstanden" }));
-
-    expect(localStorage.getItem("agendakontakte.dismissedActionResult.contacts-moved")).toBe("true");
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     expect(onClose).toHaveBeenCalledOnce();
   });
 });

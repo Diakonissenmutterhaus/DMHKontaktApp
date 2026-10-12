@@ -1,3 +1,4 @@
+import { useDiagnosticMessage } from "../hooks/useDiagnosticMessage";
 import { ArrowLeft, CalendarDays, CheckCircle2, CircleAlert, CloudCog, LoaderCircle, LockKeyhole, RefreshCw, UsersRound, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import { detectConnectedCalendarSources } from "../services/db";
@@ -24,11 +25,11 @@ function importErrorMessage(error: unknown): string {
 export function EasyImportDialog({ kind, open, onClose, onImported, onManageSync, initialConnectedMode = false }: EasyImportDialogProps) {
   const [busyPlatform, setBusyPlatform] = useState<EasyImportPlatform | null>(null);
   const [result, setResult] = useState<EasyImportResult | null>(null);
-  const [error, setError] = useState("");
+  const [error, setError] = useDiagnosticMessage("EasyImportDialog:error", "inline");
   const [connectedMode, setConnectedMode] = useState(false);
   const [discovery, setDiscovery] = useState<DetectedCalendarSourcesResult | null>(null);
   const [discoveryBusy, setDiscoveryBusy] = useState(false);
-  const [discoveryError, setDiscoveryError] = useState("");
+  const [discoveryError, setDiscoveryError] = useDiagnosticMessage("EasyImportDialog:discoveryError", "inline");
   const contacts = kind === "contacts";
   const DataIcon = contacts ? UsersRound : CalendarDays;
 

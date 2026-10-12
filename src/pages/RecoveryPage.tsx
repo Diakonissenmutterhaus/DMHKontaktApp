@@ -1,3 +1,4 @@
+import { useDiagnosticMessage } from "../hooks/useDiagnosticMessage";
 import {
   ArchiveRestore,
   CalendarDays,
@@ -65,7 +66,7 @@ export function RecoveryPage() {
   const [restoreBusy, setRestoreBusy] = useState(false);
   const [query, setQuery] = useState("");
   const [offset, setOffset] = useState(0);
-  const [message, setMessage] = useState("");
+  const [message, setMessage] = useDiagnosticMessage("RecoveryPage:message", "notification");
   const [messageType, setMessageType] = useState<"success" | "error" | "info">("info");
 
   const refreshStatus = async () => {

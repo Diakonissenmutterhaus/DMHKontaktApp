@@ -1,3 +1,4 @@
+import { useDiagnosticMessage } from "../hooks/useDiagnosticMessage";
 import { listen } from "@tauri-apps/api/event";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { openPath } from "@tauri-apps/plugin-opener";
@@ -12,7 +13,7 @@ const isDesktopApp = "__TAURI_INTERNALS__" in window;
 export function PhonePhotoTransferPanel() {
   const [status, setStatus] = useState<PhoneTransferStatus | null>(null);
   const [qrCode, setQrCode] = useState("");
-  const [message, setMessage] = useState("");
+  const [message, setMessage] = useDiagnosticMessage("PhonePhotoTransferPanel:message", "notification");
   const [receivedNames, setReceivedNames] = useState<string[]>([]);
   const [starting, setStarting] = useState(false);
 

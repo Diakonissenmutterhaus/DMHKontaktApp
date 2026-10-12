@@ -1,3 +1,4 @@
+import { useDiagnosticMessage } from "../hooks/useDiagnosticMessage";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { readTextFile, writeTextFile } from "@tauri-apps/plugin-fs";
 import { ArchiveRestore, CheckCircle2, Download, Info, ShieldCheck } from "lucide-react";
@@ -9,7 +10,7 @@ import { addBrowserDataToBackup, restoreBrowserDataFromBackup } from "../utils/b
 import { exportBackupJson } from "../utils/exporters";
 
 export function BackupPage() {
-  const [message, setMessage] = useState("");
+  const [message, setMessage] = useDiagnosticMessage("BackupPage:message", "notification");
 
   const create = async () => {
     const path = await save({

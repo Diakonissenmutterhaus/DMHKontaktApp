@@ -1,3 +1,4 @@
+import { useDiagnosticMessage } from "../hooks/useDiagnosticMessage";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { History, RefreshCw, Search, SlidersHorizontal, X } from "lucide-react";
 import { listAuditLog } from "../services/db";
@@ -5,6 +6,7 @@ import type { AuditLogEntry, AuditLogFilter } from "../types/audit";
 
 const pageSize = 50;
 const actionNames: Record<string, string> = {
+  error: "Fehlermeldung", warning: "Warnung", info: "Hinweis", success: "Ergebnis",
   created: "Erstellt",
   updated: "Geändert",
   changed: "Geändert",
@@ -15,6 +17,7 @@ const actionNames: Record<string, string> = {
   imported: "Importiert"
 };
 const areaNames: Record<string, string> = {
+  notification: "Anwendung", synchronization: "Synchronisierung",
   contact: "Kontakt",
   contacts: "Kontaktimport",
   group: "Gruppe",
@@ -45,7 +48,7 @@ export function AuditHistoryPanel() {
   const [hasMore, setHasMore] = useState(false);
   const [loading, setLoading] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
-  const [error, setError] = useState("");
+  const [error, setError] = useDiagnosticMessage("AuditHistoryPanel:error", "inline");
   const requestId = useRef(0);
 
   useEffect(() => {
@@ -109,7 +112,7 @@ export function AuditHistoryPanel() {
       <div className="panel-heading audit-history-heading">
         <div>
           <h3 id="audit-log-title"><History size={23} aria-hidden="true" /> Historie</h3>
-          <p>Änderungen nach Person, Name, Vorgang oder Zeitraum finden.</p>
+          <p>EDV-Protokoll: Änderungen und Meldungen nach Fehlertext, Termin, ID, Vorgang oder Zeitraum finden.</p>
         </div>
         <button type="button" onClick={() => void loadPage()} disabled={loading || loadingMore}>
           <RefreshCw size={18} className={loading ? "spin" : ""} aria-hidden="true" /> Aktualisieren
@@ -121,7 +124,7 @@ export function AuditHistoryPanel() {
         <input
           type="search"
           aria-label="Historie durchsuchen"
-          placeholder="Name, Windows-Benutzer oder Vorgang suchen …"
+          placeholder="Fehlermeldung, Termin, ID, Windows-Benutzer oder Vorgang suchen …"
           value={searchInput}
           onChange={(event) => setSearchInput(event.target.value)}
         />
@@ -132,6 +135,10 @@ export function AuditHistoryPanel() {
         <label>Aktion
           <select value={action} onChange={(event) => setAction(event.target.value)}>
             <option value="">Alle Aktionen</option>
+            <option value="error">Fehlermeldungen</option>
+            <option value="warning">Warnungen</option>
+            <option value="info">Hinweise</option>
+            <option value="success">Ergebnisse</option>
             <option value="created">Erstellt</option>
             <option value="modified">Geändert</option>
             <option value="deleted">In Papierkorb</option>
@@ -149,6 +156,8 @@ export function AuditHistoryPanel() {
             <option value="group">Gruppen</option>
             <option value="calendar">Kalender</option>
             <option value="setting">Einstellungen</option>
+            <option value="notification">Anwendung / Meldungen</option>
+            <option value="synchronization">Synchronisierung</option>
           </select>
         </label>
         <label>Herkunft
@@ -156,6 +165,7 @@ export function AuditHistoryPanel() {
             <option value="">Alle Herkünfte</option>
             <option value="user">In der App</option>
             <option value="m365">Microsoft 365</option>
+            <option value="diagnostic">EDV-Diagnose</option>
           </select>
         </label>
         <label>Von
@@ -183,14 +193,14 @@ export function AuditHistoryPanel() {
         <div className="audit-log-list" aria-busy={loading}>
           {entries.map((entry) => (
             <article className="audit-log-entry" key={entry.id}>
-              <time dateTime={entry.occurredAt}>{new Date(entry.occurredAt).toLocaleString("de-DE", { dateStyle: "medium", timeStyle: "short" })}</time>
+              <time dateTime={entry.occurredAt}>{new Date(entry.occurredAt).toLocaleString("de-DE", { dateStyle: "medium", timeStyle: "medium" })}</time>
               <div className="audit-history-entry-content">
                 <div className="audit-history-entry-labels">
                   <span className={`audit-history-action audit-history-action-${entry.action}`}>{actionNames[entry.action] ?? entry.action}</span>
                   <span>{areaNames[entry.entityKind] ?? entry.entityKind}</span>
                 </div>
-                <strong>{entry.summary}</strong>
-                <small>{entry.source === "m365" ? "Microsoft 365" : "In der App"} · {entry.actor}</small>
+                <strong style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>{entry.summary}</strong>
+                <small>{entry.source === "m365" ? "Microsoft 365" : entry.source === "diagnostic" ? "EDV-Diagnose" : "In der App"} · {entry.actor}</small>
               </div>
             </article>
           ))}

@@ -1,3 +1,4 @@
+import { useDiagnosticMessage } from "../hooks/useDiagnosticMessage";
 import { CalendarDays, FolderClosed, KeyRound, RotateCcw, Trash2, Users } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { ConfirmDialog } from "../components/ConfirmDialog";
@@ -74,7 +75,7 @@ export function TrashPage() {
   const [deletedGroups, setDeletedGroups] = useState<Group[]>([]);
   const [deletedVaultEntries, setDeletedVaultEntries] = useState<VaultEntry[]>([]);
   const [deletedCollectedAddressesAt, setDeletedCollectedAddressesAt] = useState<string | null>(null);
-  const [message, setMessage] = useState("");
+  const [message, setMessage] = useDiagnosticMessage("TrashPage:message", "notification");
   const [actionResult, setActionResult] = useState<ActionResult | null>(null);
   const [category, setCategory] = useState<TrashCategory>("calendar");
   const [contactSelectionMode, setContactSelectionMode] = useState(false);

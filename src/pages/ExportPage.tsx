@@ -1,3 +1,4 @@
+import { useDiagnosticMessage } from "../hooks/useDiagnosticMessage";
 import { save } from "@tauri-apps/plugin-dialog";
 import { AtSign, CalendarClock, CalendarDays, CheckCircle2, ContactRound, Download, FolderOpen, LoaderCircle, Send } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
@@ -36,7 +37,7 @@ interface ExportPageProps {
 }
 
 export function ExportPage({ embedded = false }: ExportPageProps) {
-  const [message, setMessage] = useState("");
+  const [message, setMessage] = useDiagnosticMessage("ExportPage:message", "notification");
   const [actionResult, setActionResult] = useState<ActionResult | null>(null);
   const [groups, setGroups] = useState<Group[]>([]);
   const [selectedGroupIds, setSelectedGroupIds] = useState<number[]>([]);

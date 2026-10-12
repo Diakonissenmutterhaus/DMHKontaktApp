@@ -108,6 +108,7 @@ export interface Microsoft365SyncPreview {
 export type Microsoft365ConflictDecision = "keepApp" | "keepM365" | "merge" | "ignore";
 
 export interface Microsoft365SyncResult {
+  failures?: SyncFailure[];
   startedAt: string;
   finishedAt: string;
   created: number;
@@ -124,6 +125,7 @@ export interface Microsoft365SyncResult {
 }
 
 export interface CalendarOutboxSyncResult {
+  failures?: SyncFailure[];
   processed: number;
   created: number;
   updated: number;
@@ -134,6 +136,7 @@ export interface CalendarOutboxSyncResult {
 }
 
 export interface ContactOutboxSyncResult {
+  failures?: SyncFailure[];
   processed: number;
   created: number;
   updated: number;
@@ -146,4 +149,9 @@ export interface ContactOutboxSyncResult {
 export interface Microsoft365SyncHistoryEntry extends Omit<Microsoft365SyncResult, "calendarUpserts" | "calendarDeletes" | "calendarCategories" | "deleted"> {
   id: string;
   deleted?: number;
+}
+
+export interface SyncFailure {
+  entityKind: string; entityId: string; title: string; startsAt?: string | null;
+  operation: string; sourceId: string; error: string; userMessage?: string | null;
 }

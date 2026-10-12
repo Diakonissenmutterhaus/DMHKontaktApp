@@ -338,10 +338,10 @@ export function CalendarEventForm({ value, isNew, categories, events, calendars 
                 <div className="calendar-date-editor">
                   <div className={`calendar-date-controls${value.isAllDay ? " all-day" : ""}${showEndDate ? " with-end-date" : ""}`}>
                     <input aria-label="Startdatum" type="date" value={starts.date} onChange={(event) => value.isAllDay ? updateAllDayStart(event.target.value) : updateStart(dateTimeValue(event.target.value, starts.time))} />
-                    {!value.isAllDay && <input aria-label="Startzeit" type="time" value={starts.time} onChange={(event) => updateStart(dateTimeValue(starts.date, event.target.value))} />}
+                    {!value.isAllDay && <input aria-label="Startzeit" type="time" step={60} value={starts.time} onChange={(event) => updateStart(dateTimeValue(starts.date, event.target.value))} />}
                     <span>–</span>
                     {showEndDate && <input aria-label="Enddatum" type="date" min={starts.date} value={value.isAllDay ? allDayInclusiveEndDate : ends.date} onChange={(event) => value.isAllDay ? updateAllDayEnd(event.target.value) : update("endsAt", dateTimeValue(event.target.value, ends.time))} />}
-                    {!value.isAllDay && <input aria-label="Endzeit" type="time" value={ends.time} onChange={(event) => update("endsAt", dateTimeValue(ends.date, event.target.value))} />}
+                    {!value.isAllDay && <input aria-label="Endzeit" type="time" step={60} value={ends.time} onChange={(event) => update("endsAt", dateTimeValue(ends.date, event.target.value))} />}
                   </div>
                   <label className="calendar-all-day-option">
                     <input type="checkbox" checked={Boolean(value.isAllDay)} onChange={(event) => toggleAllDay(event.target.checked)} />

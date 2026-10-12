@@ -1,3 +1,4 @@
+import { useDiagnosticMessage } from "../hooks/useDiagnosticMessage";
 import { AlertTriangle, Files, KeyRound, RotateCcw, ShieldCheck, Trash2 } from "lucide-react";
 import { useState, type ReactNode } from "react";
 import { StatusMessage } from "../components/StatusMessage";
@@ -50,7 +51,7 @@ function FeatureToggleCard({ checked, description, descriptionId, icon, onChange
 
 export function FeatureDevelopmentPage({ availability, onFeatureChange, onReset }: FeatureDevelopmentPageProps) {
   const [busyAction, setBusyAction] = useState<string | null>(null);
-  const [message, setMessage] = useState("");
+  const [message, setMessage] = useDiagnosticMessage("FeatureDevelopmentPage:message", "notification");
   const [messageType, setMessageType] = useState<"success" | "error" | "info">("info");
 
   const usesReleaseDefaults = availability.authenticator === releaseFeatureDefaults.authenticator

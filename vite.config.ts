@@ -4,6 +4,11 @@ import react from "@vitejs/plugin-react";
 export default defineConfig({
   plugins: [react()],
   clearScreen: false,
+  optimizeDeps: {
+    // The PDF viewer loads on demand; pre-bundle its dependency so the first
+    // preview cannot trigger a development-page reload and lose UI state.
+    include: ["pdfjs-dist/legacy/build/pdf.mjs"]
+  },
   server: {
     host: "127.0.0.1",
     port: 4000,

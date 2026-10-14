@@ -82,6 +82,14 @@ if ([string]::IsNullOrWhiteSpace($env:M365_CLIENT_ID)) {
     }
 }
 
+if ([string]::IsNullOrWhiteSpace($env:M365_TENANT_ID)) {
+    $publicTenantId = & gh variable get M365_TENANT_ID --repo Diakonissenmutterhaus/DMHKontaktApp 2>$null | Select-Object -Last 1
+    $env:M365_TENANT_ID = [string]$publicTenantId
+    if ($LASTEXITCODE -ne 0 -or $env:M365_TENANT_ID -notmatch '^[0-9a-fA-F-]{36}$') {
+        throw 'Die oeffentliche GitHub-Variable M365_TENANT_ID konnte nicht gelesen werden.'
+    }
+}
+
 $backupPath = (& $pythonExecutable @pythonPrefix $backupScript $databasePath $backupDirectory | Select-Object -Last 1)
 if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $backupPath -PathType Leaf)) {
     throw 'Die lokale Datenbanksicherung ist fehlgeschlagen. Der sichere Test wurde nicht gestartet.'

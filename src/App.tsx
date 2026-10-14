@@ -18,6 +18,7 @@ import { PasswordsPage } from "./pages/PasswordsPage";
 import { AuthenticatorPage } from "./pages/AuthenticatorPage";
 import { BackupPage } from "./pages/BackupPage";
 import { Microsoft365Page } from "./pages/Microsoft365Page";
+import { EmailSavePage } from "./pages/EmailSavePage";
 import { SynchronizationsPage } from "./pages/SynchronizationsPage";
 import { DocumentsPage } from "./pages/DocumentsPage";
 import { FeatureDevelopmentPage } from "./pages/FeatureDevelopmentPage";
@@ -113,7 +114,7 @@ export default function App() {
   const navigationBlockerRef = useRef<NavigationBlocker | null>(null);
   const closing = useRef(false);
   const settingsAreaOpen = page === "settings" || page === "feature-development" || page === "backup" || page === "synchronizations" || page === "m365" || page === "recovery";
-  const compactSidebar = settingsAreaOpen || (page === "calendar" && advancedCalendar);
+  const compactSidebar = settingsAreaOpen || (page === "calendar" && advancedCalendar) || page === "email-save";
 
   const changeAdvancedCalendar = (enabled: boolean) => {
     localStorage.setItem(advancedCalendarStorageKey, String(enabled));
@@ -474,7 +475,7 @@ export default function App() {
           {sourceCommit && <span>Commit {sourceCommit}</span>}
         </div>
       )}
-      <div className={`app-shell${settingsAreaOpen ? " settings-app-shell" : ""}${compactSidebar ? " compact-sidebar-shell" : ""}`}>
+      <div className={`app-shell${settingsAreaOpen ? " settings-app-shell" : ""}${compactSidebar ? " compact-sidebar-shell" : ""}${page === "email-save" ? " email-app-shell" : ""}`}>
         <Sidebar
           activePage={page}
           calendarEnabled={!hiddenDataSections.includes("calendar")}
@@ -506,6 +507,8 @@ export default function App() {
             />
           )}
           {page === "m365" && <Microsoft365Page />}
+          {page === "m365-login" && <Microsoft365Page title="M365 Anmeldung" />}
+          {page === "email-save" && <EmailSavePage />}
           {page === "recovery" && <RecoveryPage />}
           {page === "trash" && <TrashPage />}
           {page === "settings" && (

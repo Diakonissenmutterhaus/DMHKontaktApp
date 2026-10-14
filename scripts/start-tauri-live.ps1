@@ -72,7 +72,7 @@ if ($runningApps.Count -gt 0) {
 }
 
 $environmentNames = @(
-    'M365_CLIENT_ID', 'CARGO_TARGET_DIR', 'DMH_M365_READ_ONLY_TEST',
+    'M365_CLIENT_ID', 'M365_TENANT_ID', 'CARGO_TARGET_DIR', 'DMH_M365_READ_ONLY_TEST',
     'DMH_M365_READ_ONLY_ACCOUNT_SHA256', 'VITE_DMH_M365_SAFE_IMPORT',
     'DMH_RELEASE_CHANNEL', 'VITE_APP_CHANNEL', 'VITE_SOURCE_COMMIT'
 )
@@ -92,6 +92,14 @@ try {
             throw 'Die oeffentliche GitHub-Variable M365_CLIENT_ID konnte nicht gelesen werden.'
         }
         $env:M365_CLIENT_ID = [string]$publicClientId
+    }
+
+    if ([string]::IsNullOrWhiteSpace($env:M365_TENANT_ID)) {
+        $publicTenantId = & gh variable get M365_TENANT_ID --repo Diakonissenmutterhaus/DMHKontaktApp 2>$null | Select-Object -Last 1
+        if ($LASTEXITCODE -ne 0 -or [string]$publicTenantId -notmatch '^[0-9a-fA-F-]{36}$') {
+            throw 'Die oeffentliche GitHub-Variable M365_TENANT_ID konnte nicht gelesen werden.'
+        }
+        $env:M365_TENANT_ID = [string]$publicTenantId
     }
 
     # Keep the production app identifier/database and normal account checks.

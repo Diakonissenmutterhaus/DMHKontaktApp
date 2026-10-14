@@ -1,12 +1,15 @@
-import { CalendarDays, Files, House, KeyRound, ShieldCheck, Trash2, UserRound } from "lucide-react";
+import { CalendarDays, Files, House, KeyRound, LogIn, Mail, ShieldCheck, Trash2, UserRound } from "lucide-react";
 import { t } from "../i18n";
+import { useEffect, useState } from "react";
 
-export type Page = "welcome" | "contacts" | "calendar" | "documents" | "passwords" | "authenticator" | "services" | "import" | "contact-import" | "calendar-import" | "export" | "feature-development" | "m365" | "trash" | "settings" | "simple-import" | "backup" | "synchronizations" | "recovery";
+export type Page = "welcome" | "contacts" | "calendar" | "m365-login" | "email-save" | "documents" | "passwords" | "authenticator" | "services" | "import" | "contact-import" | "calendar-import" | "export" | "feature-development" | "m365" | "trash" | "settings" | "simple-import" | "backup" | "synchronizations" | "recovery";
 
 const items: Array<{ page: Page; label: string; icon: typeof UserRound; group: "main" | "tools" }> = [
   { page: "welcome", label: "Startseite", icon: House, group: "main" },
   { page: "contacts", label: t.contacts, icon: UserRound, group: "main" },
   { page: "calendar", label: "Kalender", icon: CalendarDays, group: "main" },
+  { page: "m365-login", label: "M365 Anmeldung", icon: LogIn, group: "main" },
+  { page: "email-save", label: "emails speichern", icon: Mail, group: "main" },
   { page: "passwords", label: "Passwörter", icon: KeyRound, group: "main" },
   { page: "authenticator", label: "2FA-Authenticator", icon: ShieldCheck, group: "tools" },
   { page: "documents", label: "Dokumente", icon: Files, group: "tools" }
@@ -26,6 +29,8 @@ interface SidebarProps {
 }
 
 export function Sidebar({ activePage, onNavigate, compact = false, calendarEnabled, contactsEnabled, authenticatorEnabled, documentsEnabled, passwordsEnabled }: SidebarProps) {
+  const [suppressHover, setSuppressHover] = useState(activePage === "email-save");
+  useEffect(() => { setSuppressHover(activePage === "email-save"); }, [activePage]);
   const visibleItems = items.filter((item) => (
     (item.page !== "contacts" || contactsEnabled)
     && (item.page !== "calendar" || calendarEnabled)
@@ -35,7 +40,7 @@ export function Sidebar({ activePage, onNavigate, compact = false, calendarEnabl
   ));
 
   return (
-    <aside className={compact ? "sidebar compact" : "sidebar"}>
+    <aside className={`${compact ? "sidebar compact" : "sidebar"}${suppressHover ? " suppress-hover" : ""}`} onMouseLeave={() => setSuppressHover(false)}>
       <div className="brand">
         <img className="brand-logo" src="/dmh-kontakte-kalender.png" alt="Logo von DMH Backup" />
         <div className="brand-copy">
@@ -51,8 +56,9 @@ export function Sidebar({ activePage, onNavigate, compact = false, calendarEnabl
             <button
               className={`${active ? "nav-button active" : "nav-button"}${startsGroup ? " nav-group-start" : ""}${item.page === "contacts" ? " nav-section-gap-small" : ""}`}
               key={item.page}
-              onClick={() => onNavigate(item.page)}
+              onClick={() => { if (item.page === "email-save") setSuppressHover(true); onNavigate(item.page); }}
               title={compact ? item.label : undefined}
+              aria-label={item.label}
               type="button"
             >
               <Icon size={24} />
@@ -66,6 +72,7 @@ export function Sidebar({ activePage, onNavigate, compact = false, calendarEnabl
           className={activePage === "trash" ? "nav-button active" : "nav-button"}
           onClick={() => onNavigate("trash")}
           title={compact ? "Papierkorb" : undefined}
+          aria-label="Papierkorb"
           type="button"
         >
           <Trash2 size={24} />
@@ -76,6 +83,7 @@ export function Sidebar({ activePage, onNavigate, compact = false, calendarEnabl
             className={settingsPages.has(activePage) ? "nav-button active" : "nav-button"}
             onClick={() => onNavigate("settings")}
             title={compact ? "EDV Tools · Nur für EDV" : undefined}
+            aria-label="EDV Tools"
             type="button"
           >
             <ShieldCheck size={24} />

@@ -1,0 +1,30 @@
+.email-attachment-panel { border-block:1px solid var(--border); margin:12px 0; padding:10px 0; font-size:12px; }
+.email-attachment-panel h4 { display:flex; align-items:center; gap:7px; margin:0 0 8px; font-size:12px; }
+.email-attachment-list { display:flex; flex-wrap:wrap; gap:8px; }
+.email-attachment-item { display:flex; align-items:center; gap:8px; border:1px solid var(--border); border-radius:5px; padding:8px; max-width:100%; }
+.email-attachment-item > svg { flex-shrink:0; color:var(--primary); }
+.email-attachment-item > div { min-width:0; }
+.email-attachment-item strong { display:block; overflow-wrap:anywhere; font-size:12px; }
+.email-attachment-item small { display:block; color:var(--muted); font-size:11px; margin-top:3px; }
+.email-attachment-item button { padding:5px 7px; min-height:28px; font-size:11px; border-width:1px; white-space:nowrap; }
+.email-attachments-loading { font-size:12px; color:var(--muted); }
+.email-attachment-dialog { width:min(1100px, 94vw); height:min(850px, 90dvh); max-width:94vw; max-height:90dvh; padding:0; border:1px solid var(--border); border-radius:8px; background:var(--surface); color:var(--text); }
+.email-attachment-dialog[open] { display:flex; flex-direction:column; }
+.email-attachment-dialog::backdrop { background:rgba(0,0,0,.45); }
+.email-attachment-dialog > header { display:flex; align-items:center; gap:12px; padding:12px 16px; border-bottom:1px solid var(--border); }
+.email-attachment-dialog > header > strong { flex:1; overflow-wrap:anywhere; min-width:0; font-size:14px; }
+.email-attachment-dialog > header > button { padding:6px 9px; min-height:30px; font-size:12px; border-width:1px; }
+.email-attachment-dialog > .field-error, .email-attachment-dialog > p { margin:8px 16px; font-size:12px; }
+.email-attachment-preview { flex:1; min-height:0; overflow:hidden; display:flex; align-items:center; justify-content:center; background:var(--soft); }
+.email-attachment-preview > img { max-width:100%; max-height:100%; object-fit:contain; }
+.email-pdf-preview { width:100%; height:100%; display:flex; flex-direction:column; min-height:0; }
+.email-pdf-toolbar { display:flex; align-items:center; gap:8px; padding:8px 12px; border-bottom:1px solid var(--border); background:var(--surface); flex-wrap:wrap; font-size:12px; }
+.email-pdf-toolbar button { padding:4px 7px; min-height:28px; font-size:12px; border-width:1px; }
+.email-pdf-stage { flex:1; min-height:0; overflow:auto; padding:16px; position:relative; }
+.email-pdf-stage canvas { display:block; margin-inline:auto; background:white; box-shadow:0 1px 5px rgba(0,0,0,.15); }
+.email-pdf-stage canvas[hidden] { display:none; }
+.email-preview-loading { display:block; padding:8px; font-size:12px; }
+.email-pdf-password { display:flex; align-items:center; gap:8px; padding:12px; background:var(--surface); }
+.email-pdf-password label { display:flex; align-items:center; gap:8px; font-size:13px; }
+.email-pdf-password input { min-width:0; }
+@media(max-width:800px) { .email-attachment-item { flex-wrap:wrap; } .email-attachment-dialog > header { padding:8px; gap:6px; } }

@@ -70,7 +70,7 @@ export function notifyExchangeFailures(failures: SyncFailure[] = []): string | u
 export async function invokeWithDiagnostics<T>(command: string, args?: Record<string, unknown>): Promise<T> {
   try { return await nativeInvoke<T>(command, args); }
   catch (error) {
-    const values = args?.event ?? args?.events ?? args?.contact ?? args?.contacts ?? args?.input ?? args?.entry ?? args?.request ?? args;
+    const values = args?.event ?? args?.events ?? args?.contact ?? args?.contacts ?? args?.input ?? args?.entry ?? args?.request ?? args?.edit ?? args;
     const affected = Array.isArray(values) ? values : [values];
     const errorText = error instanceof Error ? error.message : String(error);
     let userError: UserOperationError | undefined;
@@ -86,7 +86,7 @@ export async function invokeWithDiagnostics<T>(command: string, args?: Record<st
       entityId: typeof item.id === "string" || typeof item.id === "number" ? String(item.id) : typeof item.itemId === "string" ? item.itemId : undefined,
       title: typeof item.title === "string" ? item.title : typeof item.displayName === "string" ? item.displayName : typeof item.platform === "string" ? item.platform : typeof item.name === "string" ? item.name : undefined,
       startsAt: typeof item.startsAt === "string" ? item.startsAt : undefined,
-      entityKind: command.includes("calendar") ? "calendar" : command.includes("contact") ? "contact" : "notification",
+      entityKind: command.includes("calendar") ? "calendar" : command.includes("contact") ? "contact" : command.includes("email_archive") ? "email" : "notification",
       message: errorText });
     }
     // Preserve the actual error for recovery/retry logic. UI text passes through

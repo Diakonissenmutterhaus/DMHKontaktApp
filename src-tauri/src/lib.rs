@@ -26,8 +26,10 @@ mod bulk_removal;
 mod calendar_import;
 mod diagnostics;
 mod documents;
+mod email_archive;
 mod file_icons;
 mod m365;
+mod m365_wam;
 mod mail_accounts;
 mod outlook_autocomplete;
 mod outlook_calendar_export;
@@ -10531,6 +10533,24 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            email_archive::scan_local_email_sources,
+            email_archive::get_local_email_copy_status,
+            email_archive::copy_local_emails,
+            email_archive::list_email_archive_folders,
+            email_archive::list_email_archive_messages,
+            email_archive::read_email_archive_message,
+            email_archive::management::preview_email_archive_removal,
+            email_archive::management::remove_email_archive_folder,
+            email_archive::management::count_email_archive_removals,
+            email_archive::management::restore_email_archive_folders,
+            email_archive::ordering::get_email_archive_folder_preferences,
+            email_archive::ordering::set_email_archive_folder_preferences,
+            email_archive::message_actions::update_email_archive_message,
+            email_archive::message_actions::list_email_archive_categories,
+            email_archive::message_actions::open_email_archive_window,
+            email_archive::attachments::list_email_archive_attachments,
+            email_archive::attachments::read_email_archive_attachment,
+            email_archive::attachments::save_email_archive_attachment,
             bulk_removal::list_edv_bulk_items,
             bulk_removal::preview_edv_bulk_removal,
             bulk_removal::execute_edv_bulk_removal,
@@ -10607,6 +10627,7 @@ pub fn run() {
             m365::preview_m365_calendar_category_repair,
             m365::repair_m365_calendar_categories,
             m365::start_m365_interactive_connection,
+            m365::connect_m365_with_windows_account,
             m365::start_m365_connection,
             m365::poll_m365_connection,
             m365::cancel_m365_connection,

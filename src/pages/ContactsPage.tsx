@@ -1,6 +1,6 @@
 import { useDiagnosticMessage } from "../hooks/useDiagnosticMessage";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
-import { Check, Download, Ellipsis, Folder, FolderOpen, FolderPlus, Info, ListChecks, Mail, Minus, Pencil, Plus, RefreshCw, Search, ShieldCheck, SlidersHorizontal, Trash2, Upload, UserPlus, X } from "lucide-react";
+import { Check, Download, Ellipsis, Eye, EyeOff, Folder, FolderOpen, FolderPlus, Info, ListChecks, Mail, Minus, Pencil, Plus, RefreshCw, Search, ShieldCheck, SlidersHorizontal, Trash2, Upload, UserPlus, X } from "lucide-react";
 import { type CSSProperties, type FormEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ContactEditorPane } from "../components/ContactEditorPane";
 import { ContactForm } from "../components/ContactForm";
@@ -79,7 +79,7 @@ const contactPaneLayoutStorageKey = "dmh.contacts.paneLayout.v2";
 const contactListPreferencesStorageKey = "dmh.contacts.listPreferences.v1";
 const contactsFontSizes = [14, 16, 18, 20] as const;
 const allContactsFolderName = "Alle Kontakte";
-const ungroupedGroupName = "Gesammelte Adressen";
+const ungroupedGroupName = "Kontakte ohne Gruppen";
 
 function initialContactsFontSizeIndex(): number {
   const savedSize = Number(localStorage.getItem(contactsFontSizeStorageKey));
@@ -248,7 +248,8 @@ export function ContactsPage({ onNavigate, onRegisterNavigationBlocker }: Contac
   const [groups, setGroups] = useState<Group[]>([]);
   const [groupContactCounts, setGroupContactCounts] = useState<Record<number, number>>({});
   const [ungroupedContactCount, setUngroupedContactCount] = useState(0);
-  const [ungroupedGroupHidden, setUngroupedGroupHidden] = useState(false);
+  const [ungroupedGroupHidden, setUngroupedGroupHidden] = useState(true);
+  const [ungroupedVisibilityBusy, setUngroupedVisibilityBusy] = useState(true);
   const [groupSearch, setGroupSearch] = useState("");
   const [groupListSearch, setGroupListSearch] = useState("");
   const [debouncedGroupSearch, setDebouncedGroupSearch] = useState("");
@@ -496,9 +497,12 @@ export function ContactsPage({ onNavigate, onRegisterNavigationBlocker }: Contac
   }, []);
 
   useEffect(() => {
+    let active = true;
     getAppSetting(collectedAddressesHiddenSettingKey)
-      .then((value) => setUngroupedGroupHidden(value === "true"))
-      .catch(() => setUngroupedGroupHidden(false));
+      .then((value) => { if (active) setUngroupedGroupHidden(value !== "false"); })
+      .catch(() => { if (active) setUngroupedGroupHidden(true); })
+      .finally(() => { if (active) setUngroupedVisibilityBusy(false); });
+    return () => { active = false; };
   }, []);
 
   useEffect(() => {
@@ -1131,6 +1135,28 @@ export function ContactsPage({ onNavigate, onRegisterNavigationBlocker }: Contac
     requestContactAction(() => openDirectory(selection));
   };
 
+  const toggleUngroupedVisibility = () => {
+    if (ungroupedVisibilityBusy) return;
+    setTestMenuOpen(false);
+    const nextHidden = !ungroupedGroupHidden;
+    const applyVisibility = async () => {
+      setUngroupedVisibilityBusy(true);
+      try {
+        if (!nextHidden) await setAppSetting(collectedAddressesDeletedAtSettingKey, "");
+        await setAppSetting(collectedAddressesHiddenSettingKey, String(nextHidden));
+        setUngroupedGroupHidden(nextHidden);
+        if (nextHidden && groupSelection === "ungrouped") openDirectory("all");
+      } catch (error) {
+        setMessage(`Die Anzeige von „${ungroupedGroupName}“ konnte nicht gespeichert werden: ${error}`);
+        setMessageType("error");
+      } finally {
+        setUngroupedVisibilityBusy(false);
+      }
+    };
+    if (nextHidden && groupSelection === "ungrouped") requestContactAction(() => void applyVisibility());
+    else void applyVisibility();
+  };
+
   const normalizePaneLayout = (layout: ContactPaneLayout): ContactPaneLayout => {
     const groups = Math.min(32, Math.max(20, layout.groups));
     const contacts = Math.min(42, Math.max(30, layout.contacts));
@@ -1714,6 +1740,10 @@ export function ContactsPage({ onNavigate, onRegisterNavigationBlocker }: Contac
                       <span className="calendar-actions-separator" />
                       <button type="button" onClick={() => changeContactsFontSize(-1)} disabled={contactsFontSizeIndex === 0}><Minus size={18} /> Schrift kleiner</button>
                       <button type="button" onClick={() => changeContactsFontSize(1)} disabled={contactsFontSizeIndex === contactsFontSizes.length - 1}><Plus size={18} /> Schrift größer</button>
+                      <span className="calendar-actions-separator" />
+                      <button type="button" role="menuitemcheckbox" aria-checked={!ungroupedGroupHidden} onClick={toggleUngroupedVisibility} disabled={ungroupedVisibilityBusy}>
+                        {ungroupedGroupHidden ? <Eye size={18} /> : <EyeOff size={18} />} {ungroupedGroupName} {ungroupedGroupHidden ? "einblenden" : "ausblenden"}
+                      </button>
                       <span className="calendar-actions-separator" />
                       <button className="danger" type="button" onClick={removeAllContacts}><Trash2 size={18} /> Alle Kontakte löschen</button>
                     </div>

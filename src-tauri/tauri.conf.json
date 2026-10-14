@@ -17,8 +17,8 @@
     ]
   },
   "build": {
-    "beforeBuildCommand": "npm run build:outlook-helper && npm run build",
-    "beforeDevCommand": "npm run prepare:outlook-helper && npm run dev -- --port 4000",
+    "beforeBuildCommand": "npm run build:outlook-helper && npm run build:wam-helper && npm run build",
+    "beforeDevCommand": "npm run prepare:outlook-helper && npm run prepare:wam-helper && npm run dev -- --port 4000",
     "devUrl": "http://localhost:4000",
     "frontendDist": "../dist"
   },

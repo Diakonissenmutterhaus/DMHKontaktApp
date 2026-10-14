@@ -1,5 +1,6 @@
 node_modules
 dist
+public/pdfjs/
 coverage
 playwright-report
 test-results
@@ -7,6 +8,9 @@ src-tauri/target
 src-tauri/target-dev
 outlook-profile-reader/target
 src-tauri/resources/*.exe
+m365-wam-helper/bin/
+m365-wam-helper/obj/
+src-tauri/resources/m365-wam/
 *.log
 .DS_Store
 

@@ -119,6 +119,14 @@ jobs:
           node-version: lts/*
           cache: npm
 
+      - name: .NET SDK für Windows-Anmeldung installieren
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Windows-Anmeldung bauen und prüfen
+        run: npm run prepare:wam-helper
+
       - name: Rust stable installieren
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -258,6 +266,11 @@ jobs:
         with:
           node-version: lts/*
           cache: npm
+
+      - name: .NET SDK für Windows-Anmeldung installieren
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: '10.0.x'
 
       - name: Rust stable installieren
         uses: dtolnay/rust-toolchain@stable

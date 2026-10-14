@@ -383,6 +383,10 @@ export function connectMicrosoft365Interactively(): Promise<import("../types/m36
   return invoke("start_m365_interactive_connection");
 }
 
+export function connectMicrosoft365WithWindowsAccount(): Promise<import("../types/m365").Microsoft365Account> {
+  return invoke("connect_m365_with_windows_account");
+}
+
 export function startMicrosoft365Connection(): Promise<Microsoft365DeviceCode> {
   return invoke("start_m365_connection");
 }

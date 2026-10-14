@@ -25,7 +25,7 @@ const CALENDAR_COLOR_CATEGORY_MIGRATION_KEY_PREFIX: &str = "m365_calendar_color_
 const DPAPI_ENTROPY: &[u8] = b"de.dmh.agendakontakte.m365.v1";
 const GRAPH_PROFILE_URL: &str =
     "https://graph.microsoft.com/v1.0/me?$select=id,displayName,mail,userPrincipalName";
-const LOGIN_SCOPES: &str = "openid profile offline_access User.Read Contacts.ReadWrite Contacts.ReadWrite.Shared Calendars.ReadWrite Calendars.ReadWrite.Shared Calendars.Read.Shared MailboxSettings.ReadWrite Files.ReadWrite.All Sites.Read.All";
+pub(crate) const LOGIN_SCOPES: &str = "openid profile offline_access User.Read Contacts.ReadWrite Contacts.ReadWrite.Shared Calendars.ReadWrite Calendars.ReadWrite.Shared Calendars.Read.Shared MailboxSettings.ReadWrite Files.ReadWrite.All Sites.Read.All";
 const INTERACTIVE_LOGIN_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 const GRAPH_MAX_ATTEMPTS: usize = 5;
 const GRAPH_REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
@@ -395,10 +395,13 @@ struct GraphProfile {
     user_principal_name: String,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Serialize, Deserialize)]
 struct StoredTokenBundle {
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     refresh_token: String,
     scope: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    broker: Option<crate::m365_wam::BrokerAccount>,
 }
 
 fn default_poll_interval() -> u64 {
@@ -805,6 +808,10 @@ fn read_token(app: &AppHandle) -> Result<StoredTokenBundle, String> {
         "Die gespeicherte Microsoft-Anmeldung konnte nicht gelesen werden.".to_string()
     })?;
     token_json.zeroize();
+    let token: StoredTokenBundle = token;
+    if token.broker.is_none() && token.refresh_token.trim().is_empty() {
+        return Err("Die gespeicherte Microsoft-Anmeldung ist ungültig.".into());
+    }
     Ok(token)
 }
 
@@ -842,6 +849,41 @@ pub(crate) async fn refreshed_access_token(app: &AppHandle) -> Result<String, St
         "Die EDV muss zuerst die Microsoft-Anwendungs-ID für diesen Build hinterlegen.".to_string()
     })?;
     let stored = read_token(app)?;
+    if let Some(broker) = &stored.broker {
+        if broker.client_id != client_id || broker.tenant_id != tenant_id() {
+            return Err(
+                "Die Microsoft-Sitzung ist abgelaufen. Verbinden Sie das Konto erneut.".into(),
+            );
+        }
+        let response = crate::m365_wam::acquire(
+            app,
+            client_id,
+            tenant_id(),
+            Some(&broker.home_account_id),
+            None,
+            false,
+        )
+        .await;
+        let mut response = match response {
+            Ok(response)
+                if crate::m365_wam::validate_response(&response, Some(&broker.home_account_id)) =>
+            {
+                response
+            }
+            result => {
+                record_broker_result(
+                    app,
+                    result.as_ref().ok(),
+                    result.as_ref().err().map(String::as_str),
+                    "renew",
+                );
+                return Err(broker_renewal_error(result.as_ref().ok()));
+            }
+        };
+        let token = response.access_token.take().unwrap_or_default();
+        cache_connection_token(&state, &token, response.expires_in)?;
+        return Ok(token);
+    }
     let token = request_token(&[
         ("grant_type", "refresh_token"),
         ("client_id", client_id),
@@ -851,7 +893,7 @@ pub(crate) async fn refreshed_access_token(app: &AppHandle) -> Result<String, St
     .await
     .map_err(|error| oauth_error_message(&error))?;
     let refresh_token = token.refresh_token.unwrap_or(stored.refresh_token);
-    let expires_in = token.expires_in.max(300) as u64;
+    let expires_in = token.expires_in.max(0) as u64;
     let account = read_account(app)?.ok_or_else(|| {
         "Microsoft-365-Kontoprofil fehlt. Verbinden Sie das Konto erneut.".to_string()
     })?;
@@ -861,6 +903,7 @@ pub(crate) async fn refreshed_access_token(app: &AppHandle) -> Result<String, St
         &StoredTokenBundle {
             refresh_token,
             scope: token.scope,
+            broker: None,
         },
     )?;
     let access_token = token.access_token;
@@ -887,6 +930,124 @@ fn cached_access_token(state: &State<'_, AppState>) -> Result<Option<String>, St
     }
     *cache = None;
     Ok(None)
+}
+
+fn cache_connection_token(
+    state: &State<'_, AppState>,
+    token: &str,
+    expires_in: u64,
+) -> Result<(), String> {
+    *state
+        .m365
+        .access_token
+        .lock()
+        .map_err(|_| "Microsoft-Verbindung konnte nicht aktualisiert werden.".to_string())? =
+        Some(CachedAccessToken {
+            value: token.to_string(),
+            expires_at: Instant::now() + Duration::from_secs(expires_in.min(86400)),
+        });
+    Ok(())
+}
+
+fn broker_renewal_error(response: Option<&crate::m365_wam::BrokerResponse>) -> String {
+    if response
+        .is_some_and(|value| value.status == "interaction_required" || value.status == "connected")
+    {
+        "Die Microsoft-Sitzung ist abgelaufen. Bitte unter M365 Anmeldung erneut verbinden. Andere Microsoft-Apps bleiben angemeldet.".into()
+    } else {
+        "Die Windows-Anmeldung ist momentan nicht erreichbar. Internetverbindung prüfen und erneut versuchen. Falls das Problem bleibt, unter M365 Anmeldung erneut verbinden.".into()
+    }
+}
+
+fn record_broker_result(
+    app: &AppHandle,
+    response: Option<&crate::m365_wam::BrokerResponse>,
+    error: Option<&str>,
+    operation: &str,
+) {
+    let _ = crate::diagnostics::record(
+        app,
+        crate::diagnostics::DiagnosticMessage {
+            origin: "Microsoft 365 · Windows-Anmeldung".into(),
+            level: "info".into(),
+            entity_kind: "authentication".into(),
+            operation: Some(operation.into()),
+            // Only controlled status/error codes, never helper output or tokens.
+            message: format!(
+                "WAM: {}; {}",
+                response
+                    .map(|value| value.status.as_str())
+                    .unwrap_or("unavailable"),
+                response
+                    .and_then(|value| value.error_code.as_deref())
+                    .or(error)
+                    .unwrap_or("interaction_required")
+            ),
+            ..Default::default()
+        },
+    );
+}
+
+#[tauri::command]
+pub async fn connect_m365_with_windows_account(
+    app: AppHandle,
+) -> Result<Microsoft365Account, String> {
+    let client = client_id().ok_or_else(|| {
+        "Die EDV muss zuerst die Microsoft-Anwendungs-ID für diesen Build hinterlegen.".to_string()
+    })?;
+    {
+        let state = app.state::<AppState>();
+        let _connection_guard = state.m365.refresh_gate.lock().await;
+        let known = read_account(&app)?;
+        let hint = known
+            .as_ref()
+            .map(|account| account.user_principal_name.as_str())
+            .filter(|value| !value.is_empty());
+        let result = crate::m365_wam::acquire(&app, client, tenant_id(), None, hint, true).await;
+        if let Ok(mut response) = result {
+            if response.status == "cancelled" {
+                return Err("Anmeldung wurde abgebrochen.".into());
+            }
+            if crate::m365_wam::validate_response(&response, None) {
+                let mut token = response.access_token.take().unwrap_or_default();
+                let profile = graph_profile(&token).await;
+                let account = match profile {
+                    Ok(profile) => account_from_profile(profile),
+                    Err(error) => {
+                        token.zeroize();
+                        return Err(error);
+                    }
+                };
+                let saved = save_connection(
+                    &app,
+                    &account,
+                    &StoredTokenBundle {
+                        refresh_token: String::new(),
+                        scope: LOGIN_SCOPES.into(),
+                        broker: Some(crate::m365_wam::BrokerAccount {
+                            home_account_id: response.home_account_id.take().unwrap_or_default(),
+                            client_id: client.into(),
+                            tenant_id: tenant_id().into(),
+                        }),
+                    },
+                );
+                if let Err(error) = saved {
+                    token.zeroize();
+                    return Err(error);
+                }
+                let cached = cache_connection_token(&state, &token, response.expires_in);
+                token.zeroize();
+                cached?;
+                return Ok(account);
+            }
+            record_broker_result(&app, Some(&response), None, "connect");
+        } else if let Err(error) = result {
+            record_broker_result(&app, None, Some(&error), "connect");
+        }
+    }
+    // The user explicitly clicked Connect. Only here may the browser open;
+    // renewal/background synchronization never starts an interactive login.
+    start_m365_interactive_connection(app).await
 }
 
 fn graph_retry_delay(
@@ -6517,6 +6678,8 @@ pub async fn save_m365_master_category(
 pub async fn start_m365_interactive_connection(
     app: AppHandle,
 ) -> Result<Microsoft365Account, String> {
+    let runtime = app.state::<AppState>();
+    let _connection_guard = runtime.m365.refresh_gate.lock().await;
     let client_id = client_id().ok_or_else(|| {
         "Die EDV muss zuerst die Microsoft-Anwendungs-ID für diesen Build hinterlegen.".to_string()
     })?;
@@ -6580,8 +6743,14 @@ pub async fn start_m365_interactive_connection(
         &StoredTokenBundle {
             refresh_token,
             scope: token.scope,
+            broker: None,
         },
     )?;
+    *runtime
+        .m365
+        .access_token
+        .lock()
+        .map_err(|_| "Microsoft-Verbindung konnte nicht aktualisiert werden.".to_string())? = None;
     Ok(account)
 }
 
@@ -6642,6 +6811,7 @@ pub async fn poll_m365_connection(
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<Microsoft365PollResult, String> {
+    let _connection_guard = state.m365.refresh_gate.lock().await;
     let client_id = client_id().ok_or_else(|| {
         "Die Microsoft-Anwendungs-ID ist in diesem Build nicht hinterlegt.".to_string()
     })?;
@@ -6703,9 +6873,15 @@ pub async fn poll_m365_connection(
         &StoredTokenBundle {
             refresh_token,
             scope: token.scope,
+            broker: None,
         },
     )?;
     clear_pending_flow(&state)?;
+    *state
+        .m365
+        .access_token
+        .lock()
+        .map_err(|_| "Microsoft-Verbindung konnte nicht aktualisiert werden.".to_string())? = None;
     Ok(Microsoft365PollResult {
         state: "connected".to_string(),
         account: Some(account),
@@ -6735,31 +6911,15 @@ pub fn open_m365_sign_in() -> Result<(), String> {
 
 #[tauri::command]
 pub async fn test_m365_connection(app: AppHandle) -> Result<Microsoft365ConnectionStatus, String> {
-    let client_id = client_id().ok_or_else(|| {
-        "Die Microsoft-Anwendungs-ID ist in diesem Build nicht hinterlegt.".to_string()
-    })?;
-    let stored = read_token(&app)?;
-    let token = request_token(&[
-        ("grant_type", "refresh_token"),
-        ("client_id", client_id),
-        ("refresh_token", &stored.refresh_token),
-        ("scope", LOGIN_SCOPES),
-    ])
-    .await
-    .map_err(|error| oauth_error_message(&error))?;
-    let refresh_token = token.refresh_token.unwrap_or(stored.refresh_token);
-    let mut access_token = token.access_token;
+    // Both authentication modes use the same renewal path. The Graph request
+    // verifies actual connectivity even when a current access token is cached.
+    let mut access_token = refreshed_access_token(&app).await?;
     let profile_result = graph_profile(&access_token).await;
     access_token.zeroize();
     let account = account_from_profile(profile_result?);
-    save_connection(
-        &app,
-        &account,
-        &StoredTokenBundle {
-            refresh_token,
-            scope: token.scope,
-        },
-    )?;
+    if read_account(&app)?.is_none_or(|stored| stored.id != account.id) {
+        return Err("Die Microsoft-Sitzung ist abgelaufen. Verbinden Sie das Konto erneut.".into());
+    }
     Ok(Microsoft365ConnectionStatus {
         configured: true,
         connected: true,
@@ -6768,7 +6928,11 @@ pub async fn test_m365_connection(app: AppHandle) -> Result<Microsoft365Connecti
 }
 
 #[tauri::command]
-pub fn disconnect_m365_account(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
+pub async fn disconnect_m365_account(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let _connection_guard = state.m365.refresh_gate.lock().await;
     clear_pending_flow(&state)?;
     *state.m365.pending_interactive_state.lock().map_err(|_| {
         "Microsoft-Anmeldung konnte intern nicht zurückgesetzt werden.".to_string()
@@ -8269,4 +8433,29 @@ mod tests {
             "Vortrag"
         );
     }
+}
+#[test]
+fn legacy_browser_credentials_and_broker_references_remain_compatible() {
+    let legacy: StoredTokenBundle =
+        serde_json::from_str(r#"{"refresh_token":"fixture","scope":"User.Read"}"#).unwrap();
+    assert!(legacy.broker.is_none());
+    assert_eq!(legacy.refresh_token, "fixture");
+    let broker: StoredTokenBundle = serde_json::from_str(r#"{"scope":"User.Read","broker":{"home_account_id":"one","client_id":"client","tenant_id":"tenant"}}"#).unwrap();
+    assert!(broker.refresh_token.is_empty());
+    assert_eq!(broker.broker.as_ref().unwrap().home_account_id, "one");
+    let serialized = serde_json::to_string(&broker).unwrap();
+    assert!(!serialized.contains("refresh_token"));
+    assert!(!serialized.contains("access_token"));
+}
+
+#[test]
+fn temporary_broker_failure_does_not_mark_a_session_expired() {
+    assert!(!microsoft_session_requires_reconnect(
+        &broker_renewal_error(None)
+    ));
+    let response =
+        serde_json::from_value(serde_json::json!({"status":"interaction_required"})).unwrap();
+    assert!(microsoft_session_requires_reconnect(&broker_renewal_error(
+        Some(&response)
+    )));
 }

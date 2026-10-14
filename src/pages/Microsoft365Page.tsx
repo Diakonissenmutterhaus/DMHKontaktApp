@@ -22,6 +22,7 @@ import { StatusMessage } from "../components/StatusMessage";
 import {
   cancelMicrosoft365Connection,
   connectMicrosoft365Interactively,
+  connectMicrosoft365WithWindowsAccount,
   disconnectMicrosoft365Account,
   getAppSetting,
   getMicrosoft365ConnectionStatus,
@@ -60,11 +61,12 @@ function formatSyncTime(value: string | null, emptyLabel = "Noch nicht geprüft"
   return date.toLocaleString("de-DE", { dateStyle: "short", timeStyle: "short" });
 }
 
-export function Microsoft365Page() {
+export function Microsoft365Page({ title = "Microsoft 365" }: { title?: string } = {}) {
   const [status, setStatus] = useState<Microsoft365ConnectionStatus | null>(null);
   const [deviceCode, setDeviceCode] = useState<Microsoft365DeviceCode | null>(null);
   const [busyAction, setBusyAction] = useState<string | null>(null);
   const [showCodeFallback, setShowCodeFallback] = useState(false);
+  const [connectionError, setConnectionError] = useState("");
   const [message, setMessage] = useDiagnosticMessage("Microsoft365Page:message", "notification");
   const [messageType, setMessageType] = useState<"success" | "error" | "info">("info");
   const [syncConfig, setSyncConfig] = useState<SyncConfig>(defaultSyncConfig);
@@ -86,6 +88,7 @@ export function Microsoft365Page() {
     try {
       const configured = await enableCompleteAutomaticMicrosoft365Sync(force);
       setSyncConfig(configured);
+      setConnectionError("");
       window.dispatchEvent(new Event(calendarChangedEventName));
       return true;
     } catch (error) {
@@ -174,20 +177,24 @@ export function Microsoft365Page() {
     };
   }, [deviceCode]);
 
-  const connect = async () => {
+  const connect = async (chooseAccount = false) => {
     setBusyAction("connect");
     setMessage("");
+    setConnectionError("");
     try {
-      const account = await connectMicrosoft365Interactively();
+      const account = await (chooseAccount ? connectMicrosoft365Interactively() : connectMicrosoft365WithWindowsAccount());
       setStatus({ configured: true, connected: true, account });
       const synchronizationReady = await prepareCompleteSynchronization(true);
       setShowCodeFallback(false);
       if (synchronizationReady) {
         setMessageType("success");
         setMessage("Microsoft 365 wurde verbunden. Kontakte und Kalender werden jetzt automatisch synchronisiert.");
+      } else {
+        setConnectionError("Microsoft 365 ist verbunden, aber die automatische Synchronisierung konnte nicht eingerichtet werden. Bitte „Automatik einschalten“ wählen oder die EDV informieren.");
       }
     } catch (error) {
       setShowCodeFallback(true);
+      setConnectionError("Die Anmeldung wurde nicht abgeschlossen. Bitte erneut verbinden oder „Anderes Konto verwenden“ wählen. Wenn es weiterhin nicht klappt, die EDV informieren.");
       setMessageType("error");
       setMessage(`Microsoft-365-Anmeldung wurde nicht abgeschlossen: ${error}`);
     } finally {
@@ -303,12 +310,13 @@ export function Microsoft365Page() {
     <div className="page m365-page">
       <header className="page-header">
         <div>
-          <h2>Microsoft 365</h2>
+          <h2>{title}</h2>
           <p>Geschäftskonto für Kontakte, Kalender, OneDrive und SharePoint sicher verbinden.</p>
         </div>
       </header>
 
       <StatusMessage message={message} type={messageType} />
+      {connectionError && <div className="m365-sync-error" role="alert"><CircleAlert size={19} /><span>{connectionError}</span></div>}
 
       {!status.configured && (
         <section className="form-panel m365-configuration-card">
@@ -331,8 +339,8 @@ export function Microsoft365Page() {
             <div>
               <h3>Mit Microsoft 365 verbinden</h3>
               <p>
-                Melden Sie sich mit Ihrem dienstlichen Microsoft-Konto an. Microsoft zeigt vor
-                der Freigabe genau, auf welche Daten die App zugreifen darf.
+                Verwenden Sie Ihr bereits mit Windows verbundenes Geschäftskonto. Falls Microsoft
+                eine Bestätigung benötigt, öffnet sich die Microsoft-Anmeldung.
               </p>
             </div>
           </div>
@@ -343,9 +351,12 @@ export function Microsoft365Page() {
               Berechtigungen. Ihr Microsoft-Kennwort wird niemals gelesen oder gespeichert.
             </p>
           </div>
-          <button className="primary large m365-connect-button" type="button" onClick={connect} disabled={busyAction !== null}>
+          <button className="primary large m365-connect-button" type="button" onClick={() => void connect()} disabled={busyAction !== null}>
             {busyAction === "connect" ? <LoaderCircle className="spin" size={22} /> : <Cloud size={22} />}
             {busyAction === "connect" ? "Microsoft-Anmeldung läuft …" : "Mit Microsoft 365 verbinden"}
+          </button>
+          <button className="m365-code-fallback" type="button" onClick={() => void connect(true)} disabled={busyAction !== null}>
+            Anderes Konto verwenden
           </button>
           {showCodeFallback && busyAction === null && (
             <button className="m365-code-fallback" type="button" onClick={connectWithCode}>

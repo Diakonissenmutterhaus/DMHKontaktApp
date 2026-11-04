@@ -206,6 +206,14 @@ body.help-panel-open { overflow: hidden; }
 .help-download-action strong { font-size: 18px; }
 .help-download-action small { color: rgba(255, 255, 255, 0.84); font-size: 13px; font-weight: 500; }
 .help-download-action[data-ready="true"] small { color: var(--on-primary); }
+.help-download-action--secondary {
+  background: var(--surface);
+  border: 1px solid #d99caf;
+  box-shadow: none;
+  color: var(--primary);
+}
+.help-download-action--secondary:hover { background: #fff8fa; }
+.help-download-action--secondary small { color: var(--muted); }
 .help-email-action {
   background: var(--surface);
   border: 1px solid #d99caf;

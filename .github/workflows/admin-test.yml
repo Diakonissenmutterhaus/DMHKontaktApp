@@ -210,6 +210,9 @@ jobs:
 
       - name: Chromium für Ende-zu-Ende-Tests installieren
         id: install_e2e_browser
+        timeout-minutes: 5
+        env:
+          DEBUG: pw:install
         run: npx playwright install chromium
 
       - name: Kritische Bedienabläufe testen

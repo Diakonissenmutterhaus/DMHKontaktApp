@@ -271,6 +271,7 @@ jobs:
         with:
           args: --config src-tauri/tauri.admin-test.conf.json
           tagName: admin-test
+          releaseCommitish: ${{ steps.source.outputs.sha }}
           releaseName: DMH Admin Test ${{ steps.build_parameters.outputs.version }}
           releaseBody: |
             Rollende, nicht öffentliche Testversion für die Administration.

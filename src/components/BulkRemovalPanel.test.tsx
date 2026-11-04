@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { BulkRemovalPanel } from "./BulkRemovalPanel";
@@ -21,9 +21,13 @@ describe("BulkRemovalPanel", () => {
   it("selects every matching result beyond the visible page, excludes rows, and requires confirmation", async () => {
     const user = userEvent.setup(); render(<BulkRemovalPanel />);
     await user.type(screen.getByRole("searchbox", { name: "Termine suchen" }), "mittagspause");
-    await user.click(await screen.findByRole("button", { name: "Alle 105 Treffer auswählen" }));
+    const selectAll = await screen.findByRole("button", { name: "Alle 105 Treffer auswählen" });
+    await waitFor(() => expect(selectAll).toBeEnabled());
+    await user.click(selectAll);
     await user.click(screen.getByRole("button", { name: "Nächste Seite" }));
-    await waitFor(() => expect(screen.getAllByRole("checkbox", { name: /Mittagspause,/ })).toHaveLength(5));
+    const table = screen.getByRole("table", { name: "Kalendereinträge für Massenlöschung" });
+    await waitFor(() => expect(table.querySelectorAll('tbody input[type="checkbox"]')).toHaveLength(5));
+    expect(db.listEdvBulkItems).toHaveBeenLastCalledWith(expect.objectContaining({ offset: 100, search: "mittagspause" }));
     await user.click(screen.getAllByRole("checkbox", { name: /Mittagspause,/ })[0]);
     await user.click(screen.getByRole("button", { name: "104 ausgewählte löschen" }));
     expect(db.executeEdvBulkRemoval).not.toHaveBeenCalled();
@@ -52,5 +56,44 @@ describe("BulkRemovalPanel", () => {
     await user.click(screen.getByRole("button", { name: "1 ausgewählte löschen" }));
     await user.click(await screen.findByRole("button", { name: "Auswahl in den Papierkorb verschieben" }));
     await waitFor(() => expect(db.executeEdvBulkRemoval).toHaveBeenCalledWith(expect.objectContaining({ ids: ["0"], filter: expect.objectContaining({ kind: "contacts" }) }), "safe-preview"));
+  });
+
+  it("keeps the current page and select-all when an unchanged search debounce would expire", async () => {
+    vi.useFakeTimers();
+    try {
+      await act(async () => { render(<BulkRemovalPanel />); });
+      await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Alle 106 Treffer auswählen" })); });
+      await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Nächste Seite" })); });
+      await act(async () => { await vi.advanceTimersByTimeAsync(300); });
+      expect(db.listEdvBulkItems).toHaveBeenLastCalledWith(expect.objectContaining({ offset: 100, search: "" }));
+      expect(screen.getByRole("button", { name: "106 ausgewählte löschen" })).toBeEnabled();
+      const table = screen.getByRole("table", { name: "Kalendereinträge für Massenlöschung" });
+      expect(table.querySelectorAll('tbody input[type="checkbox"]')).toHaveLength(6);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("waits for the changed query before paging and preserves selection for whitespace-only edits", async () => {
+    vi.useFakeTimers();
+    try {
+      await act(async () => { render(<BulkRemovalPanel />); });
+      const nextPage = screen.getByRole("button", { name: "Nächste Seite" });
+      const search = screen.getByRole("searchbox", { name: "Termine suchen" });
+      fireEvent.change(search, { target: { value: "m" } });
+      expect(nextPage).toBeDisabled();
+      expect(screen.getByRole("checkbox", { name: "Alle auf dieser Seite auswählen" })).toBeDisabled();
+      fireEvent.click(nextPage);
+      expect(db.listEdvBulkItems).toHaveBeenCalledTimes(1);
+      await act(async () => { await vi.advanceTimersByTimeAsync(250); });
+      expect(nextPage).toBeEnabled();
+      fireEvent.click(screen.getByRole("button", { name: "Alle 105 Treffer auswählen" }));
+      fireEvent.change(search, { target: { value: "m " } });
+      await act(async () => { await vi.advanceTimersByTimeAsync(300); });
+      expect(screen.getByRole("button", { name: "105 ausgewählte löschen" })).toBeEnabled();
+      expect(db.listEdvBulkItems).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

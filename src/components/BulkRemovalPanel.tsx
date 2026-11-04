@@ -43,13 +43,17 @@ function BulkList({ kind }: { kind: BulkKind }) {
     setFilter(current => ({ ...current, ...changes, offset: 0 }));
     setResult("");
   };
+  const normalizedSearch = search.trim();
   useEffect(() => {
+    // An unchanged search must not reset pagination or the user's selection.
+    // This also avoids a delayed reset 250 ms after the first render.
+    if (normalizedSearch === filter.search) return;
     const timer = window.setTimeout(() => {
       setAllMatching(false); setExcluded(new Set());
-      setFilter(current => ({ ...current, search: search.trim(), offset: 0 }));
+      setFilter(current => ({ ...current, search: normalizedSearch, offset: 0 }));
     }, 250);
     return () => window.clearTimeout(timer);
-  }, [search]);
+  }, [normalizedSearch, filter.search]);
   const load = useCallback(async () => {
     const id = ++request.current;
     setLoading(true); setError("");
@@ -64,7 +68,7 @@ function BulkList({ kind }: { kind: BulkKind }) {
   useEffect(() => { void load(); return () => { request.current += 1; }; }, [load]);
   const selection = useMemo<BulkSelection>(() => ({ filter, allMatching, ids: [...selected], excludedIds: [...excluded] }), [filter, allMatching, selected, excluded]);
   const selectedCount = allMatching ? Math.max(0, page.total - excluded.size) : selected.size;
-  const searchPending = search.trim() !== filter.search;
+  const searchPending = normalizedSearch !== filter.search;
   const isSelected = (id: string) => allMatching ? !excluded.has(id) : selected.has(id);
   const toggle = (id: string, checked: boolean, shift: boolean) => {
     const currentIndex = page.items.findIndex(item => item.id === id);
@@ -122,7 +126,7 @@ function BulkList({ kind }: { kind: BulkKind }) {
     <div className="bulk-actions">
       <button type="button" disabled={disabled || loading || searchPending || !page.total} onClick={() => { setAllMatching(true); setExcluded(new Set()); setSelected(new Set()); }}><CheckSquare size={17} /> Alle {page.total} Treffer auswählen</button>
       <button type="button" disabled={disabled || !selectedCount} onClick={clearSelection}><X size={17} /> Auswahl aufheben</button>
-      <button type="button" disabled={disabled || loading} onClick={() => void load()} aria-label="Liste aktualisieren"><RefreshCw size={17} /></button>
+      <button type="button" disabled={disabled || loading || searchPending} onClick={() => void load()} aria-label="Liste aktualisieren"><RefreshCw size={17} /></button>
       <button className="danger-button" type="button" disabled={disabled || loading || searchPending || !selectedCount} onClick={() => void beginRemoval()}><Trash2 size={17} /> {selectedCount} ausgewählte löschen</button>
     </div>
     <p className="bulk-count" aria-live="polite">{loading ? "Liste wird geladen …" : `${page.total} Treffer · ${selectedCount} ausgewählt`}{!allMatching && selectedCount > 0 ? " · Auswahl bleibt beim Suchen und Blättern erhalten." : ""}</p>
@@ -130,18 +134,18 @@ function BulkList({ kind }: { kind: BulkKind }) {
     {result && <p role="status" className="bulk-result">{result}</p>}
     <div className="bulk-table-wrap" aria-busy={loading}>
       <table className="bulk-table" aria-label={calendar ? "Kalendereinträge für Massenlöschung" : "Kontakte für Massenlöschung"}>
-        <thead><tr><th className="bulk-check"><input aria-label="Alle auf dieser Seite auswählen" type="checkbox" checked={page.items.length > 0 && page.items.every(item => isSelected(item.id))} ref={node => { if (node) node.indeterminate = page.items.some(item => isSelected(item.id)) && !page.items.every(item => isSelected(item.id)); }} disabled={disabled || loading} onChange={e => selectPage(e.target.checked)} /></th>
+        <thead><tr><th className="bulk-check"><input aria-label="Alle auf dieser Seite auswählen" type="checkbox" checked={page.items.length > 0 && page.items.every(item => isSelected(item.id))} ref={node => { if (node) node.indeterminate = page.items.some(item => isSelected(item.id)) && !page.items.every(item => isSelected(item.id)); }} disabled={disabled || loading || searchPending} onChange={e => selectPage(e.target.checked)} /></th>
           <th aria-sort={filter.sort === "title" ? filter.descending ? "descending" : "ascending" : "none"}>{heading("title", calendar ? "Titel" : "Name")}</th>
           {calendar ? <><th aria-sort={filter.sort === "start" ? filter.descending ? "descending" : "ascending" : "none"}>{heading("start", "Beginn")}</th><th>Ende</th><th>{heading("source", "Kalender")}</th><th>{heading("category", "Kategorie")}</th></> : <><th>{heading("email", "E-Mail")}</th><th>{heading("company", "Firma")}</th><th>Gruppen</th></>}
         </tr></thead>
         <tbody>{page.items.map(item => <tr key={item.id} className={isSelected(item.id) ? "selected" : ""}>
-          <td className="bulk-check"><input type="checkbox" aria-label={`${item.title || "Ohne Titel"}${calendar ? `, ${formatDate(item.start)}` : `, ${item.email || item.id}`}`} checked={isSelected(item.id)} disabled={disabled || loading} onChange={e => toggle(item.id, e.target.checked, (e.nativeEvent as MouseEvent).shiftKey)} /></td>
+          <td className="bulk-check"><input type="checkbox" aria-label={`${item.title || "Ohne Titel"}${calendar ? `, ${formatDate(item.start)}` : `, ${item.email || item.id}`}`} checked={isSelected(item.id)} disabled={disabled || loading || searchPending} onChange={e => toggle(item.id, e.target.checked, (e.nativeEvent as MouseEvent).shiftKey)} /></td>
           <td title={item.title}>{calendar ? <CalendarDays size={15} /> : <Users size={15} />} {item.title || "Ohne Titel"}{item.series && <span className="bulk-series">Serie</span>}</td>
           {calendar ? <><td>{formatDate(item.start)}</td><td>{formatDate(item.end)}</td><td title={item.source}>{item.source || "—"}</td><td>{item.category || "—"}</td></> : <><td>{item.email || "—"}</td><td>{item.company || "—"}</td><td>{item.groups || "—"}</td></>}
         </tr>)}{!loading && !page.items.length && <tr><td colSpan={calendar ? 6 : 5}>Keine passenden Einträge gefunden.</td></tr>}</tbody>
       </table>
     </div>
-    <div className="bulk-pagination"><span>{page.total ? `${filter.offset + 1}–${Math.min(filter.offset + 100, page.total)} von ${page.total}` : "0 Einträge"}</span><button type="button" aria-label="Vorherige Seite" disabled={disabled || loading || !filter.offset} onClick={() => setFilter(current => ({ ...current, offset: Math.max(0, current.offset - 100) }))}><ChevronLeft size={17} /></button><button type="button" aria-label="Nächste Seite" disabled={disabled || loading || filter.offset + 100 >= page.total} onClick={() => setFilter(current => ({ ...current, offset: current.offset + 100 }))}><ChevronRight size={17} /></button></div>
+    <div className="bulk-pagination"><span>{page.total ? `${filter.offset + 1}–${Math.min(filter.offset + 100, page.total)} von ${page.total}` : "0 Einträge"}</span><button type="button" aria-label="Vorherige Seite" disabled={disabled || loading || searchPending || !filter.offset} onClick={() => setFilter(current => ({ ...current, offset: Math.max(0, current.offset - 100) }))}><ChevronLeft size={17} /></button><button type="button" aria-label="Nächste Seite" disabled={disabled || loading || searchPending || filter.offset + 100 >= page.total} onClick={() => setFilter(current => ({ ...current, offset: current.offset + 100 }))}><ChevronRight size={17} /></button></div>
     {calendar && <p className="bulk-note">Bei Serien gilt der Zeitraum für den Serienbeginn. Eine ausgewählte Serie wird vollständig einschließlich ihrer Ausnahmen entfernt.</p>}
     <ConfirmDialog open={preview !== null} title="Massenlöschung bestätigen" message={`${preview?.result.selected ?? 0} ausgewählte Einträge entfernen?${preview?.result.series ? ` Enthält ${preview.result.series} Serien; insgesamt ${preview.result.affected} gespeicherte Einträge einschließlich Ausnahmen.` : ""} Die Löschung wird auch an die verbundenen Exchange-Kalender bzw. Kontaktordner übertragen, soweit diese für die ausgehende Synchronisierung aktiviert sind.`} notice="Die Einträge bleiben im Papierkorb der App wiederherstellbar. Vorher wird eine lokale Sicherung erstellt." confirmLabel="Auswahl in den Papierkorb verschieben" busy={busy} onCancel={() => setPreview(null)} onConfirm={() => void remove()} />
   </>;

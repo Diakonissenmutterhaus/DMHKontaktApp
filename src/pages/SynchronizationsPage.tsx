@@ -20,6 +20,7 @@ import {
 } from "lucide-react";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { StatusMessage } from "../components/StatusMessage";
+import { OutlookExchangeProfileSetup } from "../components/OutlookExchangeProfileSetup";
 import type { SettingsSection } from "../components/SettingsSubtabs";
 import type { Page } from "../components/Sidebar";
 import { applyMicrosoft365Sync, cancelMicrosoft365Connection, connectMicrosoft365Interactively, createAutomaticSafetyBackup, disconnectMicrosoft365Account, getAppSetting, getMicrosoft365ConnectionStatus, getMicrosoft365ReadOnlyTestMode, getSyncBackupData, listMicrosoft365SyncSources, openMicrosoft365SignIn, pollMicrosoft365Connection, previewMicrosoft365Sync, setAppSetting, startMicrosoft365Connection, testMicrosoft365Connection } from "../services/db";
@@ -524,6 +525,7 @@ export function SynchronizationsPage({ onNavigate, embedded = false, onClose }: 
                     <button className="danger-button" type="button" onClick={() => void disconnectAccount()} disabled={busy}><LogOut size={17} /> Abmelden</button>
                   </div>
                 </section>}
+                {m365Status.account && <OutlookExchangeProfileSetup key={`${m365Status.account.id}:${m365Status.account.email || m365Status.account.userPrincipalName}`} email={m365Status.account.email || m365Status.account.userPrincipalName} disabled={busy || m365SafeImportTestMode} />}
                 <section className="sync-quick-settings" aria-label="Grundlegende Einstellungen">
                   <label title="Bei laufender App prüft der Kalender etwa alle 25 Sekunden auf Änderungen aus Microsoft 365. Kontakte werden in größeren Abständen geprüft; bei geschlossenem App-Fenster läuft keine Synchronisierung."><span><strong>Automatisch</strong><small>Kalender ca. alle 25 Sekunden · bei laufender App</small></span><input type="checkbox" checked={config.enabled} onChange={(event) => updateConfig("enabled", event.target.checked)} /></label>
                   <label title="Kontakte zwischen der App und Microsoft 365 berücksichtigen."><ContactRound size={19} /><span><strong>Kontakte</strong></span><input type="checkbox" checked={config.contacts} onChange={(event) => updateConfig("contacts", event.target.checked)} /></label>

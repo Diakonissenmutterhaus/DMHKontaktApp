@@ -35,6 +35,8 @@ use windows::Win32::{
 use windows_core::{implement, Error as WindowsError, IUnknown, Interface, HRESULT, PCWSTR, PWSTR};
 use zeroize::{Zeroize, Zeroizing};
 
+mod exchange_profiles;
+
 const ACCT_INIT_NO_STORES_CHECK: u32 = 0x0000_0002;
 const ACCT_INIT_NO_NOTIFICATIONS: u32 = 0x0000_0004;
 const SMTP_AUTH_SAME_AS_INCOMING: u32 = 0;
@@ -702,6 +704,18 @@ fn required_arg(args: &mut impl Iterator<Item = String>, name: &str) -> AppResul
 fn run() -> AppResult<HelperOutput> {
     let mut args = env::args().skip(1);
     match required_arg(&mut args, "Befehl")?.as_str() {
+        "exchange-list" => exchange_profiles::list().map(HelperOutput::Json),
+        "exchange-create" => {
+            let profile = required_arg(&mut args, "Profil")?;
+            let email = required_arg(&mut args, "E-Mail-Adresse")?;
+            exchange_profiles::create(&profile, &email).map(HelperOutput::Json)
+        }
+        "exchange-activate" => {
+            let profile = required_arg(&mut args, "Exchange-Profil")?;
+            let old = required_arg(&mut args, "Altes Profil")?;
+            let imap = required_arg(&mut args, "IMAP-Profil")?;
+            exchange_profiles::activate(&profile, &old, &imap).map(HelperOutput::Json)
+        }
         "scan" => {
             let profile = required_arg(&mut args, "Profil")?;
             serde_json::to_value(scan(&profile)?)

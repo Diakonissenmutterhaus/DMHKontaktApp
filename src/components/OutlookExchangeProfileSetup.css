@@ -1,0 +1,51 @@
+.outlook-exchange-setup {
+  display: grid;
+  gap: 12px;
+  margin: 16px 0;
+  padding: 18px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--surface);
+}
+
+.outlook-exchange-setup-heading {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.outlook-exchange-setup-heading > svg {
+  flex: none;
+  margin-top: 3px;
+}
+
+.outlook-exchange-setup h3,
+.outlook-exchange-setup p {
+  margin: 0;
+}
+
+.outlook-exchange-setup p {
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.outlook-exchange-setup-status {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  line-height: 1.5;
+  white-space: pre-line;
+}
+
+.outlook-exchange-setup-status > svg {
+  flex: none;
+  margin-top: 3px;
+}
+
+.outlook-exchange-setup-status.complete {
+  color: var(--success-text);
+}
+
+.outlook-exchange-setup-error {
+  color: var(--danger-text);
+}

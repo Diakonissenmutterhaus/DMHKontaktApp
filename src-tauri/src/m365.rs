@@ -6927,6 +6927,32 @@ pub async fn test_m365_connection(app: AppHandle) -> Result<Microsoft365Connecti
     })
 }
 
+/// Trusted local identity for Outlook setup; never accepts an address from the
+/// WebView. The explicit prepare/complete commands also verify Graph access.
+pub(crate) fn outlook_profile_identity(app: &AppHandle) -> Result<(String, String), String> {
+    let account = read_account(app)?.ok_or("Bitte zuerst Microsoft 365 verbinden.")?;
+    if client_id().is_none() || get_setting(app, TOKEN_SETTING_KEY)?.is_none() {
+        return Err("Bitte zuerst Microsoft 365 verbinden.".into());
+    }
+    let email = if account.email.trim().is_empty() {
+        &account.user_principal_name
+    } else {
+        &account.email
+    };
+    let email = email.trim();
+    if email.len() > 254
+        || !email.contains('@')
+        || email
+            .chars()
+            .any(|character| character.is_control() || character.is_whitespace())
+    {
+        return Err(
+            "Die verbundene Microsoft-365-Adresse ist ungültig. Bitte erneut anmelden.".into(),
+        );
+    }
+    Ok((account.id.clone(), email.to_string()))
+}
+
 #[tauri::command]
 pub async fn disconnect_m365_account(
     app: AppHandle,

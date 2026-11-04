@@ -33,6 +33,7 @@ mod m365_wam;
 mod mail_accounts;
 mod outlook_autocomplete;
 mod outlook_calendar_export;
+mod outlook_exchange;
 mod phone_transfer;
 mod printers;
 mod recovery_history;
@@ -6745,6 +6746,11 @@ fn query_audit_log(conn: &Connection, filter: AuditLogFilter) -> Result<AuditLog
 
 #[tauri::command]
 fn set_app_setting(app: AppHandle, key: String, value: String) -> Result<(), String> {
+    if outlook_exchange::is_setup_state_key(&key) {
+        return Err(
+            "Die Outlook-Einrichtung kann nur über die Profileinrichtung geändert werden.".into(),
+        );
+    }
     let conn = open_db(&app)?;
     conn.execute(
         "INSERT INTO app_settings (key, value, updated_at) VALUES (?, ?, ?)
@@ -10633,6 +10639,9 @@ pub fn run() {
             m365::cancel_m365_connection,
             m365::open_m365_sign_in,
             m365::test_m365_connection,
+            outlook_exchange::get_outlook_exchange_setup_status,
+            outlook_exchange::prepare_outlook_exchange_profile,
+            outlook_exchange::complete_outlook_exchange_profile,
             m365::disconnect_m365_account,
             m365::list_m365_sync_sources,
             m365::list_m365_calendar_sources,

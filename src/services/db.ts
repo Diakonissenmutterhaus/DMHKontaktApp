@@ -387,6 +387,18 @@ export function connectMicrosoft365WithWindowsAccount(): Promise<import("../type
   return invoke("connect_m365_with_windows_account");
 }
 
+export function getOutlookExchangeSetupStatus(): Promise<import("../types/outlookExchange").OutlookExchangeSetupStatus> {
+  return invoke("get_outlook_exchange_setup_status");
+}
+
+export function prepareOutlookExchangeProfile(): Promise<import("../types/outlookExchange").OutlookExchangeSetupStatus> {
+  return invoke("prepare_outlook_exchange_profile");
+}
+
+export function completeOutlookExchangeProfile(): Promise<import("../types/outlookExchange").OutlookExchangeSetupStatus> {
+  return invoke("complete_outlook_exchange_profile");
+}
+
 export function startMicrosoft365Connection(): Promise<Microsoft365DeviceCode> {
   return invoke("start_m365_connection");
 }

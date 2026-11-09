@@ -52,8 +52,9 @@ function mockContact(id: number, firstName: string, lastName: string): MockConta
   };
 }
 
-async function installTauriMock(page: Page, contacts: MockContact[], options: { loadDelayMs?: number; calendarEvents?: CalendarEvent[]; auditEntries?: AuditLogEntry[] } = {}) {
-  await page.addInitScript(({ seedContacts, seedCalendarEvents, loadDelayMs, auditEntries }) => {
+async function installTauriMock(page: Page, contacts: MockContact[], options: { loadDelayMs?: number; calendarEvents?: CalendarEvent[]; auditEntries?: AuditLogEntry[]; emailSave?: boolean } = {}) {
+  await page.addInitScript(({ seedContacts, seedCalendarEvents, loadDelayMs, auditEntries, emailSave }) => {
+    if (emailSave) localStorage.setItem("dmh-backup-feature-overrides-v1", JSON.stringify({ version: 1, overrides: { emailSave: true } }));
     let callbackId = 0;
     let edvUnlocked = false;
     const diagnostics: unknown[] = [];
@@ -152,7 +153,7 @@ async function installTauriMock(page: Page, contacts: MockContact[], options: { 
         }
       }
     });
-  }, { seedContacts: contacts, seedCalendarEvents: options.calendarEvents ?? [], loadDelayMs: options.loadDelayMs ?? 0, auditEntries: options.auditEntries ?? [] });
+  }, { emailSave: Boolean(options.emailSave), seedContacts: contacts, seedCalendarEvents: options.calendarEvents ?? [], loadDelayMs: options.loadDelayMs ?? 0, auditEntries: options.auditEntries ?? [] });
 }
 
 test("Massenlöschung seleciona todos os resultados entre páginas e confirma o alcance Exchange", async ({ page }, testInfo) => {
@@ -624,7 +625,8 @@ test("M365 Anmeldung usa conta Windows, permite escolher outra e mantém o login
     };
   });
   await page.goto("/");
-  await page.getByRole("navigation", { name: "Hauptmenü" }).getByRole("button", { name: "M365 Anmeldung", exact: true }).click();
+  await expect(page.getByRole("navigation", { name: "Hauptmenü" }).getByRole("button", { name: "emails speichern", exact: true })).toHaveCount(0);
+  await page.getByRole("navigation", { name: "Hauptmenü" }).getByRole("button", { name: "Microsoft 365", exact: true }).click();
   const connect = page.getByRole("button", { name: "Mit Microsoft 365 verbinden", exact: true });
   await expect(connect).toBeVisible();
   expect(await page.evaluate(() => (window as any).__DMH_LOGIN_CALLS__)).toEqual([]);
@@ -642,7 +644,7 @@ test("M365 Anmeldung usa conta Windows, permite escolher outra e mantém o login
 });
 
 test("importação distingue caixas IMAP e Exchange com o mesmo endereço e copia somente a selecionada", async ({ page }, testInfo) => {
-  await installTauriMock(page, []);
+  await installTauriMock(page, [], { emailSave: true });
   await page.addInitScript(() => {
     const w = window as any, invoke = w.__TAURI_INTERNALS__.invoke;
     const address = "same@example.test";
@@ -703,7 +705,7 @@ test("importação distingue caixas IMAP e Exchange com o mesmo endereço e copi
 });
 
 test("abas gerais M365 Anmeldung e emails speichern abrem conexão e arquivo local somente leitura", async ({ page }, testInfo) => {
-  await installTauriMock(page, []);
+  await installTauriMock(page, [], { emailSave: true });
   await page.addInitScript(() => {
     const w = window as any;
     const invoke = w.__TAURI_INTERNALS__.invoke;
@@ -762,7 +764,7 @@ test("abas gerais M365 Anmeldung e emails speichern abrem conexão e arquivo loc
   page.on("request", request => { if (request.url().includes("tracker.example")) trackingRequests.push(request.url()); });
   await page.goto("/");
   const nav = page.getByRole("navigation", { name: "Hauptmenü" });
-  await nav.getByRole("button", { name: "M365 Anmeldung", exact: true }).click();
+  await nav.getByRole("button", { name: "Microsoft 365", exact: true }).click();
   await expect(page.getByRole("heading", { name: "M365 Anmeldung", exact: true })).toBeVisible();
   await expect(page.getByRole("dialog", { name: /EDV/ })).toHaveCount(0);
   await expect(page.getByRole("navigation", { name: "Unterseiten der EDV Tools" })).toHaveCount(0);
@@ -781,7 +783,7 @@ test("abas gerais M365 Anmeldung e emails speichern abrem conexão e arquivo loc
   await page.getByRole("tab", { name: /E-Mails lesen/ }).click();
   await expect(page.getByRole("region", { name: "Lokale E-Mail-Quellen" })).toBeHidden();
   await page.getByRole("tab", { name: "Importieren", exact: true }).click();
-  await nav.getByRole("button", { name: "M365 Anmeldung", exact: true }).click();
+  await nav.getByRole("button", { name: "Microsoft 365", exact: true }).click();
   await nav.getByRole("button", { name: "emails speichern", exact: true }).click();
   await expect(page.getByRole("button", { name: "E-Mails werden kopiert …", exact: true })).toBeDisabled();
   await expect(page.getByText(/105 Nachrichten kopiert/)).toBeVisible();
@@ -849,7 +851,7 @@ test("abas gerais M365 Anmeldung e emails speichern abrem conexão e arquivo loc
   await page.setViewportSize({ width: 800, height: 900 });
   expect(await page.locator(".email-save-page").evaluate(element => element.scrollWidth <= element.clientWidth + 1)).toBe(true);
   await page.screenshot({ path: testInfo.outputPath("emails-speichern-klein.png") });
-  await nav.getByRole("button", { name: "M365 Anmeldung", exact: true }).click();
+  await nav.getByRole("button", { name: "Microsoft 365", exact: true }).click();
   await nav.getByRole("button", { name: "emails speichern", exact: true }).click();
   await expect(page.getByRole("listbox", { name: "Archivierte Nachrichten" }).getByRole("option")).toHaveCount(100);
   const copies = await page.evaluate(() => (window as any).__DMH_EMAIL_ARCHIVE_CALLS__.filter((call: any) => call.command === "copy_local_emails"));
@@ -860,7 +862,7 @@ test("abas gerais M365 Anmeldung e emails speichern abrem conexão e arquivo loc
 });
 
 test("arquivo de emails combina busca, período, anexos e ordenação antes da paginação", async ({ page }, testInfo) => {
-  await installTauriMock(page, []);
+  await installTauriMock(page, [], { emailSave: true });
   await page.clock.setFixedTime(new Date("2026-10-14T12:00:00Z"));
   await page.addInitScript(() => {
     const w = window as any;
@@ -997,7 +999,7 @@ test("arquivo de emails combina busca, período, anexos e ordenação antes da p
 });
 
 test("caixas postais têm menu contextual reversível e barra lateral compacta com hover", async ({ page }, testInfo) => {
-  await installTauriMock(page, []);
+  await installTauriMock(page, [], { emailSave: true });
   await page.addInitScript(() => {
     const w = window as any; localStorage.setItem("dmh-email-archive-tab","read");
     const original = w.__TAURI_INTERNALS__.invoke;
@@ -1124,7 +1126,7 @@ test("caixas postais têm menu contextual reversível e barra lateral compacta c
 });
 
 test("menu dos emails move categoriza apaga restaura e abre leitor independente", async ({ page },testInfo) => {
-  await installTauriMock(page,[]);
+  await installTauriMock(page, [], { emailSave: true });
   await page.addInitScript(() => {
     const w=window as any, original=w.__TAURI_INTERNALS__.invoke;
     localStorage.setItem("dmh-email-archive-tab","read");

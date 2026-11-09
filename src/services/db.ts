@@ -391,6 +391,34 @@ export function getOutlookExchangeSetupStatus(): Promise<import("../types/outloo
   return invoke("get_outlook_exchange_setup_status");
 }
 
+export function getOutlookAccountConfiguration(): Promise<import("../types/outlookExchange").OutlookAccountConfiguration> {
+  return invoke("get_outlook_account_configuration");
+}
+
+export function getOutlookProfileCatalog(): Promise<import("../types/outlookExchange").OutlookProfileCatalog> {
+  return invoke("get_outlook_profile_catalog");
+}
+
+export function setOutlookDefaultProfile(profile: string): Promise<{ defaultProfile: string }> {
+  return invoke("set_outlook_default_profile", { profile });
+}
+
+export function openOutlookDefaultProfile(): Promise<{ message: string }> {
+  return invoke("open_outlook_default_profile");
+}
+
+export function openOutlookProfile(profile: string): Promise<{ message: string }> {
+  return invoke("open_outlook_profile", { profile });
+}
+
+export function createOutlookProfile(profile: string): Promise<{ profile: string }> {
+  return invoke("create_outlook_profile", { profile });
+}
+
+export function removeOutlookProfile(profile: string, replacement: string | null): Promise<{ defaultProfile: string }> {
+  return invoke("remove_outlook_profile", { profile, replacement, confirmation: profile });
+}
+
 export function prepareOutlookExchangeProfile(): Promise<import("../types/outlookExchange").OutlookExchangeSetupStatus> {
   return invoke("prepare_outlook_exchange_profile");
 }

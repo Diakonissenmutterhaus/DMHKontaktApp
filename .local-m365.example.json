@@ -1,0 +1,4 @@
+{
+  "M365_CLIENT_ID": "<Anwendungs-ID aus GitHub Actions Variables>",
+  "M365_TENANT_ID": "<Mandanten-ID aus GitHub Actions Variables>"
+}

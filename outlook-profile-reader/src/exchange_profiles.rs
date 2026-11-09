@@ -13,7 +13,171 @@ use windows::Win32::Globalization::{
     GetACP, MultiByteToWideChar, WideCharToMultiByte, CP_ACP, MB_ERR_INVALID_CHARS,
     WC_NO_BEST_FIT_CHARS,
 };
-use windows_core::{BOOL, PCSTR, PWSTR};
+use windows::Win32::System::Registry::{
+    RegCloseKey, RegEnumKeyExW, RegGetValueW, RegOpenKeyExW, RegSetKeyValueW, HKEY,
+    HKEY_CURRENT_USER, KEY_READ, REG_SZ, RRF_RT_REG_SZ,
+};
+use windows_core::{BOOL, PCSTR, PCWSTR, PWSTR};
+
+fn persist_registered_default(profile: &str) -> AppResult<()> {
+    // Click-to-Run can expose a stale MAPI profile table. Persist only Outlook's
+    // documented startup selection, never profile contents or credentials.
+    for version in ["16.0", "15.0"] {
+        let root = format!("Software\\Microsoft\\Office\\{version}\\Outlook");
+        let selected: Vec<u16> = format!("{root}\\Profiles\\{profile}")
+            .encode_utf16()
+            .chain(Some(0))
+            .collect();
+        let mut key = HKEY::default();
+        let result = unsafe {
+            RegOpenKeyExW(
+                HKEY_CURRENT_USER,
+                PCWSTR(selected.as_ptr()),
+                None,
+                KEY_READ,
+                &mut key,
+            )
+        };
+        if matches!(result.0, 2 | 3) {
+            continue;
+        }
+        if result.0 != 0 {
+            return Err("Das Exchange-Profil ist nicht lesbar.".into());
+        }
+        drop(RegistryKey(key));
+        let root: Vec<u16> = root.encode_utf16().chain(Some(0)).collect();
+        let value: Vec<u16> = profile.encode_utf16().chain(Some(0)).collect();
+        let result = unsafe {
+            RegSetKeyValueW(
+                HKEY_CURRENT_USER,
+                PCWSTR(root.as_ptr()),
+                windows_core::w!("DefaultProfile"),
+                REG_SZ.0,
+                Some(value.as_ptr().cast()),
+                (value.len() * 2) as u32,
+            )
+        };
+        if result.0 != 0 {
+            return Err(
+                "Die Outlook-Standardprofilauswahl konnte nicht gespeichert werden.".into(),
+            );
+        }
+        return Ok(());
+    }
+    Err("Das Standardprofil ist nicht als verwendbares Outlook-Profil registriert.".into())
+}
+
+struct RegistryKey(HKEY);
+impl Drop for RegistryKey {
+    fn drop(&mut self) {
+        unsafe {
+            let _ = RegCloseKey(self.0);
+        }
+    }
+}
+
+fn registered_profiles() -> AppResult<Option<(Vec<String>, Option<String>)>> {
+    for version in ["16.0", "15.0"] {
+        let root = format!("Software\\Microsoft\\Office\\{version}\\Outlook");
+        let path: Vec<u16> = format!("{root}\\Profiles")
+            .encode_utf16()
+            .chain(Some(0))
+            .collect();
+        let mut key = HKEY::default();
+        let opened = unsafe {
+            RegOpenKeyExW(
+                HKEY_CURRENT_USER,
+                PCWSTR(path.as_ptr()),
+                None,
+                KEY_READ,
+                &mut key,
+            )
+        };
+        if matches!(opened.0, 2 | 3) {
+            continue;
+        }
+        if opened.0 != 0 {
+            return Err("Die registrierten Outlook-Profilnamen sind nicht lesbar.".into());
+        }
+        let key = RegistryKey(key);
+        let mut names = Vec::new();
+        for index in 0..1025 {
+            let mut name = [0u16; 256];
+            let mut len = name.len() as u32;
+            let result = unsafe {
+                RegEnumKeyExW(
+                    key.0,
+                    index,
+                    Some(PWSTR(name.as_mut_ptr())),
+                    &mut len,
+                    None,
+                    None,
+                    None,
+                    None,
+                )
+            };
+            if result.0 == 259 {
+                break;
+            }
+            if result.0 != 0 || index == 1024 {
+                return Err("Die registrierte Outlook-Profilliste ist ungueltig.".into());
+            }
+            let name = String::from_utf16(&name[..len as usize])
+                .map_err(|_| "Outlook-Profilname ist ungueltig.")?;
+            let deleted: Vec<u16> = format!("{root}\\Deleted Profiles\\{name}")
+                .encode_utf16()
+                .chain(Some(0))
+                .collect();
+            let mut deleted_key = HKEY::default();
+            let found = unsafe {
+                RegOpenKeyExW(
+                    HKEY_CURRENT_USER,
+                    PCWSTR(deleted.as_ptr()),
+                    None,
+                    KEY_READ,
+                    &mut deleted_key,
+                )
+            };
+            if found.0 == 0 {
+                drop(RegistryKey(deleted_key));
+                continue;
+            }
+            if !matches!(found.0, 2 | 3) {
+                return Err("Der Outlook-Profilstatus ist nicht lesbar.".into());
+            }
+            names.push(name);
+        }
+        let root: Vec<u16> = root.encode_utf16().chain(Some(0)).collect();
+        let mut value = [0u16; 256];
+        let mut size = std::mem::size_of_val(&value) as u32;
+        let result = unsafe {
+            RegGetValueW(
+                HKEY_CURRENT_USER,
+                PCWSTR(root.as_ptr()),
+                windows_core::w!("DefaultProfile"),
+                RRF_RT_REG_SZ,
+                None,
+                Some(value.as_mut_ptr().cast()),
+                Some(&mut size),
+            )
+        };
+        let default = if result.0 == 0 {
+            let len = value.iter().position(|c| *c == 0).unwrap_or(value.len());
+            Some(
+                String::from_utf16(&value[..len])
+                    .map_err(|_| "Outlook-Standardprofil ist ungueltig.")?,
+            )
+        } else if matches!(result.0, 2 | 3) {
+            None
+        } else {
+            return Err("Das registrierte Outlook-Standardprofil ist nicht lesbar.".into());
+        };
+        let default =
+            default.filter(|name| names.iter().any(|entry| entry.eq_ignore_ascii_case(name)));
+        return Ok(Some((names, default)));
+    }
+    Ok(None)
+}
 
 const PR_PROFILE_USER_SMTP_EMAIL_ADDRESS_W: u32 = 0x6641_001f;
 const PR_EMSMDB_SECTION_UID: u32 = 0x3d15_0102;
@@ -31,6 +195,25 @@ struct ProfileAdmin {
     admin: sys::IProfAdmin,
     _initialized: Arc<Initialize>,
     _com: ComApartment,
+    // Drop after MAPIUninitialize: affected C2R providers flush stale default
+    // selections on shutdown. Preserve the observed/explicitly selected value.
+    startup_default: StartupDefaultGuard,
+}
+
+struct StartupDefaultGuard(Option<String>);
+impl Drop for StartupDefaultGuard {
+    fn drop(&mut self) {
+        if let Some(profile) = self.0.as_deref() {
+            let unchanged = registered_profiles()
+                .ok()
+                .flatten()
+                .and_then(|(_, default)| default)
+                .is_some_and(|current| current.eq_ignore_ascii_case(profile));
+            if !unchanged {
+                let _ = persist_registered_default(profile);
+            }
+        }
+    }
 }
 
 fn mapi_error(operation: &str, error: windows_core::Error) -> String {
@@ -140,6 +323,8 @@ fn decode_ansi_name(bytes: &[u8]) -> AppResult<String> {
 
 impl ProfileAdmin {
     fn open() -> AppResult<Self> {
+        let startup_default =
+            StartupDefaultGuard(registered_profiles()?.and_then(|(_, default)| default));
         let com = ComApartment::initialize()?;
         let initialized = Initialize::new(Default::default())
             .map_err(|error| mapi_error("Outlook MAPI ist nicht verfügbar", error))?;
@@ -149,10 +334,17 @@ impl ProfileAdmin {
             admin,
             _initialized: initialized,
             _com: com,
+            startup_default,
         })
     }
 
     fn profiles(&self) -> AppResult<Vec<Profile>> {
+        // Registry leftovers, including Deleted Profiles, are not launchable
+        // profiles. Never manufacture a successful MAPI/default result from them.
+        self.native_profiles()
+    }
+
+    fn native_profiles(&self) -> AppResult<Vec<Profile>> {
         let table = unsafe { self.admin.GetProfileTable(0) }
             .map_err(|error| mapi_error("Outlook-Profile konnten nicht gelesen werden", error))?;
         SizedSPropTagArray! { Columns[2] }
@@ -384,7 +576,168 @@ pub fn list() -> AppResult<serde_json::Value> {
     Ok(serde_json::json!({ "profiles": admin.profiles()? }))
 }
 
-pub fn create(profile: &str, email: &str) -> AppResult<serde_json::Value> {
+pub fn native_list() -> AppResult<serde_json::Value> {
+    let admin = ProfileAdmin::open()?;
+    Ok(serde_json::json!({ "profiles": admin.native_profiles()? }))
+}
+
+pub fn create_empty(profile: &str) -> AppResult<serde_json::Value> {
+    validate_profile_name(profile)?;
+    let admin = ProfileAdmin::open()?;
+    if exists(&admin.profiles()?, profile) {
+        return Err("Dieser Outlook-Profilname ist bereits vergeben.".into());
+    }
+    let mut name = ansi_name(profile)?;
+    unsafe {
+        admin
+            .admin
+            .CreateProfile(name.as_mut_ptr().cast(), ptr::null_mut(), 0, 0)
+    }
+    .map_err(|error| mapi_error("Outlook-Profil konnte nicht erstellt werden", error))?;
+    Ok(serde_json::json!({"ok": true}))
+}
+
+fn outlook_running() -> AppResult<bool> {
+    use windows::Win32::{
+        Foundation::CloseHandle,
+        System::Diagnostics::ToolHelp::{
+            CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W,
+            TH32CS_SNAPPROCESS,
+        },
+    };
+    let handle = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) }
+        .map_err(|_| "Outlook-Prozesse konnten nicht geprueft werden.")?;
+    let mut entry = PROCESSENTRY32W {
+        dwSize: std::mem::size_of::<PROCESSENTRY32W>() as u32,
+        ..Default::default()
+    };
+    let mut found = false;
+    let mut result = unsafe { Process32FirstW(handle, &mut entry) };
+    while result.is_ok() {
+        let len = entry
+            .szExeFile
+            .iter()
+            .position(|c| *c == 0)
+            .unwrap_or(entry.szExeFile.len());
+        if String::from_utf16_lossy(&entry.szExeFile[..len]).eq_ignore_ascii_case("OUTLOOK.EXE") {
+            found = true;
+            break;
+        }
+        result = unsafe { Process32NextW(handle, &mut entry) };
+    }
+    unsafe {
+        let _ = CloseHandle(handle);
+    }
+    if !found && result.is_err_and(|error| error.code().0 as u32 != 0x80070012) {
+        return Err("Outlook-Prozesse konnten nicht vollstaendig geprueft werden.".into());
+    }
+    Ok(found)
+}
+
+fn validate_removal(
+    profiles: &[Profile],
+    profile: &str,
+    replacement: &str,
+    running: bool,
+) -> AppResult<bool> {
+    validate_profile_name(profile)?;
+    if running {
+        return Err(
+            "Bitte Outlook vor dem Entfernen eines Profils vollstaendig schliessen.".into(),
+        );
+    }
+    let target = profiles
+        .iter()
+        .find(|entry| entry.name.eq_ignore_ascii_case(profile))
+        .ok_or("Das Outlook-Profil ist nicht mehr vorhanden.")?;
+    if target.is_default {
+        if profiles.len() > 1 && replacement.is_empty() {
+            return Err("Bitte zuerst ein neues Standardprofil auswaehlen.".into());
+        }
+        if !replacement.is_empty() {
+            validate_profile_name(replacement)?;
+            if replacement.eq_ignore_ascii_case(profile) || !exists(profiles, replacement) {
+                return Err("Das neue Standardprofil ist ungueltig.".into());
+            }
+        }
+    } else if !replacement.is_empty() {
+        return Err("Ein Ersatzprofil ist nur beim Entfernen des Standards erforderlich.".into());
+    }
+    Ok(target.is_default)
+}
+
+fn clear_registered_default() -> AppResult<()> {
+    for version in ["16.0", "15.0"] {
+        let path: Vec<u16> = format!("Software\\Microsoft\\Office\\{version}\\Outlook")
+            .encode_utf16()
+            .chain(Some(0))
+            .collect();
+        let result = unsafe {
+            windows::Win32::System::Registry::RegDeleteKeyValueW(
+                HKEY_CURRENT_USER,
+                PCWSTR(path.as_ptr()),
+                windows_core::w!("DefaultProfile"),
+            )
+        };
+        if !matches!(result.0, 0 | 2 | 3) {
+            return Err("Die bisherige Standardprofilauswahl konnte nicht entfernt werden.".into());
+        }
+        if result.0 == 0 {
+            break;
+        }
+    }
+    Ok(())
+}
+
+pub fn remove(profile: &str, replacement: &str) -> AppResult<serde_json::Value> {
+    let mut admin = ProfileAdmin::open()?;
+    let profiles = admin.profiles()?;
+    let was_default = validate_removal(&profiles, profile, replacement, outlook_running()?)?;
+    let previous_default = admin.startup_default.0.clone();
+    if was_default {
+        let mut name = if replacement.is_empty() {
+            None
+        } else {
+            Some(ansi_name(replacement)?)
+        };
+        let pointer = name
+            .as_mut()
+            .map_or(ptr::null_mut(), |name| name.as_mut_ptr().cast());
+        unsafe { admin.admin.SetDefaultProfile(pointer, 0) }
+            .map_err(|error| mapi_error("Standardprofil konnte nicht umgestellt werden", error))?;
+        admin.startup_default.0 = (!replacement.is_empty()).then(|| replacement.to_string());
+    }
+    if !matches!(outlook_running(), Ok(false)) {
+        admin.startup_default.0 = previous_default;
+        return Err(
+            "Outlook wurde inzwischen geoeffnet. Bitte schliessen und erneut versuchen.".into(),
+        );
+    }
+    let mut name = ansi_name(profile)?;
+    if let Err(error) = unsafe { admin.admin.DeleteProfile(name.as_mut_ptr().cast(), 0) } {
+        admin.startup_default.0 = previous_default;
+        return Err(mapi_error(
+            "Outlook-Profil konnte nicht entfernt werden",
+            error,
+        ));
+    }
+    drop(admin);
+    if was_default {
+        if replacement.is_empty() {
+            clear_registered_default()?;
+        } else {
+            persist_registered_default(replacement)?;
+        }
+    }
+    if registered_profiles()?
+        .is_some_and(|(names, _)| names.iter().any(|name| name.eq_ignore_ascii_case(profile)))
+    {
+        return Err("Outlook hat die Entfernung noch nicht bestaetigt. Bitte alle Outlook-Fenster schliessen und aktualisieren.".into());
+    }
+    Ok(serde_json::json!({"ok": true}))
+}
+
+pub fn create(profile: &str, email: &str, windows_sso: bool) -> AppResult<serde_json::Value> {
     validate_profile_name(profile)?;
     validate_email(email)?;
     let mut name = ansi_name(profile)?;
@@ -397,7 +750,20 @@ pub fn create(profile: &str, email: &str) -> AppResult<serde_json::Value> {
             .admin
             .CreateProfile(name.as_mut_ptr().cast(), ptr::null_mut(), 0, 0)
     }
-    .map_err(|error| mapi_error("Neues Outlook-Profil konnte nicht erstellt werden", error))?;
+    .map_err(|error| {
+        // CreateProfile specifically documents MAPI_E_NO_ACCESS for an occupied
+        // name, including incomplete profiles missing from GetProfileTable.
+        if error.code().0 as u32 == 0x80070005 {
+            "Der Outlook-Profilname ist bereits belegt (0x80070005). Bestehende Profile bleiben erhalten. Bitte erneut versuchen.".to_string()
+        } else {
+            mapi_error("Neues Outlook-Profil konnte nicht erstellt werden", error)
+        }
+    })?;
+    // ZeroConfigExchange must let Outlook configure the new profile itself.
+    // A pre-seeded MSEMS service bypasses that profile-creation path.
+    if windows_sso {
+        return Ok(serde_json::json!({ "ok": true }));
+    }
     // Only this invocation's successful CreateProfile grants ownership. Never
     // delete an existing profile or roll back profiles based solely on a name.
     if let Err(error) = configure_new_exchange(&admin, profile, email) {
@@ -444,14 +810,22 @@ fn validate_activation(
 }
 
 pub fn activate(exchange: &str, old: &str, imap: &str) -> AppResult<serde_json::Value> {
-    let admin = ProfileAdmin::open()?;
-    let profiles = admin.profiles()?;
+    if outlook_running()? {
+        return Err(
+            "Bitte Outlook vor dem Abschluss der Profileinrichtung vollstaendig schliessen.".into(),
+        );
+    }
+    let mut admin = ProfileAdmin::open()?;
+    let profiles = admin.native_profiles()?;
     validate_activation(&profiles, exchange, old, imap)?;
-    let mut exchange_wide: Vec<u16> = exchange.encode_utf16().chain(Some(0)).collect();
+    // Some Outlook MAPI builds reject MAPI_UNICODE here with
+    // MAPI_E_BAD_CHARWIDTH (0x80040103). Use the same checked ANSI encoding as
+    // CreateProfile/RenameProfile, with no character replacement.
+    let mut exchange_name = ansi_name(exchange)?;
     unsafe {
         admin
             .admin
-            .SetDefaultProfile(exchange_wide.as_mut_ptr().cast(), sys::MAPI_UNICODE)
+            .SetDefaultProfile(exchange_name.as_mut_ptr().cast(), 0)
     }
     .map_err(|error| {
         mapi_error(
@@ -459,6 +833,7 @@ pub fn activate(exchange: &str, old: &str, imap: &str) -> AppResult<serde_json::
             error,
         )
     })?;
+    admin.startup_default.0 = Some(exchange.to_string());
     if !admin
         .profiles()?
         .iter()
@@ -497,6 +872,13 @@ pub fn activate(exchange: &str, old: &str, imap: &str) -> AppResult<serde_json::
             Err(error) => warning = Some(error),
         }
     }
+    drop(admin);
+    persist_registered_default(exchange)?;
+    if !registered_profiles()?
+        .is_some_and(|(_, default)| default.is_some_and(|name| name.eq_ignore_ascii_case(exchange)))
+    {
+        return Err("Outlook hat das Standardprofil nicht dauerhaft gespeichert.".into());
+    }
     Ok(
         serde_json::json!({ "ok": true, "renamed": renamed, "previousProfile": previous_profile, "warning": warning }),
     )
@@ -505,6 +887,53 @@ pub fn activate(exchange: &str, old: &str, imap: &str) -> AppResult<serde_json::
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn removing_default_requires_an_existing_different_replacement() {
+        let mut entries = profiles(&["Outlook", "Exchange"]);
+        entries[0].is_default = true;
+        for replacement in ["", "Outlook", "Missing"] {
+            assert!(validate_removal(&entries, "Outlook", replacement, false).is_err());
+        }
+        assert_eq!(
+            validate_removal(&entries, "Outlook", "Exchange", false).unwrap(),
+            true
+        );
+    }
+
+    #[test]
+    fn removal_rejects_running_outlook_missing_profiles_and_unneeded_replacements() {
+        let entries = profiles(&["Outlook", "Exchange"]);
+        assert!(validate_removal(&entries, "Outlook", "", true).is_err());
+        assert!(validate_removal(&entries, "Missing", "", false).is_err());
+        assert!(validate_removal(&entries, "Outlook", "Exchange", false).is_err());
+        assert_eq!(
+            validate_removal(&entries, "Outlook", "", false).unwrap(),
+            false
+        );
+    }
+
+    #[test]
+    fn last_default_can_be_removed_without_a_replacement() {
+        let mut entries = profiles(&["Outlook"]);
+        entries[0].is_default = true;
+        assert_eq!(
+            validate_removal(&entries, "Outlook", "", false).unwrap(),
+            true
+        );
+    }
+
+    #[test]
+    fn registry_only_exchange_is_never_accepted_for_activation() {
+        let native = profiles(&["Profile IMAP"]);
+        assert!(validate_activation(
+            &native,
+            "Profile Exchange 2",
+            "Profile IMAP",
+            "Profile IMAP"
+        )
+        .is_err());
+    }
 
     fn profiles(names: &[&str]) -> Vec<Profile> {
         names

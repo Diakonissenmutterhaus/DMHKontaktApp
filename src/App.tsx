@@ -139,6 +139,7 @@ export default function App() {
     if (nextPage === "authenticator" && !featureAvailability.authenticator) return;
     if (nextPage === "passwords" && !featureAvailability.passwords) return;
     if (nextPage === "documents" && !featureAvailability.documents) return;
+    if (nextPage === "email-save" && !featureAvailability.emailSave) return;
     if (!edvPages.has(nextPage)) {
       if (edvUnlocked) void invokeWithDiagnostics("lock_edv_tools").catch(() => undefined);
       setEdvUnlocked(false);
@@ -483,6 +484,7 @@ export default function App() {
           authenticatorEnabled={featureAvailability.authenticator}
           compact={compactSidebar}
           documentsEnabled={featureAvailability.documents}
+          emailSaveEnabled={featureAvailability.emailSave}
           onNavigate={navigate}
           passwordsEnabled={featureAvailability.passwords}
         />
@@ -508,7 +510,7 @@ export default function App() {
           )}
           {page === "m365" && <Microsoft365Page />}
           {page === "m365-login" && <Microsoft365Page title="M365 Anmeldung" />}
-          {page === "email-save" && <EmailSavePage />}
+          {page === "email-save" && featureAvailability.emailSave && <EmailSavePage />}
           {page === "recovery" && <RecoveryPage />}
           {page === "trash" && <TrashPage />}
           {page === "settings" && (

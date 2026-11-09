@@ -13,7 +13,9 @@ windows = { version = "0.62", features = [
   "Win32_Foundation",
   "Win32_Globalization",
   "Win32_Security_Credentials",
-  "Win32_System_Com"
+  "Win32_System_Com",
+  "Win32_System_Diagnostics_ToolHelp",
+  "Win32_System_Registry"
 ] }
 windows-core = "0.62"
 zeroize = { version = "1", features = ["alloc"] }

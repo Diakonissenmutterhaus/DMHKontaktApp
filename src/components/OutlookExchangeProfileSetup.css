@@ -49,3 +49,36 @@
 .outlook-exchange-setup-error {
   color: var(--danger-text);
 }
+
+.outlook-exchange-setup-compact {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.outlook-exchange-setup-compact > .button-row {
+  justify-content: space-between;
+}
+
+.outlook-setup-loading-backdrop {
+  align-items: center;
+  z-index: 1000;
+}
+
+.outlook-setup-loading-dialog {
+  display: flex;
+  align-items: center;
+  gap: 0.8rem;
+  width: min(440px, 100%);
+  padding: 1.2rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--surface);
+  color: var(--text);
+  outline: none;
+}
+
+.outlook-setup-loading-dialog > svg { flex: none; color: var(--primary); }
+.outlook-setup-loading-dialog > p { margin: 0; font-size: 0.9rem; line-height: 1.5; }

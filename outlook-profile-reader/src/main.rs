@@ -705,10 +705,25 @@ fn run() -> AppResult<HelperOutput> {
     let mut args = env::args().skip(1);
     match required_arg(&mut args, "Befehl")?.as_str() {
         "exchange-list" => exchange_profiles::list().map(HelperOutput::Json),
-        "exchange-create" => {
+        "profile-list-native" => exchange_profiles::native_list().map(HelperOutput::Json),
+        "profile-set-default" => {
+            let profile = required_arg(&mut args, "Profil")?;
+            exchange_profiles::activate(&profile, "", "").map(HelperOutput::Json)
+        }
+        "profile-create" => {
+            let profile = required_arg(&mut args, "Profil")?;
+            exchange_profiles::create_empty(&profile).map(HelperOutput::Json)
+        }
+        "profile-remove" => {
+            let profile = required_arg(&mut args, "Profil")?;
+            let replacement = required_arg(&mut args, "Neues Standardprofil")?;
+            exchange_profiles::remove(&profile, &replacement).map(HelperOutput::Json)
+        }
+        command @ ("exchange-create" | "exchange-create-windows-sso") => {
             let profile = required_arg(&mut args, "Profil")?;
             let email = required_arg(&mut args, "E-Mail-Adresse")?;
-            exchange_profiles::create(&profile, &email).map(HelperOutput::Json)
+            exchange_profiles::create(&profile, &email, command == "exchange-create-windows-sso")
+                .map(HelperOutput::Json)
         }
         "exchange-activate" => {
             let profile = required_arg(&mut args, "Exchange-Profil")?;

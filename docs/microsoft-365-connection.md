@@ -72,7 +72,28 @@ $env:M365_TENANT_ID = "<Mandanten-ID>"
 npm run tauri:dev
 ```
 
-`npm run tauri:dev` lädt fehlende öffentliche IDs aus den GitHub-Variablen.
+`npm run tauri:dev:admin-test` startet die isolierte Admin-Test-App mit derselben
+Microsoft-365-Konfiguration. Auch `tauri:build:admin-test`, `tauri:dev` und
+`tauri:dev:calendar-safe` laden die IDs vor dem Kompilieren. Prioritaet:
+
+1. Umgebungsvariablen der aktuellen PowerShell.
+2. `.local-m365.json` im Projektverzeichnis (von Git ausgeschlossen).
+3. GitHub Actions Variables ueber eine vorhandene `gh`-Anmeldung oder die
+   GitHub-Anmeldung von Git Credential Manager. Es wird keine Anmeldung gestartet.
+
+Die beiden geprueften IDs werden in `.local-m365.json` zwischengespeichert;
+Kennwoerter und Zugriffstokens werden dort nicht gespeichert. Dadurch funktioniert
+der naechste Start auch ohne GitHub-Zugriff. Ohne vorhandene GitHub-Anmeldung
+`.local-m365.example.json` nach `.local-m365.json` kopieren und beide IDs aus
+**Repository > Settings > Secrets and variables > Actions > Variables** eintragen.
+Ein Client-Secret wird nicht benoetigt.
+
+Nur die Konfiguration laden und pruefen, ohne Tauri oder Outlook zu starten:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/start-tauri-admin-test.ps1 -CheckConfiguration
+```
+
 Wenn die Werte geändert werden, die laufende Entwicklungs-App vollständig
 beenden und neu bauen. Der Live-Entwicklungsstart verwendet dieselben lokalen
 Daten und Synchronisierungseinstellungen wie die installierte App.

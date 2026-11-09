@@ -1,5 +1,5 @@
 import { useDiagnosticMessage } from "../hooks/useDiagnosticMessage";
-import { AlertTriangle, Files, KeyRound, RotateCcw, ShieldCheck, Trash2 } from "lucide-react";
+import { AlertTriangle, Files, KeyRound, Mail, RotateCcw, ShieldCheck, Trash2 } from "lucide-react";
 import { useState, type ReactNode } from "react";
 import { StatusMessage } from "../components/StatusMessage";
 import {
@@ -56,7 +56,8 @@ export function FeatureDevelopmentPage({ availability, onFeatureChange, onReset 
 
   const usesReleaseDefaults = availability.authenticator === releaseFeatureDefaults.authenticator
     && availability.passwords === releaseFeatureDefaults.passwords
-    && availability.documents === releaseFeatureDefaults.documents;
+    && availability.documents === releaseFeatureDefaults.documents
+    && availability.emailSave === releaseFeatureDefaults.emailSave;
 
   const resetApplication = async () => {
     const confirmed = window.confirm(
@@ -121,6 +122,14 @@ export function FeatureDevelopmentPage({ availability, onFeatureChange, onReset 
       </section>
 
       <section className="feature-toggle-list" aria-label="Optionale Bereiche">
+        <FeatureToggleCard
+          checked={availability.emailSave}
+          description="E-Mails aus Outlook und Thunderbird lokal sichern. Blendet den Bereich im Hauptmenü ein."
+          descriptionId="email-save-feature-description"
+          icon={<Mail size={25} aria-hidden="true" />}
+          onChange={() => onFeatureChange("emailSave", !availability.emailSave)}
+          title="emails speichern"
+        />
         <FeatureToggleCard
           checked={availability.authenticator}
           description="Einmalcodes sicher auf diesem Computer speichern und erzeugen."

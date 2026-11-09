@@ -6,7 +6,7 @@ import { Microsoft365Page } from "./Microsoft365Page";
 import { enableCompleteAutomaticMicrosoft365Sync } from "../utils/microsoft365SyncConfig";
 
 const db = vi.hoisted(() => ({
-  getMicrosoft365ConnectionStatus: vi.fn(), getAppSetting: vi.fn(),
+  getMicrosoft365ConnectionStatus: vi.fn(), getAppSetting: vi.fn(), getOutlookAccountConfiguration: vi.fn(), getOutlookExchangeSetupStatus: vi.fn(),
   connectMicrosoft365WithWindowsAccount: vi.fn(), connectMicrosoft365Interactively: vi.fn(),
   disconnectMicrosoft365Account: vi.fn(), testMicrosoft365Connection: vi.fn(),
   cancelMicrosoft365Connection: vi.fn(), openMicrosoft365SignIn: vi.fn(),
@@ -21,6 +21,8 @@ beforeEach(() => {
   vi.mocked(enableCompleteAutomaticMicrosoft365Sync).mockResolvedValue(defaultSyncConfig);
   db.getMicrosoft365ConnectionStatus.mockResolvedValue({ configured: true, connected: false, account: null });
   db.getAppSetting.mockResolvedValue(null);
+  db.getOutlookExchangeSetupStatus.mockResolvedValue({ stage: "ready", email: account.email });
+  db.getOutlookAccountConfiguration.mockResolvedValue({ email: account.email, profile: "Outlook", source: "default", accounts: [{ accountType: "IMAP", server: "imap.example.test" }], message: "Outlook geschlossen · gespeichertes Standardprofil" });
   db.connectMicrosoft365WithWindowsAccount.mockResolvedValue(account);
   db.connectMicrosoft365Interactively.mockResolvedValue(account);
   db.testMicrosoft365Connection.mockResolvedValue({ configured: true, connected: true, account });
@@ -37,6 +39,10 @@ describe("Microsoft365Page Windows account login", () => {
     expect(db.connectMicrosoft365WithWindowsAccount).toHaveBeenCalledTimes(1);
     expect(db.connectMicrosoft365Interactively).not.toHaveBeenCalled();
     expect(db.startMicrosoft365Connection).not.toHaveBeenCalled();
+    const profileButton = screen.getByRole("button", { name: "Zu Exchange wechseln" });
+    expect(profileButton).toBeVisible();
+    expect(profileButton.closest(".m365-sync-overview")).toContainElement(screen.getByRole("button", { name: /Jetzt alles synchronisieren|Automatik einschalten/ }));
+    expect(screen.getByRole("heading", { name: "Automatische Synchronisierung" })).toBeVisible();
   });
   it("allows an explicit choice of another account using the existing browser login", async () => {
     render(<Microsoft365Page />);
@@ -67,9 +73,11 @@ describe("Microsoft365Page Windows account login", () => {
   });
   it("keeps the account connected and offers a real action if synchronization setup fails", async () => {
     vi.mocked(enableCompleteAutomaticMicrosoft365Sync).mockRejectedValueOnce("HTTP 503 private diagnostic");
-    render(<Microsoft365Page />);
+    render(<Microsoft365Page title="M365 Anmeldung" />);
     await userEvent.click(await screen.findByRole("button", { name: "Mit Microsoft 365 verbinden" }));
     expect(await screen.findByText("Anna Test")).toBeVisible();
+    expect(screen.getByRole("heading", { name: "Automatische Synchronisierung" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "Zu Exchange wechseln" })).toBeVisible();
     expect(await screen.findByRole("alert")).toHaveTextContent("Automatik einschalten");
     await userEvent.click(screen.getByRole("button", { name: "Automatik einschalten" }));
     await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());

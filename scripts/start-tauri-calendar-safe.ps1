@@ -69,26 +69,9 @@ if (-not (Test-Path -LiteralPath $tauriCli -PathType Leaf)) {
     throw 'Die Tauri-CLI fehlt. Fuehren Sie zuerst npm install aus.'
 }
 
-# The client ID is public but compiled into the Rust binary. Without it the
-# existing Microsoft 365 connection appears disconnected in a local dev build.
-if ([string]::IsNullOrWhiteSpace($env:M365_CLIENT_ID)) {
-    if (-not (Get-Command gh -ErrorAction SilentlyContinue)) {
-        throw 'M365_CLIENT_ID fehlt. Stellen Sie die oeffentliche GitHub-Variable als Umgebungsvariable bereit.'
-    }
-    $publicClientId = & gh variable get M365_CLIENT_ID --repo Diakonissenmutterhaus/DMHKontaktApp 2>$null | Select-Object -Last 1
-    $env:M365_CLIENT_ID = [string]$publicClientId
-    if ($LASTEXITCODE -ne 0 -or $env:M365_CLIENT_ID -notmatch '^[0-9a-fA-F-]{36}$') {
-        throw 'Die oeffentliche GitHub-Variable M365_CLIENT_ID konnte nicht gelesen werden.'
-    }
-}
-
-if ([string]::IsNullOrWhiteSpace($env:M365_TENANT_ID)) {
-    $publicTenantId = & gh variable get M365_TENANT_ID --repo Diakonissenmutterhaus/DMHKontaktApp 2>$null | Select-Object -Last 1
-    $env:M365_TENANT_ID = [string]$publicTenantId
-    if ($LASTEXITCODE -ne 0 -or $env:M365_TENANT_ID -notmatch '^[0-9a-fA-F-]{36}$') {
-        throw 'Die oeffentliche GitHub-Variable M365_TENANT_ID konnte nicht gelesen werden.'
-    }
-}
+# Resolve the public IDs before Rust compiles the local Microsoft-365 client.
+. (Join-Path $PSScriptRoot 'm365-development-environment.ps1')
+Import-M365DevelopmentEnvironment -ProjectRoot $projectRoot
 
 $backupPath = (& $pythonExecutable @pythonPrefix $backupScript $databasePath $backupDirectory | Select-Object -Last 1)
 if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $backupPath -PathType Leaf)) {

@@ -1,4 +1,4 @@
-import { CalendarDays, Files, House, KeyRound, LogIn, Mail, ShieldCheck, Trash2, UserRound } from "lucide-react";
+import { CalendarDays, Files, House, KeyRound, LayoutGrid, Mail, ShieldCheck, Trash2, UserRound } from "lucide-react";
 import { t } from "../i18n";
 import { useEffect, useState } from "react";
 
@@ -8,7 +8,7 @@ const items: Array<{ page: Page; label: string; icon: typeof UserRound; group: "
   { page: "welcome", label: "Startseite", icon: House, group: "main" },
   { page: "contacts", label: t.contacts, icon: UserRound, group: "main" },
   { page: "calendar", label: "Kalender", icon: CalendarDays, group: "main" },
-  { page: "m365-login", label: "M365 Anmeldung", icon: LogIn, group: "main" },
+  { page: "m365-login", label: "Microsoft 365", icon: LayoutGrid, group: "main" },
   { page: "email-save", label: "emails speichern", icon: Mail, group: "main" },
   { page: "passwords", label: "Passwörter", icon: KeyRound, group: "main" },
   { page: "authenticator", label: "2FA-Authenticator", icon: ShieldCheck, group: "tools" },
@@ -26,9 +26,10 @@ interface SidebarProps {
   authenticatorEnabled: boolean;
   documentsEnabled: boolean;
   passwordsEnabled: boolean;
+  emailSaveEnabled: boolean;
 }
 
-export function Sidebar({ activePage, onNavigate, compact = false, calendarEnabled, contactsEnabled, authenticatorEnabled, documentsEnabled, passwordsEnabled }: SidebarProps) {
+export function Sidebar({ activePage, onNavigate, compact = false, calendarEnabled, contactsEnabled, authenticatorEnabled, documentsEnabled, passwordsEnabled, emailSaveEnabled }: SidebarProps) {
   const [suppressHover, setSuppressHover] = useState(activePage === "email-save");
   useEffect(() => { setSuppressHover(activePage === "email-save"); }, [activePage]);
   const visibleItems = items.filter((item) => (
@@ -37,6 +38,7 @@ export function Sidebar({ activePage, onNavigate, compact = false, calendarEnabl
     && (item.page !== "authenticator" || authenticatorEnabled)
     && (item.page !== "documents" || documentsEnabled)
     && (item.page !== "passwords" || passwordsEnabled)
+    && (item.page !== "email-save" || emailSaveEnabled)
   ));
 
   return (
@@ -54,7 +56,7 @@ export function Sidebar({ activePage, onNavigate, compact = false, calendarEnabl
           const active = activePage === item.page;
           return (
             <button
-              className={`${active ? "nav-button active" : "nav-button"}${startsGroup ? " nav-group-start" : ""}${item.page === "contacts" ? " nav-section-gap-small" : ""}`}
+              className={`${active ? "nav-button active" : "nav-button"}${startsGroup ? " nav-group-start" : ""}${item.page === "contacts" ? " nav-section-gap-small" : ""}${item.page === "m365-login" ? " nav-button-m365" : ""}`}
               key={item.page}
               onClick={() => { if (item.page === "email-save") setSuppressHover(true); onNavigate(item.page); }}
               title={compact ? item.label : undefined}

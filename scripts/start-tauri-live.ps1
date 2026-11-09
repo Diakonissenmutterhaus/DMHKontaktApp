@@ -83,24 +83,8 @@ foreach ($environmentName in $environmentNames) {
 
 Push-Location $projectRoot
 try {
-    if ([string]::IsNullOrWhiteSpace($env:M365_CLIENT_ID)) {
-        if (-not (Get-Command gh -ErrorAction SilentlyContinue)) {
-            throw 'M365_CLIENT_ID fehlt. Stellen Sie die oeffentliche GitHub-Variable als Umgebungsvariable bereit.'
-        }
-        $publicClientId = & gh variable get M365_CLIENT_ID --repo Diakonissenmutterhaus/DMHKontaktApp 2>$null | Select-Object -Last 1
-        if ($LASTEXITCODE -ne 0 -or [string]$publicClientId -notmatch '^[0-9a-fA-F-]{36}$') {
-            throw 'Die oeffentliche GitHub-Variable M365_CLIENT_ID konnte nicht gelesen werden.'
-        }
-        $env:M365_CLIENT_ID = [string]$publicClientId
-    }
-
-    if ([string]::IsNullOrWhiteSpace($env:M365_TENANT_ID)) {
-        $publicTenantId = & gh variable get M365_TENANT_ID --repo Diakonissenmutterhaus/DMHKontaktApp 2>$null | Select-Object -Last 1
-        if ($LASTEXITCODE -ne 0 -or [string]$publicTenantId -notmatch '^[0-9a-fA-F-]{36}$') {
-            throw 'Die oeffentliche GitHub-Variable M365_TENANT_ID konnte nicht gelesen werden.'
-        }
-        $env:M365_TENANT_ID = [string]$publicTenantId
-    }
+    . (Join-Path $PSScriptRoot 'm365-development-environment.ps1')
+    Import-M365DevelopmentEnvironment -ProjectRoot $projectRoot
 
     # Keep the production app identifier/database and normal account checks.
     # Clear the opt-in diagnostic flags for both Cargo and Vite subprocesses.

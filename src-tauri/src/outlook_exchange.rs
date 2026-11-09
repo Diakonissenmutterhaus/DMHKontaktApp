@@ -45,13 +45,23 @@ struct SetupState {
     imap_profile: Option<String>,
     phase: String,
     #[serde(default)]
+    windows_sso: bool,
+    #[serde(default)]
     warning: Option<String>,
+    #[serde(default)]
+    launched_process_id: Option<u32>,
+    #[serde(default)]
+    launched_started_at: Option<String>,
 }
 
 #[derive(Deserialize)]
 struct Inventory {
     executable: String,
     running: bool,
+    #[serde(default, rename = "windowsPrimarySmtp")]
+    windows_primary_smtp: String,
+    #[serde(default, rename = "profileNames")]
+    profile_names: Vec<String>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -173,7 +183,7 @@ fn validate_state(state: &SetupState, id: &str, email: &str) -> Result<(), Strin
             .is_some_and(|name| name.eq_ignore_ascii_case(&state.exchange_profile))
         || !matches!(
             state.phase.as_str(),
-            "reserved" | "created" | "activating" | "complete"
+            "reserved" | "created" | "verified" | "activating" | "complete"
         )
     {
         return Err("Die Outlook-Einrichtung gehört nicht zur verbundenen Microsoft-365-Adresse. Bitte die EDV informieren.".into());
@@ -383,6 +393,53 @@ fn unique_name(base: &str, profiles: &[Profile]) -> Result<String, String> {
     Err("Es sind zu viele Outlook-Profile vorhanden. Bitte die EDV informieren.".into())
 }
 
+fn all_profile_names(profiles: &[Profile], registry_names: &[String]) -> Vec<Profile> {
+    let mut names = profiles.to_vec();
+    for name in registry_names {
+        if !names
+            .iter()
+            .any(|profile| profile.name.eq_ignore_ascii_case(name))
+        {
+            names.push(Profile {
+                name: name.clone(),
+                is_default: false,
+            });
+        }
+    }
+    names
+}
+
+fn reserve_unused_profile_name(state: &mut SetupState, profiles: &[Profile]) -> Result<(), String> {
+    // 'reserved' is not proof that CreateProfile succeeded. Never open an
+    // existing profile under a merely reserved name, including after a crash.
+    if state.phase == "reserved"
+        && profiles
+            .iter()
+            .any(|profile| profile.name.eq_ignore_ascii_case(&state.exchange_profile))
+    {
+        state.exchange_profile = unique_name("Profile Exchange", profiles)?;
+    }
+    Ok(())
+}
+
+fn enable_windows_sso(state: &mut SetupState, profiles: &[Profile]) -> Result<(), String> {
+    if state.windows_sso || !matches!(state.phase.as_str(), "reserved" | "created") {
+        return Ok(());
+    }
+    if profiles
+        .iter()
+        .any(|profile| profile.name.eq_ignore_ascii_case(&state.exchange_profile))
+    {
+        // Preserve even an incomplete old profile; never repurpose or delete it.
+        state.exchange_profile = unique_name("Profile Exchange", profiles)?;
+        state.warning =
+            Some("Das bisherige unvollstaendige Exchange-Profil bleibt erhalten.".into());
+    }
+    state.windows_sso = true;
+    state.phase = "reserved".into();
+    Ok(())
+}
+
 fn select_previous(matches: &[String]) -> Result<Option<String>, String> {
     match matches {
         [] => Ok(None),
@@ -407,15 +464,75 @@ async fn probe() -> Result<Probe, String> {
     powershell(serde_json::json!({"operation":"probe"})).await
 }
 
+async fn configured_exchange_default(
+    email: &str,
+    profiles: &[Profile],
+) -> Result<Option<SetupStatus>, String> {
+    let catalog: serde_json::Value =
+        powershell(serde_json::json!({"operation":"profile-catalog"})).await?;
+    let Some(name) = catalog
+        .get("defaultProfile")
+        .and_then(|value| value.as_str())
+    else {
+        return Ok(None);
+    };
+    if !startup_is_verified(profiles, &catalog, name) {
+        return Ok(None);
+    }
+    let matches_account = catalog
+        .get("profiles")
+        .and_then(|value| value.as_array())
+        .is_some_and(|entries| {
+            entries.iter().any(|entry| {
+                entry
+                    .get("name")
+                    .and_then(|value| value.as_str())
+                    .is_some_and(|entry_name| entry_name.eq_ignore_ascii_case(name))
+                    && entry
+                        .get("accounts")
+                        .and_then(|value| value.as_array())
+                        .is_some_and(|accounts| {
+                            accounts.iter().any(|account| {
+                                account
+                                    .get("email")
+                                    .and_then(|value| value.as_str())
+                                    .is_some_and(|address| address.eq_ignore_ascii_case(email))
+                                    && account.get("accountType").and_then(|value| value.as_str())
+                                        == Some("Exchange")
+                            })
+                        })
+            })
+        });
+    if !matches_account {
+        return Ok(None);
+    }
+    Ok(Some(SetupStatus {
+        stage: "complete",
+        email: email.into(),
+        previous_profile: None,
+        exchange_profile: name.into(),
+        imap_profile: None,
+        message: format!("Outlook verwendet „{name}“ als Exchange-Standardprofil."),
+    }))
+}
+
 async fn current_status(app: &AppHandle, id: &str, email: &str) -> Result<SetupStatus, String> {
     let Some(state) = read_state(app, id, email)? else {
+        let installed = inventory().await?;
+        if !installed.executable.is_empty() {
+            let path = helper_path(app, &installed.executable)?;
+            let profiles: ProfileList = helper(&path, &["exchange-list"]).await?;
+            if let Some(existing) = configured_exchange_default(email, &profiles.profiles).await? {
+                return Ok(existing);
+            }
+        }
         return Ok(initial(
             email.into(),
             "ready",
             "Outlook Classic kann mit einem eigenen Exchange-Profil eingerichtet werden.",
         ));
     };
-    if state.phase == "complete" {
+    if matches!(state.phase.as_str(), "complete" | "activating" | "verified") {
         let installed = inventory().await?;
         if installed.executable.is_empty() {
             return Ok(status(
@@ -426,17 +543,191 @@ async fn current_status(app: &AppHandle, id: &str, email: &str) -> Result<SetupS
         }
         let path = helper_path(app, &installed.executable)?;
         let profiles: ProfileList = helper(&path, &["exchange-list"]).await?;
-        if profiles.profiles.iter().any(|profile| {
-            profile.name.eq_ignore_ascii_case(&state.exchange_profile) && profile.is_default
-        }) {
-            return Ok(status(&state, "complete", completion_message(&state)));
+        if !profiles
+            .profiles
+            .iter()
+            .any(|profile| profile.name.eq_ignore_ascii_case(&state.exchange_profile))
+        {
+            if let Some(existing) = configured_exchange_default(email, &profiles.profiles).await? {
+                return Ok(existing);
+            }
+            return Ok(status(&state, "ready", "Das bisherige Exchange-Profil ist in Outlook nicht mehr verfügbar. Bitte die Einrichtung erneut starten; vorhandene Daten bleiben erhalten."));
         }
-        return Err("Das eingerichtete Exchange-Profil ist nicht mehr als Standard vorhanden. Bitte die EDV informieren.".into());
+        if state.phase == "complete"
+            && profiles.profiles.iter().any(|profile| {
+                profile.name.eq_ignore_ascii_case(&state.exchange_profile) && profile.is_default
+            })
+        {
+            let startup: serde_json::Value =
+                powershell(serde_json::json!({"operation":"profile-catalog"})).await?;
+            if startup_is_verified(&profiles.profiles, &startup, &state.exchange_profile) {
+                return Ok(status(&state, "complete", completion_message(&state)));
+            }
+        }
+        if state.phase == "complete" {
+            return Ok(status(&state, "connected", "Das Exchange-Profil ist eingerichtet. Die automatische Standardöffnung muss noch gespeichert werden."));
+        }
+        if !installed.running {
+            return Ok(status(
+                &state,
+                "connected",
+                "Exchange wurde bestätigt. Das Standardprofil wird jetzt dauerhaft gespeichert.",
+            ));
+        }
+        return Ok(status(&state, "awaiting_close", "Exchange ist verbunden. Bitte Outlook vollständig schließen, damit das Standardprofil dauerhaft gespeichert werden kann."));
     }
     if proves_connection(&probe().await?, &state) {
         return Ok(status(&state, "connected", "Outlook ist mit der richtigen Exchange-Mailbox verbunden. Die Profile werden jetzt abgeschlossen."));
     }
-    Ok(status(&state, "awaiting_login", "Bitte im geöffneten Outlook die Anmeldung abschließen. Microsoft kann eine Bestätigung oder MFA verlangen. Der bisherige Standard bleibt bis zur Prüfung erhalten."))
+    let message = if state.windows_sso {
+        "Outlook verwendet das passende Windows-Konto fuer die automatische Einrichtung. Falls Microsoft eine Bestaetigung oder MFA verlangt, diese bitte abschliessen. Der bisherige Standard bleibt bis zur Verbindungspruefung erhalten."
+    } else {
+        "Bitte im geöffneten Outlook die Anmeldung abschließen. Microsoft kann eine Bestätigung oder MFA verlangen. Der bisherige Standard bleibt bis zur Prüfung erhalten."
+    };
+    Ok(status(&state, "awaiting_login", message))
+}
+
+fn startup_is_verified(profiles: &[Profile], startup: &serde_json::Value, target: &str) -> bool {
+    profiles
+        .iter()
+        .any(|profile| profile.is_default && profile.name.eq_ignore_ascii_case(target))
+        && startup
+            .get("defaultProfile")
+            .and_then(|value| value.as_str())
+            .is_some_and(|name| name.eq_ignore_ascii_case(target))
+        && startup
+            .get("promptForProfile")
+            .and_then(|value| value.as_bool())
+            == Some(false)
+}
+
+#[tauri::command]
+pub async fn get_outlook_account_configuration(
+    app: AppHandle,
+) -> Result<serde_json::Value, String> {
+    let (_, email) = m365::outlook_profile_identity(&app)?;
+    powershell(serde_json::json!({"operation":"account-configuration", "email":email})).await
+}
+
+#[tauri::command]
+pub async fn get_outlook_profile_catalog() -> Result<serde_json::Value, String> {
+    powershell(serde_json::json!({"operation":"profile-catalog"})).await
+}
+
+#[tauri::command]
+pub async fn set_outlook_default_profile(
+    app: AppHandle,
+    profile: String,
+) -> Result<serde_json::Value, String> {
+    if m365::get_m365_read_only_test_mode() {
+        return Err(
+            "Im schreibgeschuetzten Testmodus wird das Standardprofil nicht geaendert.".into(),
+        );
+    }
+    let _guard = SETUP_GATE
+        .try_lock()
+        .map_err(|_| "Eine Outlook-Profileinstellung wird bereits bearbeitet.")?;
+    let _process_guard = process_lock(&app)?;
+    let installed = inventory().await?;
+    if !installed.profile_names.iter().any(|name| name == &profile) {
+        return Err(
+            "Das gewaehlte Outlook-Profil ist nicht mehr vorhanden. Bitte aktualisieren.".into(),
+        );
+    }
+    let path = helper_path(&app, &installed.executable)?;
+    let result: Activation = helper(&path, &["profile-set-default", &profile]).await?;
+    if !result.ok {
+        return Err("Das Standardprofil konnte nicht gespeichert werden.".into());
+    }
+    let startup: serde_json::Value =
+        powershell(serde_json::json!({"operation":"automatic-startup", "profile":profile})).await?;
+    if startup.get("ok").and_then(|value| value.as_bool()) != Some(true) {
+        return Err("Die automatische Outlook-Öffnung konnte nicht gespeichert werden.".into());
+    }
+    Ok(serde_json::json!({"defaultProfile":profile}))
+}
+
+#[tauri::command]
+pub async fn open_outlook_default_profile() -> Result<serde_json::Value, String> {
+    let _guard = SETUP_GATE
+        .try_lock()
+        .map_err(|_| "Die Outlook-Einrichtung laeuft bereits.")?;
+    powershell(serde_json::json!({"operation":"open-default-profile"})).await
+}
+
+#[tauri::command]
+pub async fn create_outlook_profile(
+    app: AppHandle,
+    profile: String,
+) -> Result<serde_json::Value, String> {
+    if m365::get_m365_read_only_test_mode() {
+        return Err("Im schreibgeschuetzten Testmodus werden keine Profile erstellt.".into());
+    }
+    let _guard = SETUP_GATE
+        .try_lock()
+        .map_err(|_| "Eine Outlook-Profileinstellung wird bereits bearbeitet.")?;
+    let _process_guard = process_lock(&app)?;
+    let installed = inventory().await?;
+    let path = helper_path(&app, &installed.executable)?;
+    let result: serde_json::Value = helper(&path, &["profile-create", &profile]).await?;
+    if result.get("ok").and_then(|value| value.as_bool()) != Some(true) {
+        return Err("Das Outlook-Profil konnte nicht erstellt werden.".into());
+    }
+    Ok(serde_json::json!({"profile":profile}))
+}
+
+#[tauri::command]
+pub async fn remove_outlook_profile(
+    app: AppHandle,
+    profile: String,
+    replacement: Option<String>,
+    confirmation: String,
+) -> Result<serde_json::Value, String> {
+    if m365::get_m365_read_only_test_mode() {
+        return Err("Im schreibgeschuetzten Testmodus werden keine Profile entfernt.".into());
+    }
+    if confirmation != profile {
+        return Err("Die Profilentfernung wurde nicht bestaetigt.".into());
+    }
+    let _guard = SETUP_GATE
+        .try_lock()
+        .map_err(|_| "Eine Outlook-Profileinstellung wird bereits bearbeitet.")?;
+    let _process_guard = process_lock(&app)?;
+    let installed = inventory().await?;
+    if installed.running {
+        return Err(
+            "Bitte Outlook vor dem Entfernen eines Profils vollstaendig schliessen.".into(),
+        );
+    }
+    let path = helper_path(&app, &installed.executable)?;
+    let result: serde_json::Value = helper(
+        &path,
+        &[
+            "profile-remove",
+            &profile,
+            replacement.as_deref().unwrap_or(""),
+        ],
+    )
+    .await?;
+    if result.get("ok").and_then(|value| value.as_bool()) != Some(true) {
+        return Err("Das Outlook-Profil konnte nicht entfernt werden.".into());
+    }
+    let profiles: ProfileList = helper(&path, &["exchange-list"]).await?;
+    let default_profile = profiles
+        .profiles
+        .iter()
+        .find(|entry| entry.is_default)
+        .map(|entry| entry.name.as_str())
+        .unwrap_or("");
+    Ok(serde_json::json!({"defaultProfile":default_profile}))
+}
+
+#[tauri::command]
+pub async fn open_outlook_profile(profile: String) -> Result<serde_json::Value, String> {
+    let _guard = SETUP_GATE
+        .try_lock()
+        .map_err(|_| "Die Outlook-Einrichtung laeuft bereits.")?;
+    powershell(serde_json::json!({"operation":"open-selected-profile", "profile":profile})).await
 }
 
 #[tauri::command]
@@ -481,10 +772,29 @@ pub async fn prepare_outlook_exchange_profile(app: AppHandle) -> Result<SetupSta
         return Ok(initial(email, "unavailable", "Bitte Outlook Classic installieren. Das neue Outlook unterstützt diese Profileinrichtung nicht."));
     }
     let path = helper_path(&app, &installed.executable)?;
-    let saved = read_state(&app, &id, &email)?;
+    let mut saved = read_state(&app, &id, &email)?;
+    let profiles: ProfileList = helper(&path, &["exchange-list"]).await?;
+    if let Some(existing) = configured_exchange_default(&email, &profiles.profiles).await? {
+        return Ok(existing);
+    }
+    if saved.as_ref().is_some_and(|state| {
+        state.phase != "reserved"
+            && !profiles
+                .profiles
+                .iter()
+                .any(|profile| profile.name.eq_ignore_ascii_case(&state.exchange_profile))
+    }) {
+        if installed.running {
+            return Ok(initial(email, "outlook_open", "Bitte Outlook vollständig schließen. Das nicht mehr verfügbare Exchange-Profil wird anschließend neu eingerichtet."));
+        }
+        // Discard only stale setup bookkeeping, never delete a profile or data.
+        saved = None;
+    }
     if let Some(state) = saved.as_ref() {
         let connection = probe().await?;
-        if state.phase == "complete" || proves_connection(&connection, state) {
+        if matches!(state.phase.as_str(), "complete" | "verified" | "activating")
+            || proves_connection(&connection, state)
+        {
             return current_status(&app, &id, &email).await;
         }
         if connection
@@ -499,7 +809,8 @@ pub async fn prepare_outlook_exchange_profile(app: AppHandle) -> Result<SetupSta
     } else if installed.running {
         return Ok(initial(email, "outlook_open", "Bitte Ihre Arbeit in Outlook speichern und Outlook vollständig schließen. Danach hier erneut versuchen."));
     }
-    let profiles: ProfileList = helper(&path, &["exchange-list"]).await?;
+    let naming_profiles = all_profile_names(&profiles.profiles, &installed.profile_names);
+    let windows_sso = installed.windows_primary_smtp.eq_ignore_ascii_case(&email);
     let mut state = if let Some(state) = saved {
         state
     } else {
@@ -518,7 +829,7 @@ pub async fn prepare_outlook_exchange_profile(app: AppHandle) -> Result<SetupSta
             Some(if managed_name(name, "Profile IMAP") {
                 name.clone()
             } else {
-                unique_name("Profile IMAP", &profiles.profiles)?
+                unique_name("Profile IMAP", &naming_profiles)?
             })
         } else {
             None
@@ -527,29 +838,49 @@ pub async fn prepare_outlook_exchange_profile(app: AppHandle) -> Result<SetupSta
             account_id: id.clone(),
             email: email.clone(),
             previous_profile: previous,
-            exchange_profile: unique_name("Profile Exchange", &profiles.profiles)?,
+            exchange_profile: unique_name("Profile Exchange", &naming_profiles)?,
             imap_profile: imap,
             phase: "reserved".into(),
+            windows_sso,
             warning: None,
+            launched_process_id: None,
+            launched_started_at: None,
         };
         save_state(&app, &state)?;
         state
     };
+    if state.windows_sso && !windows_sso {
+        return Err("Das Windows-Konto fuer die automatische Outlook-Anmeldung konnte nicht bestaetigt werden. Bitte die Verbindung zum Firmennetz pruefen und erneut versuchen.".into());
+    }
+    if windows_sso && !state.windows_sso && matches!(state.phase.as_str(), "reserved" | "created") {
+        // Upgrade only an unfinished legacy setup. Keep its profile untouched;
+        // Outlook will provision a fresh, uniquely named profile via Windows SSO.
+        enable_windows_sso(&mut state, &naming_profiles)?;
+        save_state(&app, &state)?;
+    }
     // Recheck after discovery; never force-close an Outlook opened meanwhile.
-    if inventory().await?.running {
+    let latest_inventory = inventory().await?;
+    if latest_inventory.running {
         return Ok(status(
             &state,
             "outlook_open",
             "Bitte Outlook vollständig schließen und erneut versuchen.",
         ));
     }
-    if !profiles
-        .profiles
+    let naming_profiles = all_profile_names(&naming_profiles, &latest_inventory.profile_names);
+    reserve_unused_profile_name(&mut state, &naming_profiles)?;
+    save_state(&app, &state)?;
+    if !naming_profiles
         .iter()
         .any(|profile| profile.name.eq_ignore_ascii_case(&state.exchange_profile))
     {
+        let command = if state.windows_sso {
+            "exchange-create-windows-sso"
+        } else {
+            "exchange-create"
+        };
         let result: serde_json::Value =
-            helper(&path, &["exchange-create", &state.exchange_profile, &email]).await?;
+            helper(&path, &[command, &state.exchange_profile, &email]).await?;
         if result.get("ok").and_then(|value| value.as_bool()) != Some(true) {
             return Err("Das Exchange-Profil konnte nicht erstellt werden.".into());
         }
@@ -564,11 +895,11 @@ pub async fn prepare_outlook_exchange_profile(app: AppHandle) -> Result<SetupSta
         );
         save_state(&app, &state)?;
     }
-    if m365::outlook_profile_identity(&app)? != (id, email) {
+    if m365::outlook_profile_identity(&app)? != (id.clone(), email.clone()) {
         return Err("Das Microsoft-365-Konto wurde während der Einrichtung geändert. Bitte erneut versuchen.".into());
     }
     let launched: serde_json::Value =
-        powershell(serde_json::json!({"operation":"launch","profile":state.exchange_profile}))
+        powershell(serde_json::json!({"operation":"launch","profile":state.exchange_profile,"email":email,"windowsSso":state.windows_sso}))
             .await?;
     if launched.get("launched").and_then(|value| value.as_bool()) != Some(true) {
         return Ok(status(
@@ -577,7 +908,21 @@ pub async fn prepare_outlook_exchange_profile(app: AppHandle) -> Result<SetupSta
             "Outlook wurde inzwischen geöffnet. Bitte Outlook schließen und erneut versuchen.",
         ));
     }
-    Ok(status(&state, "awaiting_login", "Das Exchange-Profil wurde vorbereitet und Outlook geöffnet. Bitte gegebenenfalls die Microsoft-Anmeldung bestätigen. Die Verbindung wird anschließend geprüft."))
+    state.launched_process_id = launched
+        .get("processId")
+        .and_then(|value| value.as_u64())
+        .and_then(|value| u32::try_from(value).ok());
+    state.launched_started_at = launched
+        .get("startedAt")
+        .and_then(|value| value.as_str())
+        .map(str::to_owned);
+    save_state(&app, &state)?;
+    let message = if state.windows_sso {
+        "Outlook wurde mit der automatischen Windows-Kontoeinrichtung gestartet. Die E-Mail-Adresse wird aus Ihrem passenden Domaenenkonto uebernommen. Microsoft kann weiterhin eine Bestaetigung oder MFA verlangen."
+    } else {
+        "Das Exchange-Profil wurde vorbereitet und Outlook geöffnet. Bitte gegebenenfalls die Microsoft-Anmeldung bestätigen. Die Verbindung wird anschließend geprüft."
+    };
+    Ok(status(&state, "awaiting_login", message))
 }
 
 #[tauri::command]
@@ -595,13 +940,46 @@ pub async fn complete_outlook_exchange_profile(app: AppHandle) -> Result<SetupSt
     let (id, email) = m365::outlook_profile_identity(&app)?;
     let mut state =
         read_state(&app, &id, &email)?.ok_or("Bitte die Outlook-Einrichtung zuerst starten.")?;
-    if state.phase == "complete" {
-        return current_status(&app, &id, &email).await;
-    }
-    if !proves_connection(&probe().await?, &state) {
+    let previously_verified =
+        matches!(state.phase.as_str(), "verified" | "activating" | "complete");
+    if !previously_verified && !proves_connection(&probe().await?, &state) {
         return Ok(status(&state, "awaiting_login", "Die Verbindung zur richtigen Exchange-Mailbox ist noch nicht bestätigt. Bitte die Anmeldung in Outlook abschließen; der bisherige Standard bleibt erhalten."));
     }
-    let installed = inventory().await?;
+    let mut installed = inventory().await?;
+    if installed.running {
+        if !previously_verified {
+            state.phase = "verified".into();
+            save_state(&app, &state)?;
+        }
+        let closed: serde_json::Value = powershell(serde_json::json!({"operation":"close-setup-process", "processId":state.launched_process_id, "startedAt":state.launched_started_at, "profile":state.exchange_profile})).await?;
+        if closed.get("closed").and_then(|value| value.as_bool()) != Some(true) {
+            let needs_user = matches!(
+                closed.get("reason").and_then(|value| value.as_str()),
+                Some("not_owned" | "user_work")
+            );
+            return Ok(status(
+                &state,
+                if needs_user {
+                    "outlook_open"
+                } else {
+                    "awaiting_close"
+                },
+                if needs_user {
+                    "Bitte Ihre Arbeit in Outlook speichern und Outlook schließen, um die Einrichtung abzuschließen."
+                } else {
+                    "Wird eingerichtet. Bitte warten und die Anwendung nicht schließen."
+                },
+            ));
+        }
+        installed = inventory().await?;
+        if installed.running {
+            return Ok(status(
+                &state,
+                "awaiting_close",
+                "Wird eingerichtet. Bitte warten und die Anwendung nicht schließen.",
+            ));
+        }
+    }
     let path = helper_path(&app, &installed.executable)?;
     let profiles: ProfileList = helper(&path, &["exchange-list"]).await?;
     let original_exists = state.previous_profile.as_ref().is_some_and(|old| {
@@ -610,7 +988,7 @@ pub async fn complete_outlook_exchange_profile(app: AppHandle) -> Result<SetupSt
             .iter()
             .any(|profile| profile.name.eq_ignore_ascii_case(old))
     });
-    let already_renamed = state.phase == "activating"
+    let already_renamed = matches!(state.phase.as_str(), "activating" | "complete")
         && !original_exists
         && state.imap_profile.as_ref().is_some_and(|name| {
             profiles
@@ -651,6 +1029,18 @@ pub async fn complete_outlook_exchange_profile(app: AppHandle) -> Result<SetupSt
     if !result.ok {
         return Err("Das Exchange-Profil konnte nicht als Standard bestätigt werden.".into());
     }
+    let startup: serde_json::Value = powershell(
+        serde_json::json!({"operation":"automatic-startup", "profile":state.exchange_profile}),
+    )
+    .await?;
+    let verified: ProfileList = helper(&path, &["exchange-list"]).await?;
+    if startup.get("ok").and_then(|value| value.as_bool()) != Some(true)
+        || !startup_is_verified(&verified.profiles, &startup, &state.exchange_profile)
+    {
+        return Err(
+            "Outlook hat das Exchange-Profil nicht als dauerhaften Standard bestätigt.".into(),
+        );
+    }
     state.warning = result.warning;
     if !result.renamed && !already_renamed {
         state.imap_profile = state
@@ -666,6 +1056,37 @@ pub async fn complete_outlook_exchange_profile(app: AppHandle) -> Result<SetupSt
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn completion_requires_native_default_and_automatic_startup() {
+        let profiles = vec![Profile {
+            name: "Profile Exchange".into(),
+            is_default: true,
+        }];
+        let startup =
+            serde_json::json!({"defaultProfile":"Profile Exchange", "promptForProfile":false});
+        assert!(startup_is_verified(&profiles, &startup, "Profile Exchange"));
+        assert!(!startup_is_verified(&[], &startup, "Profile Exchange"));
+        assert!(!startup_is_verified(
+            &profiles,
+            &serde_json::json!({"defaultProfile":"Profile Exchange", "promptForProfile":true}),
+            "Profile Exchange"
+        ));
+        assert!(!startup_is_verified(
+            &profiles,
+            &serde_json::json!({"defaultProfile":"Profile IMAP", "promptForProfile":false}),
+            "Profile Exchange"
+        ));
+        assert!(!startup_is_verified(
+            &[Profile {
+                name: "Profile Exchange".into(),
+                is_default: false
+            }],
+            &startup,
+            "Profile Exchange"
+        ));
+    }
+
     fn state() -> SetupState {
         SetupState {
             account_id: "one".into(),
@@ -674,7 +1095,10 @@ mod tests {
             exchange_profile: "Profile Exchange".into(),
             imap_profile: Some("Profile IMAP".into()),
             phase: "created".into(),
+            windows_sso: false,
             warning: None,
+            launched_process_id: None,
+            launched_started_at: None,
         }
     }
     fn connection() -> Probe {
@@ -687,6 +1111,64 @@ mod tests {
                 store_type: 0,
             }],
         }
+    }
+    #[test]
+    fn windows_sso_upgrade_preserves_old_profiles_and_resumes_reserved_name() {
+        let mut state = state();
+        let profiles = vec![Profile {
+            name: "Profile Exchange".into(),
+            is_default: false,
+        }];
+        enable_windows_sso(&mut state, &profiles).unwrap();
+        assert!(state.windows_sso);
+        assert_eq!(state.exchange_profile, "Profile Exchange 2");
+        assert_eq!(state.previous_profile.as_deref(), Some("Outlook"));
+        assert_eq!(state.phase, "reserved");
+        enable_windows_sso(&mut state, &profiles).unwrap();
+        assert_eq!(state.exchange_profile, "Profile Exchange 2");
+
+        let mut state = self::state();
+        state.phase = "complete".into();
+        enable_windows_sso(&mut state, &profiles).unwrap();
+        assert!(!state.windows_sso);
+        assert_eq!(state.exchange_profile, "Profile Exchange");
+    }
+    #[test]
+    fn registry_only_profiles_reserve_names_without_becoming_defaults() {
+        let table = vec![Profile {
+            name: "Outlook".into(),
+            is_default: true,
+        }];
+        let names = all_profile_names(
+            &table,
+            &[
+                "outlook".into(),
+                "Profile Exchange".into(),
+                "Profile Exchange 2".into(),
+                "Profile IMAP".into(),
+            ],
+        );
+        assert_eq!(names.len(), 4);
+        assert_eq!(names.iter().filter(|profile| profile.is_default).count(), 1);
+        assert_eq!(
+            unique_name("Profile Exchange", &names).unwrap(),
+            "Profile Exchange 3"
+        );
+        assert_eq!(
+            unique_name("Profile IMAP", &names).unwrap(),
+            "Profile IMAP 2"
+        );
+
+        let mut reserved = state();
+        reserved.phase = "reserved".into();
+        reserve_unused_profile_name(&mut reserved, &names).unwrap();
+        assert_eq!(reserved.exchange_profile, "Profile Exchange 3");
+        reserve_unused_profile_name(&mut reserved, &names).unwrap();
+        assert_eq!(reserved.exchange_profile, "Profile Exchange 3");
+
+        let mut created = state();
+        reserve_unused_profile_name(&mut created, &names).unwrap();
+        assert_eq!(created.exchange_profile, "Profile Exchange");
     }
     #[test]
     fn activation_requires_online_correct_account_profile_and_primary_exchange_store() {

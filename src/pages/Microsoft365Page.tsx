@@ -4,7 +4,6 @@ import {
   CalendarDays,
   CheckCircle2,
   CircleAlert,
-  Clock3,
   Cloud,
   ContactRound,
   Copy,
@@ -12,13 +11,14 @@ import {
   KeyRound,
   LoaderCircle,
   LogOut,
-  MonitorCheck,
   RefreshCw,
   ShieldCheck,
   X
 } from "lucide-react";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { StatusMessage } from "../components/StatusMessage";
+import { OutlookExchangeProfileSetup } from "../components/OutlookExchangeProfileSetup";
+import { OutlookAccountSummary } from "../components/OutlookAccountSummary";
 import {
   cancelMicrosoft365Connection,
   connectMicrosoft365Interactively,
@@ -40,6 +40,7 @@ import {
   calendarAutomaticSyncStatusEventName,
   calendarChangedEventName,
   emptyMicrosoft365SynchronizationRuntimeStatus,
+  m365SafeImportTestMode,
   parseSynchronizationRuntimeStatus,
   synchronizationConfigKey,
   synchronizationRuntimeStatusKey,
@@ -396,12 +397,8 @@ export function Microsoft365Page({ title = "Microsoft 365" }: { title?: string }
         <>
           <section className="form-panel m365-account-card">
             <div className="m365-account-summary">
-              <div className="m365-avatar" aria-hidden="true">
-                {status.account.displayName.trim().slice(0, 1).toUpperCase() || "M"}
-              </div>
               <div>
-                <span className="m365-connected-label"><CheckCircle2 size={17} /> Verbunden</span>
-                <h3>{status.account.displayName}</h3>
+                <h3><CheckCircle2 size={16} className="m365-account-status-icon" aria-label="Verbunden" />{status.account.displayName}</h3>
                 <p>{status.account.email || status.account.userPrincipalName}</p>
               </div>
             </div>
@@ -413,17 +410,17 @@ export function Microsoft365Page({ title = "Microsoft 365" }: { title?: string }
                 <LogOut size={19} /> Konto trennen
               </button>
             </div>
+            <OutlookAccountSummary
+              key={`${status.account.id}:${status.account.email || status.account.userPrincipalName}`}
+              email={status.account.email || status.account.userPrincipalName}
+            />
           </section>
 
           <section className="form-panel m365-sync-overview">
             <div className="m365-sync-heading">
               <div>
                 <h3>Automatische Synchronisierung</h3>
-                <p>Kontakte und Kalender werden alle 30 Sekunden geprüft.</p>
               </div>
-              <span className={syncRuntimeStatus.lastError ? "m365-auto-badge error" : automaticSyncActive ? "m365-auto-badge active" : "m365-auto-badge"}>
-                {syncPreparing ? "Wird eingerichtet …" : syncRuntimeStatus.lastError ? "Prüfung fehlgeschlagen" : automaticSyncActive ? "Im Hintergrund aktiv" : "Nicht aktiv"}
-              </span>
             </div>
 
             {syncRuntimeStatus.lastError && (
@@ -435,36 +432,38 @@ export function Microsoft365Page({ title = "Microsoft 365" }: { title?: string }
 
             <div className="m365-sync-areas">
               <article className={contactsSyncActive ? "active" : ""}>
-                <span className="m365-sync-area-icon"><ContactRound size={24} /></span>
-                <div>
-                  <strong>Kontakte</strong>
-                  <span>{contactsSyncActive ? "Wird automatisch synchronisiert" : "Synchronisierung ist aus"}</span>
-                </div>
-                <div className="m365-sync-area-time">
-                  <small>Zuletzt geprüft</small>
-                  <strong>{formatSyncTime(syncRuntimeStatus.contactsLastCheckedAt)}</strong>
+                <span className="m365-sync-area-icon"><ContactRound size={19} /></span>
+                <div className="m365-sync-area-copy">
+                  <div className="m365-sync-area-heading">
+                    <strong>Kontakte</strong>
+                    <span>{contactsSyncActive ? "Automatisch" : "Aus"}</span>
+                  </div>
+                  <div className="m365-sync-area-time">Zuletzt geprüft: <time>{formatSyncTime(syncRuntimeStatus.contactsLastCheckedAt)}</time></div>
                 </div>
               </article>
               <article className={calendarsSyncActive ? "active" : ""}>
-                <span className="m365-sync-area-icon"><CalendarDays size={24} /></span>
-                <div>
-                  <strong>Kalender & Teams</strong>
-                  <span>{calendarsSyncActive ? "Wird automatisch synchronisiert" : "Synchronisierung ist aus"}</span>
-                </div>
-                <div className="m365-sync-area-time">
-                  <small>Zuletzt geprüft</small>
-                  <strong>{formatSyncTime(syncRuntimeStatus.calendarsLastCheckedAt)}</strong>
+                <span className="m365-sync-area-icon"><CalendarDays size={19} /></span>
+                <div className="m365-sync-area-copy">
+                  <div className="m365-sync-area-heading">
+                    <strong>Kalender & Teams</strong>
+                    <span>{calendarsSyncActive ? "Automatisch" : "Aus"}</span>
+                  </div>
+                  <div className="m365-sync-area-time">Zuletzt geprüft: <time>{formatSyncTime(syncRuntimeStatus.calendarsLastCheckedAt)}</time></div>
                 </div>
               </article>
             </div>
 
-            <div className="m365-sync-footer">
-              <span><Clock3 size={19} /><span><small>Letzter Datenaustausch</small><strong>{formatSyncTime(syncRuntimeStatus.lastExchangeAt, "Noch kein Datenaustausch")}</strong></span></span>
-              <span><MonitorCheck size={19} /><span><small>Hintergrundbetrieb</small><strong>Aktiv nach dem Schließen</strong></span></span>
-              <button className="primary" type="button" onClick={() => void synchronizeEverythingNow()} disabled={syncPreparing}>
-                <RefreshCw size={18} /> {automaticSyncActive ? "Jetzt alles synchronisieren" : "Automatik einschalten"}
-              </button>
-            </div>
+            <OutlookExchangeProfileSetup
+              key={`${status.account.id}:${status.account.email || status.account.userPrincipalName}`}
+              email={status.account.email || status.account.userPrincipalName}
+              disabled={busyAction !== null || m365SafeImportTestMode}
+              compact
+              leadingAction={
+                <button type="button" onClick={() => void synchronizeEverythingNow()} disabled={syncPreparing}>
+                  <RefreshCw size={18} /> {automaticSyncActive ? "Jetzt alles synchronisieren" : "Automatik einschalten"}
+                </button>
+              }
+            />
           </section>
         </>
       )}

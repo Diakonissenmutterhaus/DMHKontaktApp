@@ -33,7 +33,6 @@ function updateIsSnoozed(version: string): boolean {
 
 export function UpdateNotifier() {
   const [availableUpdate, setAvailableUpdate] = useState<AvailableUpdate | null>(null);
-  const [manualRequested, setManualRequested] = useState(false);
   const [status, setStatus] = useState<UpdateStatus>("available");
   const [message, setMessage] = useDiagnosticMessage("UpdateNotifier:message", "notification");
   const [progress, setProgress] = useState<number | null>(null);
@@ -89,7 +88,6 @@ export function UpdateNotifier() {
         return;
       }
       setAvailableUpdate(nextUpdate);
-      setManualRequested(Boolean(detail?.force));
       setStatus("available");
       setMessage("");
       setProgress(null);
@@ -106,7 +104,7 @@ export function UpdateNotifier() {
     };
   }, []);
 
-  if (!availableUpdate || !manualRequested) {
+  if (!availableUpdate) {
     return null;
   }
 

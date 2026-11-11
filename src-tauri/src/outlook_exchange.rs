@@ -52,6 +52,8 @@ struct SetupState {
     launched_process_id: Option<u32>,
     #[serde(default)]
     launched_started_at: Option<String>,
+    #[serde(default)]
+    confirmed_excel_email: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -748,7 +750,21 @@ pub async fn get_outlook_exchange_setup_status(app: AppHandle) -> Result<SetupSt
 }
 
 #[tauri::command]
-pub async fn prepare_outlook_exchange_profile(app: AppHandle) -> Result<SetupStatus, String> {
+pub async fn get_outlook_office_account_check(app: AppHandle) -> Result<serde_json::Value, String> {
+    let (_, email) = m365::outlook_profile_identity(&app)?;
+    let mut office: serde_json::Value =
+        powershell(serde_json::json!({"operation":"office-accounts"})).await?;
+    office["dmhEmail"] = serde_json::json!(email);
+    office["dmhEmails"] = serde_json::json!(m365::excel_account_aliases(&app)?);
+    Ok(office)
+}
+
+#[tauri::command]
+pub async fn prepare_outlook_exchange_profile(
+    app: AppHandle,
+    excel_email: String,
+    excel_account_confirmed: bool,
+) -> Result<SetupStatus, String> {
     if m365::get_m365_read_only_test_mode() {
         return Err(
             "Im schreibgeschützten Testmodus werden keine Outlook-Profile eingerichtet.".into(),
@@ -765,6 +781,7 @@ pub async fn prepare_outlook_exchange_profile(app: AppHandle) -> Result<SetupSta
         .try_lock()
         .map_err(|_| "Die Outlook-Einrichtung läuft bereits.")?;
     let _process_guard = process_lock(&app)?;
+    m365::confirm_excel_account(&app, &excel_email, excel_account_confirmed)?;
     m365::test_m365_connection(app.clone()).await?;
     let (id, email) = m365::outlook_profile_identity(&app)?;
     let installed = inventory().await?;
@@ -790,7 +807,9 @@ pub async fn prepare_outlook_exchange_profile(app: AppHandle) -> Result<SetupSta
         // Discard only stale setup bookkeeping, never delete a profile or data.
         saved = None;
     }
-    if let Some(state) = saved.as_ref() {
+    if let Some(state) = saved.as_mut() {
+        state.confirmed_excel_email = Some(excel_email.clone());
+        save_state(&app, state)?;
         let connection = probe().await?;
         if matches!(state.phase.as_str(), "complete" | "verified" | "activating")
             || proves_connection(&connection, state)
@@ -845,10 +864,13 @@ pub async fn prepare_outlook_exchange_profile(app: AppHandle) -> Result<SetupSta
             warning: None,
             launched_process_id: None,
             launched_started_at: None,
+            confirmed_excel_email: Some(excel_email.clone()),
         };
         save_state(&app, &state)?;
         state
     };
+    state.confirmed_excel_email = Some(excel_email);
+    save_state(&app, &state)?;
     if state.windows_sso && !windows_sso {
         return Err("Das Windows-Konto fuer die automatische Outlook-Anmeldung konnte nicht bestaetigt werden. Bitte die Verbindung zum Firmennetz pruefen und erneut versuchen.".into());
     }
@@ -940,6 +962,11 @@ pub async fn complete_outlook_exchange_profile(app: AppHandle) -> Result<SetupSt
     let (id, email) = m365::outlook_profile_identity(&app)?;
     let mut state =
         read_state(&app, &id, &email)?.ok_or("Bitte die Outlook-Einrichtung zuerst starten.")?;
+    m365::confirm_excel_account(
+        &app,
+        state.confirmed_excel_email.as_deref().unwrap_or(""),
+        state.confirmed_excel_email.is_some(),
+    )?;
     let previously_verified =
         matches!(state.phase.as_str(), "verified" | "activating" | "complete");
     if !previously_verified && !proves_connection(&probe().await?, &state) {
@@ -1099,6 +1126,7 @@ mod tests {
             warning: None,
             launched_process_id: None,
             launched_started_at: None,
+            confirmed_excel_email: Some("anna@example.test".into()),
         }
     }
     fn connection() -> Probe {

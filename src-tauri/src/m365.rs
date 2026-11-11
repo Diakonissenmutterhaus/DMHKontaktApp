@@ -1047,7 +1047,7 @@ pub async fn connect_m365_with_windows_account(
     }
     // The user explicitly clicked Connect. Only here may the browser open;
     // renewal/background synchronization never starts an interactive login.
-    start_m365_interactive_connection(app).await
+    start_m365_interactive_connection(app, None).await
 }
 
 fn graph_retry_delay(
@@ -6674,10 +6674,62 @@ pub async fn save_m365_master_category(
     result
 }
 
+fn valid_excel_email(email: &str) -> bool {
+    let parts: Vec<_> = email.split('@').collect();
+    email == email.trim()
+        && email.len() <= 254
+        && parts.len() == 2
+        && parts.iter().all(|part| !part.is_empty())
+        && !email
+            .chars()
+            .any(|character| character.is_control() || character.is_whitespace())
+}
+
+fn excel_account_matches(account: &Microsoft365Account, email: &str) -> bool {
+    valid_excel_email(email)
+        && (account.email.eq_ignore_ascii_case(email)
+            || account.user_principal_name.eq_ignore_ascii_case(email))
+}
+
+pub(crate) fn confirm_excel_account(
+    app: &AppHandle,
+    email: &str,
+    confirmed: bool,
+) -> Result<(), String> {
+    let account = read_account(app)?.ok_or("Bitte zuerst Microsoft 365 verbinden.")?;
+    validate_excel_account_confirmation(&account, email, confirmed)
+}
+
+fn validate_excel_account_confirmation(
+    account: &Microsoft365Account,
+    email: &str,
+    confirmed: bool,
+) -> Result<(), String> {
+    if !confirmed || !excel_account_matches(&account, email) {
+        return Err("Die Exchange-Einrichtung wurde nicht gestartet. In DMH muss dasselbe Konto wie in Excel → Datei → Konto angemeldet sein. Bitte zuerst das Excel-Konto auswählen und bestätigen.".into());
+    }
+    Ok(())
+}
+
+pub(crate) fn excel_account_aliases(app: &AppHandle) -> Result<Vec<String>, String> {
+    let account = read_account(app)?.ok_or("Bitte zuerst Microsoft 365 verbinden.")?;
+    Ok([account.email, account.user_principal_name]
+        .into_iter()
+        .filter(|email| valid_excel_email(email))
+        .collect())
+}
+
 #[tauri::command]
 pub async fn start_m365_interactive_connection(
     app: AppHandle,
+    expected_email: Option<String>,
 ) -> Result<Microsoft365Account, String> {
+    if expected_email
+        .as_deref()
+        .is_some_and(|email| !valid_excel_email(email))
+    {
+        return Err("Bitte die E-Mail-Adresse aus Excel → Datei → Konto angeben.".into());
+    }
     let runtime = app.state::<AppState>();
     let _connection_guard = runtime.m365.refresh_gate.lock().await;
     let client_id = client_id().ok_or_else(|| {
@@ -6705,8 +6757,12 @@ pub async fn start_m365_interactive_connection(
             "Microsoft-Anmeldung konnte intern nicht vorbereitet werden.".to_string()
         })? = Some(state_token.clone());
     }
-    let authorization_url =
+    let mut authorization_url =
         interactive_authorization_url(client_id, &redirect_uri, &state_token, &challenge);
+    if let Some(email) = expected_email.as_deref() {
+        authorization_url.push('&');
+        authorization_url.push_str(&form_body(&[("login_hint", email)]));
+    }
     if let Err(error) = app.opener().open_url(authorization_url, None::<&str>) {
         let _ = clear_interactive_state(&app, &state_token);
         verifier.zeroize();
@@ -6729,7 +6785,7 @@ pub async fn start_m365_interactive_connection(
     verifier.zeroize();
     callback.code.zeroize();
     let token = token_result.map_err(|error| oauth_error_message(&error))?;
-    let refresh_token = token.refresh_token.ok_or_else(|| {
+    let mut refresh_token = token.refresh_token.ok_or_else(|| {
         "Microsoft hat keine erneuerbare Anmeldung bereitgestellt. Die EDV muss offline_access erlauben."
             .to_string()
     })?;
@@ -6737,6 +6793,13 @@ pub async fn start_m365_interactive_connection(
     let profile_result = graph_profile(&access_token).await;
     access_token.zeroize();
     let account = account_from_profile(profile_result?);
+    if expected_email
+        .as_deref()
+        .is_some_and(|email| !excel_account_matches(&account, email))
+    {
+        refresh_token.zeroize();
+        return Err("Die ausgewählte Microsoft-Anmeldung gehört nicht zum bestätigten Excel-Konto. Das bisherige DMH-Konto bleibt erhalten. Bitte dasselbe Konto wie in Excel → Datei → Konto auswählen.".into());
+    }
     save_connection(
         &app,
         &account,
@@ -7088,6 +7151,44 @@ fn unprotect_secret(_protected_secret: &[u8]) -> Result<Vec<u8>, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn exchange_requires_confirmed_excel_identity_and_rejects_another_office_account() {
+        let account = Microsoft365Account {
+            id: "employee-id".into(),
+            display_name: "Employee".into(),
+            email: "employee@example.test".into(),
+            user_principal_name: "employee@tenant.onmicrosoft.com".into(),
+            connected_at: String::new(),
+        };
+        assert!(
+            validate_excel_account_confirmation(&account, "employee@example.test", false).is_err()
+        );
+        assert!(validate_excel_account_confirmation(
+            &account,
+            "admin@tenant.onmicrosoft.com",
+            true
+        )
+        .is_err());
+        assert!(
+            validate_excel_account_confirmation(&account, "EMPLOYEE@example.test", true).is_ok()
+        );
+        assert!(validate_excel_account_confirmation(
+            &account,
+            "employee@tenant.onmicrosoft.com",
+            true
+        )
+        .is_ok());
+        for invalid in [
+            "",
+            "employee",
+            "employee@@example.test",
+            " employee@example.test",
+            "employee@ex ample.test",
+        ] {
+            assert!(!excel_account_matches(&account, invalid));
+        }
+    }
+
     #[test]
     fn contact_links_are_idempotent_and_never_steal_another_local_contacts_remote_id() {
         let conn = rusqlite::Connection::open_in_memory().unwrap();

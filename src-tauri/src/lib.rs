@@ -10648,6 +10648,7 @@ pub fn run() {
             outlook_exchange::create_outlook_profile,
             outlook_exchange::remove_outlook_profile,
             outlook_exchange::prepare_outlook_exchange_profile,
+            outlook_exchange::get_outlook_office_account_check,
             outlook_exchange::complete_outlook_exchange_profile,
             m365::disconnect_m365_account,
             m365::list_m365_sync_sources,

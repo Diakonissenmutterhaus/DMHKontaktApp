@@ -121,6 +121,25 @@ angemeldete Benutzer starten, nicht als Dienst oder als anderer Administrator.
   Verbinden aktiviert wie bisher die automatische Synchronisierung gemäß den
   bestehenden Berechtigungen und konfigurierten Richtungen.
 
+## Excel-Konto vor der Outlook-Umstellung
+
+Vor der Exchange-Einrichtung zeigt die App die in Office gespeicherten
+E-Mail-Identitäten und das verbundene DMH-Konto. Gespeicherte Office-Identitäten
+sind kein Nachweis des aktuell in Excel verwendeten Kontos: Der Benutzer muss
+die Adresse unter **Excel → Datei → Konto** prüfen und ausdrücklich bestätigen.
+Bei fehlender Erkennung kann die Adresse eingegeben werden.
+
+Unterschiedliche Konten sperren die Migration. Über **DMH mit Excel-Konto
+verbinden** wird zuerst eine Microsoft-Kontoauswahl geöffnet. Die native
+Anmeldung prüft die von Microsoft Graph zurückgegebene Mailadresse bzw. UPN
+gegen die bestätigte Adresse, bevor sie die bisherige Verbindung ersetzt.
+Die automatische Synchronisierung bleibt nach diesem Kontowechsel pausiert;
+vorhandene lokale Daten und Verknüpfungen werden nicht auf das neue Konto
+umgeschrieben. Die Outlook-Einrichtung muss danach erneut gestartet werden.
+Auch die nativen Schritte zum Vorbereiten und Abschließen prüfen die
+bestätigte Kontobindung. Es werden keine Excel-Anmeldung und keine
+Office-Zugangsdaten ausgelesen oder verändert.
+
 ## Fehlersuche
 
 - **Einrichtung durch die EDV erforderlich:** `M365_CLIENT_ID` war beim Build

@@ -1,8 +1,10 @@
 import { CheckCircle2, LoaderCircle, Mail, RefreshCw } from "lucide-react";
 import { useCallback, useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import { completeOutlookExchangeProfile, getOutlookExchangeSetupStatus, prepareOutlookExchangeProfile } from "../services/db";
-import type { OutlookExchangeSetupStatus } from "../types/outlookExchange";
+import { completeOutlookExchangeProfile, getOutlookExchangeSetupStatus, getOutlookOfficeAccountCheck, prepareOutlookExchangeProfile } from "../services/db";
+import type { OutlookExchangeSetupStatus, OutlookOfficeAccountCheck } from "../types/outlookExchange";
+import type { Microsoft365Account } from "../types/m365";
+import { OutlookOfficeAccountDialog } from "./OutlookOfficeAccountDialog";
 import "./OutlookExchangeProfileSetup.css";
 
 interface OutlookExchangeProfileSetupProps {
@@ -10,6 +12,7 @@ interface OutlookExchangeProfileSetupProps {
   disabled?: boolean;
   compact?: boolean;
   leadingAction?: ReactNode;
+  onAccountChanged?: (account: Microsoft365Account) => void;
 }
 
 const pollIntervalMs = 4_000;
@@ -42,7 +45,7 @@ function SetupLoadingDialog() {
   );
 }
 
-export function OutlookExchangeProfileSetup({ email, disabled = false, compact = false, leadingAction }: OutlookExchangeProfileSetupProps) {
+export function OutlookExchangeProfileSetup({ email, disabled = false, compact = false, leadingAction, onAccountChanged }: OutlookExchangeProfileSetupProps) {
   const [status, setStatus] = useState<OutlookExchangeSetupStatus | null>(null);
   const [busy, setBusy] = useState(false);
   const [finishing, setFinishing] = useState(false);
@@ -53,6 +56,9 @@ export function OutlookExchangeProfileSetup({ email, disabled = false, compact =
   const requestId = useRef(0);
   const mounted = useRef(true);
   const deadline = useRef(0);
+  const [officeCheck, setOfficeCheck] = useState<OutlookOfficeAccountCheck | null>(null);
+  const confirmedExcelEmail = useRef<string | null>(null);
+  const pendingAction = useRef<"prepare" | "check">("prepare");
 
   useEffect(() => {
     mounted.current = true;
@@ -111,10 +117,19 @@ export function OutlookExchangeProfileSetup({ email, disabled = false, compact =
     setError("");
     deadline.current = Date.now() + pollingLimitMs;
     try {
-      const next = await (action === "prepare" ? prepareOutlookExchangeProfile() : getOutlookExchangeSetupStatus());
+      if (!confirmedExcelEmail.current) {
+        const check = await getOutlookOfficeAccountCheck();
+        if (!currentRequest(id)) return;
+        if (check.dmhEmail.toLowerCase() !== email.toLowerCase()) throw new Error("Das Microsoft-365-Konto wurde geändert. Bitte die Seite erneut öffnen.");
+        pendingAction.current = action;
+        setOfficeCheck(check);
+        return;
+      }
+      const next = await (action === "prepare" ? prepareOutlookExchangeProfile(confirmedExcelEmail.current) : getOutlookExchangeSetupStatus());
       const accepted = await acceptStatus(next, id);
       if (currentRequest(id) && (accepted?.stage === "awaiting_login" || accepted?.stage === "awaiting_close")) setPolling(true);
     } catch (cause) {
+      confirmedExcelEmail.current = null;
       if (currentRequest(id)) setError(String(cause));
     } finally {
       if (currentRequest(id)) setBusy(false);
@@ -164,6 +179,11 @@ export function OutlookExchangeProfileSetup({ email, disabled = false, compact =
 
   return (
     <section className={`outlook-exchange-setup${compact ? " outlook-exchange-setup-compact" : ""}`} aria-label="Outlook auf Exchange umstellen" aria-busy={configuring}>
+      {officeCheck && <OutlookOfficeAccountDialog check={officeCheck} onClose={() => setOfficeCheck(null)} onAccountChanged={onAccountChanged} onContinue={(chosenEmail) => {
+        confirmedExcelEmail.current = chosenEmail;
+        setOfficeCheck(null);
+        void runAction(pendingAction.current);
+      }} />}
       {configuring ? <SetupLoadingDialog /> : status && !error && !timedOut && <div className={`outlook-exchange-setup-status${complete ? " complete" : ""}`} role="status" aria-live="polite">{complete && <CheckCircle2 size={19} aria-hidden="true" />}<span>{status.message}</span></div>}
       {timedOut && <p role="status">Die automatische Prüfung wurde nach vier Minuten angehalten. Sie können die Anmeldung fertigstellen und die Verbindung erneut prüfen.</p>}
       {error && <p className="outlook-exchange-setup-error" role="alert">{error}</p>}

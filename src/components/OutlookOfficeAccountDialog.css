@@ -1,0 +1,16 @@
+.outlook-office-account-dialog { width: min(550px, calc(100% - 2rem)); max-height: calc(100dvh - 2rem); margin: auto; padding: 0; border: 1px solid var(--border); border-radius: 4px; background: var(--surface); color: var(--text); font-size: 0.82rem; }
+.outlook-office-account-dialog::backdrop { background: #20212466; }
+.outlook-office-account-dialog header, .outlook-office-account-dialog footer { padding: 0.6rem 0.8rem; background: var(--surface-alt); }
+.outlook-office-account-dialog header { border-bottom: 1px solid var(--border); }
+.outlook-office-account-dialog h3 { margin: 0; font-size: 0.95rem; }
+.outlook-office-account-dialog footer { display: flex; justify-content: flex-end; gap: 0.4rem; flex-wrap: wrap; border-top: 1px solid var(--border); }
+.outlook-office-account-dialog button { min-height: 30px; padding: 0.3rem 0.6rem; border-width: 1px; border-radius: 3px; font-size: 0.78rem; }
+.outlook-office-account-content { display: grid; gap: 0.55rem; padding: 0.8rem; max-height: calc(100dvh - 10rem); overflow: auto; }
+.outlook-office-account-content p, .outlook-office-account-content dl { margin: 0; line-height: 1.5; }
+.outlook-office-account-content dt { color: var(--muted); }
+.outlook-office-account-content dd { margin: 0; font-weight: 600; overflow-wrap: anywhere; }
+.outlook-office-account-content select, .outlook-office-account-content input[type="email"] { width: 100%; min-height: 30px; padding: 0.3rem 0.4rem; font-size: inherit; border-radius: 2px; border: 1px solid var(--border); background: var(--surface); }
+.outlook-office-account-confirm { display: flex; gap: 0.5rem; align-items: flex-start; line-height: 1.5; }
+.outlook-office-account-confirm input { flex: 0 0 auto; width: 15px; height: 15px; margin-top: 0.2rem; }
+.outlook-office-account-note { color: var(--muted); font-size: 0.75rem; }
+.outlook-office-account-warning { padding: 0.5rem; border: 1px solid var(--warning-border); background: var(--warning-surface); }

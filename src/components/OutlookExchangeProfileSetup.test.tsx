@@ -6,7 +6,8 @@ import { OutlookExchangeProfileSetup } from "./OutlookExchangeProfileSetup";
 const db = vi.hoisted(() => ({
   prepareOutlookExchangeProfile: vi.fn(),
   getOutlookExchangeSetupStatus: vi.fn(),
-  completeOutlookExchangeProfile: vi.fn()
+  completeOutlookExchangeProfile: vi.fn(),
+  getOutlookOfficeAccountCheck: vi.fn()
 }));
 vi.mock("../services/db", () => db);
 
@@ -24,6 +25,10 @@ const progressMessage = "Wird eingerichtet. Bitte warten und die Anwendung nicht
 
 async function clickButton(name: string | RegExp) {
   await act(async () => { fireEvent.click(screen.getByRole("button", { name })); });
+  if (screen.queryByRole("dialog", { name: "Excel-Konto prüfen" })) {
+    await act(async () => { fireEvent.click(screen.getByRole("checkbox", { name: /Ich habe in Excel/ })); });
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Exchange einrichten" })); });
+  }
 }
 
 beforeEach(() => {
@@ -32,6 +37,7 @@ beforeEach(() => {
   db.prepareOutlookExchangeProfile.mockResolvedValue(waiting);
   db.getOutlookExchangeSetupStatus.mockResolvedValue(waiting);
   db.completeOutlookExchangeProfile.mockResolvedValue(completed);
+  db.getOutlookOfficeAccountCheck.mockResolvedValue({ dmhEmail: email, dmhEmails: [email], accounts: [{ email, displayName: "Anna" }], suggestedEmail: email, readSucceeded: true });
 });
 
 afterEach(() => {
@@ -40,6 +46,20 @@ afterEach(() => {
 });
 
 describe("Outlook Exchange profile setup", () => {
+  it("blocks profile creation on an Office/DMH mismatch and lets the user cancel without migration", async () => {
+    db.getOutlookOfficeAccountCheck.mockResolvedValue({ dmhEmail: email, dmhEmails: [email], accounts: [{ email: "employee@example.test", displayName: "Employee" }], suggestedEmail: "employee@example.test", readSucceeded: true });
+    render(<OutlookExchangeProfileSetup email={email} onAccountChanged={vi.fn()} />);
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Zu Exchange wechseln" })); });
+    expect(screen.getByRole("dialog", { name: "Excel-Konto prüfen" })).toBeVisible();
+    expect(screen.getByText(/Die Konten unterscheiden sich/)).toBeVisible();
+    expect(screen.queryByRole("button", { name: "Exchange einrichten" })).toBeNull();
+    expect(db.prepareOutlookExchangeProfile).not.toHaveBeenCalled();
+    expect(db.completeOutlookExchangeProfile).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Abbrechen" }));
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(db.prepareOutlookExchangeProfile).not.toHaveBeenCalled();
+  });
+
   it("opens a blocking dialog immediately and keeps it through preparation, polling and finalization", async () => {
     let resolvePrepare!: (value: OutlookExchangeSetupStatus) => void;
     let resolveComplete!: (value: OutlookExchangeSetupStatus) => void;
@@ -130,7 +150,7 @@ describe("Outlook Exchange profile setup", () => {
   it("keeps prepared profiles pending and activates only after Exchange is confirmed", async () => {
     render(<OutlookExchangeProfileSetup email={email} />);
     await clickButton("Zu Exchange wechseln");
-    expect(db.prepareOutlookExchangeProfile).toHaveBeenCalledWith();
+    expect(db.prepareOutlookExchangeProfile).toHaveBeenCalledWith(email);
     expect(screen.queryByText(completed.message)).toBeNull();
     await act(async () => { await vi.advanceTimersByTimeAsync(4_000); });
     expect(db.getOutlookExchangeSetupStatus).toHaveBeenCalledTimes(2);

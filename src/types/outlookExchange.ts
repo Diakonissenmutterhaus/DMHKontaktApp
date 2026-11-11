@@ -7,6 +7,14 @@ export interface OutlookExchangeSetupStatus {
   message: string;
 }
 
+export interface OutlookOfficeAccountCheck {
+  dmhEmail: string;
+  dmhEmails: string[];
+  accounts: Array<{ email: string; displayName: string }>;
+  suggestedEmail: string;
+  readSucceeded: boolean;
+}
+
 export interface OutlookAccountConfiguration {
   defaultProfile?: string;
   activeProfile?: string;

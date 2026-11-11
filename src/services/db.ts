@@ -379,8 +379,8 @@ export function repairMicrosoft365CalendarCategories(): Promise<import("../types
   return invoke("repair_m365_calendar_categories");
 }
 
-export function connectMicrosoft365Interactively(): Promise<import("../types/m365").Microsoft365Account> {
-  return invoke("start_m365_interactive_connection");
+export function connectMicrosoft365Interactively(expectedEmail?: string): Promise<import("../types/m365").Microsoft365Account> {
+  return expectedEmail ? invoke("start_m365_interactive_connection", { expectedEmail }) : invoke("start_m365_interactive_connection");
 }
 
 export function connectMicrosoft365WithWindowsAccount(): Promise<import("../types/m365").Microsoft365Account> {
@@ -419,8 +419,12 @@ export function removeOutlookProfile(profile: string, replacement: string | null
   return invoke("remove_outlook_profile", { profile, replacement, confirmation: profile });
 }
 
-export function prepareOutlookExchangeProfile(): Promise<import("../types/outlookExchange").OutlookExchangeSetupStatus> {
-  return invoke("prepare_outlook_exchange_profile");
+export function getOutlookOfficeAccountCheck(): Promise<import("../types/outlookExchange").OutlookOfficeAccountCheck> {
+  return invoke("get_outlook_office_account_check");
+}
+
+export function prepareOutlookExchangeProfile(excelEmail: string): Promise<import("../types/outlookExchange").OutlookExchangeSetupStatus> {
+  return invoke("prepare_outlook_exchange_profile", { excelEmail, excelAccountConfirmed: true });
 }
 
 export function completeOutlookExchangeProfile(): Promise<import("../types/outlookExchange").OutlookExchangeSetupStatus> {

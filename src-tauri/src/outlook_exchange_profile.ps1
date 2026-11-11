@@ -59,6 +59,36 @@ function Get-WindowsPrimarySmtp {
     } catch { return '' }
 }
 
+function Read-OfficeAccounts {
+    # Identity metadata only. Cached identities are not proof of the active
+    # Excel account. Never read tokens, cookies, credentials or license files.
+    $accounts = @(); $preferred = ''; $readSucceeded = $true
+    foreach ($version in @('16.0', '15.0')) {
+        $root = "HKCU:\Software\Microsoft\Office\$version\Common\Identity"
+        if (-not (Test-Path -LiteralPath $root)) { continue }
+        try {
+            $key = Get-Item -LiteralPath $root -ErrorAction Stop
+            try { $candidate = [string]$key.GetValue('ADUserName'); if (-not $preferred -and $candidate -match '^[^\s@]+@[^\s@]+$') { $preferred = $candidate.Trim() } } finally { $key.Dispose() }
+            $identities = "$root\Identities"
+            if (-not (Test-Path -LiteralPath $identities)) { continue }
+            foreach ($entry in @(Get-ChildItem -LiteralPath $identities -ErrorAction Stop | Select-Object -First 64)) {
+                $key = Get-Item -LiteralPath $entry.PSPath -ErrorAction Stop
+                try {
+                    $name = [string]$key.GetValue('FriendlyName')
+                    foreach ($field in @('EmailAddress', 'PreferredUsername', 'SigninName')) {
+                        $email = ([string]$key.GetValue($field)).Trim()
+                        if ($email.Length -gt 254 -or $email -notmatch '^[^\s@]+@[^\s@]+$') { continue }
+                        if (@($accounts | Where-Object { $_.email -ieq $email }).Count -eq 0) { $accounts += @{ email = $email; displayName = $name } }
+                    }
+                } finally { $key.Dispose() }
+            }
+        } catch { $readSucceeded = $false }
+    }
+    if ($preferred -and @($accounts | Where-Object { $_.email -ieq $preferred }).Count -eq 0) { $accounts += @{ email = $preferred; displayName = '' } }
+    if (-not $preferred -and $accounts.Count -eq 1) { $preferred = $accounts[0].email }
+    return @{ accounts = @($accounts); suggestedEmail = $preferred; readSucceeded = $readSucceeded }
+}
+
 function Open-OutlookStartupPreferences {
     return [Microsoft.Win32.Registry]::CurrentUser.CreateSubKey('Software\Microsoft\Office\16.0\Outlook\AutoDiscover')
 }
@@ -488,6 +518,7 @@ try {
     $request = [Console]::In.ReadToEnd() | ConvertFrom-Json
     $running = @(Get-Process -Name 'OUTLOOK' -ErrorAction SilentlyContinue).Count -gt 0
     switch ([string]$request.operation) {
+        'office-accounts' { $result = Read-OfficeAccounts }
         'close-setup-process' {
             $result = Close-OutlookSetupProcess -ExpectedId ([int]$request.processId) -StartedAt ([string]$request.startedAt) -Profile ([string]$request.profile)
         }

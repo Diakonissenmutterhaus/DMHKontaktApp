@@ -457,6 +457,11 @@ export function Microsoft365Page({ title = "Microsoft 365" }: { title?: string }
               key={`${status.account.id}:${status.account.email || status.account.userPrincipalName}`}
               email={status.account.email || status.account.userPrincipalName}
               disabled={busyAction !== null || m365SafeImportTestMode}
+              onAccountChanged={(account) => {
+                setStatus({ configured: true, connected: true, account });
+                setConnectionError("");
+                void loadSynchronizationOverview();
+              }}
               compact
               leadingAction={
                 <button type="button" onClick={() => void synchronizeEverythingNow()} disabled={syncPreparing}>

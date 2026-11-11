@@ -1,12 +1,13 @@
-import { ArchiveRestore, HeartPulse, History, Home, Mail, Printer, RefreshCw, Settings, SlidersHorizontal, Trash2 } from "lucide-react";
+import { ArchiveRestore, BookOpen, HeartPulse, History, Home, Mail, Printer, RefreshCw, Settings, SlidersHorizontal, Trash2 } from "lucide-react";
 import { getVersion } from "@tauri-apps/api/app";
 import { useEffect, useState } from "react";
 import type { Page } from "./Sidebar";
 
-export type SettingsSection = "general" | "mail" | "printer" | "history" | "bulk-removal" | "import" | "backup" | "sync" | "recovery" | "advanced" | "trash";
+export type SettingsSection = "general" | "ki" | "mail" | "printer" | "history" | "bulk-removal" | "import" | "backup" | "sync" | "recovery" | "advanced" | "trash";
 
 const items: Array<{ page: Page; section: SettingsSection; label: string; icon: typeof Settings; activePages?: Page[] }> = [
   { page: "settings", section: "general", label: "Allgemein", icon: Settings },
+  { page: "settings", section: "ki", label: "KI", icon: BookOpen },
   { page: "settings", section: "mail", label: "E-Mail & Konten", icon: Mail },
   { page: "settings", section: "printer", label: "Drucker", icon: Printer },
   { page: "settings", section: "history", label: "Historie", icon: History },

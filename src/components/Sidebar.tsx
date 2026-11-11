@@ -1,14 +1,15 @@
-import { CalendarDays, Files, House, KeyRound, LayoutGrid, Mail, ShieldCheck, Trash2, UserRound } from "lucide-react";
+import { BookOpen, CalendarDays, Files, House, KeyRound, LayoutGrid, Mail, ShieldCheck, Trash2, UserRound } from "lucide-react";
 import { t } from "../i18n";
 import { useEffect, useState } from "react";
 
-export type Page = "welcome" | "contacts" | "calendar" | "m365-login" | "email-save" | "documents" | "passwords" | "authenticator" | "services" | "import" | "contact-import" | "calendar-import" | "export" | "feature-development" | "m365" | "trash" | "settings" | "simple-import" | "backup" | "synchronizations" | "recovery";
+export type Page = "welcome" | "ki" | "contacts" | "calendar" | "m365-login" | "email-save" | "documents" | "passwords" | "authenticator" | "services" | "import" | "contact-import" | "calendar-import" | "export" | "feature-development" | "m365" | "trash" | "settings" | "simple-import" | "backup" | "synchronizations" | "recovery";
 
 const items: Array<{ page: Page; label: string; icon: typeof UserRound; group: "main" | "tools" }> = [
   { page: "welcome", label: "Startseite", icon: House, group: "main" },
   { page: "contacts", label: t.contacts, icon: UserRound, group: "main" },
   { page: "calendar", label: "Kalender", icon: CalendarDays, group: "main" },
   { page: "m365-login", label: "Microsoft 365", icon: LayoutGrid, group: "main" },
+  { page: "ki", label: "KI", icon: BookOpen, group: "main" },
   { page: "email-save", label: "emails speichern", icon: Mail, group: "main" },
   { page: "passwords", label: "Passwörter", icon: KeyRound, group: "main" },
   { page: "authenticator", label: "2FA-Authenticator", icon: ShieldCheck, group: "tools" },

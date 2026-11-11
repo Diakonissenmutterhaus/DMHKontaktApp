@@ -525,11 +525,7 @@ export function SynchronizationsPage({ onNavigate, embedded = false, onClose }: 
                     <button className="danger-button" type="button" onClick={() => void disconnectAccount()} disabled={busy}><LogOut size={17} /> Abmelden</button>
                   </div>
                 </section>}
-                {m365Status.account && <OutlookExchangeProfileSetup key={`${m365Status.account.id}:${m365Status.account.email || m365Status.account.userPrincipalName}`} email={m365Status.account.email || m365Status.account.userPrincipalName} disabled={busy || m365SafeImportTestMode} onAccountChanged={(account) => {
-                  setM365Status({ configured: true, connected: true, account });
-                  setM365Sources(null);
-                  setConfig((current) => ({ ...current, paused: true }));
-                }} />}
+                {m365Status.account && <OutlookExchangeProfileSetup key={`${m365Status.account.id}:${m365Status.account.email || m365Status.account.userPrincipalName}`} email={m365Status.account.email || m365Status.account.userPrincipalName} disabled={busy || m365SafeImportTestMode} />}
                 <section className="sync-quick-settings" aria-label="Grundlegende Einstellungen">
                   <label title="Bei laufender App prüft der Kalender etwa alle 25 Sekunden auf Änderungen aus Microsoft 365. Kontakte werden in größeren Abständen geprüft; bei geschlossenem App-Fenster läuft keine Synchronisierung."><span><strong>Automatisch</strong><small>Kalender ca. alle 25 Sekunden · bei laufender App</small></span><input type="checkbox" checked={config.enabled} onChange={(event) => updateConfig("enabled", event.target.checked)} /></label>
                   <label title="Kontakte zwischen der App und Microsoft 365 berücksichtigen."><ContactRound size={19} /><span><strong>Kontakte</strong></span><input type="checkbox" checked={config.contacts} onChange={(event) => updateConfig("contacts", event.target.checked)} /></label>

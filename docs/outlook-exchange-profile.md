@@ -7,6 +7,35 @@ Sie ist auch im Fenster **Kontakte/Kalender synchronisieren** erreichbar. Sie ri
 Classic auf dem jeweiligen Windows-PC ein. Die Anmeldung und Synchronisierung
 der DMH-App allein ändern keine Outlook-Profile.
 
+Beim Verbinden mit Microsoft 365 bleibt ein gemeinsamer Ladedialog vom Klick
+bis zum Abschluss der Quellen-Einrichtung, der ersten Kontakt-/Kalendersynchronisierung,
+der anschließenden Statusabfrage und der Outlook-Abfragen geöffnet. Dies gilt
+auch für die alternative Kontoauswahl und nach erfolgreicher Code-Anmeldung.
+Die erste Synchronisierung wird über den vorhandenen App-Koordinator abgewartet,
+statt nur als Hintergrundereignis ausgelöst zu werden. Abfragen der Unteransichten
+registrieren sich vor dem nächsten Bildaufbau, damit der Dialog beim Übergang
+zwischen Anmeldung und Kontokarte nicht verschwindet. Fehler beenden den
+Ladezustand mit einer Meldung; eine fehlgeschlagene erste Synchronisierung wird
+nicht als vollständig erfolgreicher Abschluss dargestellt.
+
+Die Exchange-Migration hält denselben Ladedialog bis zur nativen Bestätigung
+von Verbindung, beendetem Setup-Outlook und dauerhaft gespeichertem Standardprofil
+offen. Danach werden die sichtbare Kontokarte und eine gegebenenfalls geöffnete
+Profilverwaltung noch unter diesem Dialog aktualisiert. Erst nach Abschluss
+dieser Abfragen erscheint die Erfolgsmeldung. Die temporäre SSO-Startphase
+verbirgt passende Outlook-Hauptfenster bereits während der Initialisierung;
+die weiteren Prüfungen bleiben an Prozess, Startzeit und Profil gebunden.
+Die Office-Kontoprüfung läuft automatisch ohne Kontrollkästchen oder zweiten
+Einrichtungsbutton. Die native App liest die Office-Metadaten vor jeder
+Vorbereitung erneut und verlangt eine eindeutige Übereinstimmung mit dem
+verbundenen DMH-Konto (einschließlich seiner SMTP-/UPN-Aliasse). Abweichende,
+mehrdeutige oder unlesbare Konten führen zu einer Fehlermeldung, bevor Outlook
+geschlossen oder ein Profil geändert wird. Gespeicherte Office-Identitäten
+gelten weiterhin nicht als Nachweis des aktuell in Excel aktiven Kontos;
+eine manuelle Lesebestätigung wird nicht fingiert.
+Microsoft-Anmeldung/MFA und Aufforderungen zum Sichern offener Entwürfe werden
+nicht verborgen oder automatisch bestätigt.
+
 Die Kontokarte zeigt zusaetzlich das aktuelle Outlook-Profil, den Kontotyp und
 den gemeldeten Server fuer genau die verbundene E-Mail-Adresse. Bei geschlossenem
 Outlook werden Kontotypen und verfügbare Server aus dem gespeicherten
@@ -14,8 +43,11 @@ Standardprofil gelesen. Exchange wird aus den Outlook-Kontoeigenschaften
 erkannt, niemals aus der Graph-Anmeldung oder einem Profilnamen abgeleitet.
 Ist das laufende COM-Objekt vorübergehend nicht verfügbar, bleibt die gespeicherte
 Konfiguration sichtbar, ohne sie als aktive Sitzung auszugeben.
-Die Anzeige wird regelmaessig und beim Fensterwechsel neu gelesen; Outlook
-wird dabei nicht gestartet und es werden keine Profile veraendert.
+Die Anzeige wird beim Öffnen, nach Änderungen am Profil und über die
+Aktualisieren-Schaltfläche gelesen. Ein Fensterwechsel startet keine erneute
+PC-Abfrage; dadurch erscheinen beim Wechsel zwischen Apps keine unerwarteten
+Ladedialoge. Outlook wird bei diesen Abfragen nicht gestartet und es werden
+keine Profile verändert.
 
 Unter **Outlook** stehen **Outlook öffnen** und **Profile verwalten** bereit.
 Die Anzeige unterscheidet das gespeicherte **Standardprofil** fuer den naechsten
@@ -50,21 +82,35 @@ Einrichtung unter einem freien Namen neu eingerichtet; vorhandene Daten und
 gelöschte Profilreste werden dabei nicht entfernt oder reaktiviert.
 
 Die Einrichtung startet Outlook mit verborgenem Hauptfenster und speichert
-Prozess-ID sowie Startzeit. Ein vorhandener Outlook-Prozess wird nicht übernommen.
+Prozess-ID sowie Startzeit. Nach erfolgreicher automatischer Office-/DMH-Kontoprüfung erlaubt der
+ausdrückliche Einrichtungsklick auch das reguläre Schließen einer bereits
+geöffneten Outlook-Sitzung. Die aktuelle Prozess-ID, Startzeit und das Profil
+werden unmittelbar davor erfasst und erneut geprüft.
 Microsoft-Anmeldung und MFA bleiben bei Bedarf sichtbar; die App bedient oder
 versteckt diese Dialoge nicht. Während des normalen Ablaufs erscheint nur
 „Wird eingerichtet. Bitte warten und die Anwendung nicht schließen.“
-Diese Meldung erscheint unmittelbar nach dem Klick in einem zentrierten,
+Diese Meldung mit Fortschrittsbalken erscheint unmittelbar nach dem Klick in einem zentrierten,
 blockierenden Dialog. Er bleibt während Vorbereitung, Prüfung und Abschluss
 offen; die App-Navigation ist solange gesperrt. Erfolg, Fehler oder ein
-Prüfzeitlimit geben die Oberfläche wieder frei.
+Prüfzeitlimit geben die Oberfläche wieder frei. Der Fortschritt folgt nativen
+Etappen (Kontoprüfung, Schließen, Profilprüfung, Vorbereitung, Anmeldung,
+Standardprofil) und steigt nicht nach einer erfundenen Zeitkurve.
+Auch Statusabfragen, Profilverwaltung und Benutzeraktionen auf der M365-Seite
+zeigen einen Ladedialog. Gleichzeitige Abfragen werden zu einer einzigen
+Anzeige zusammengeführt; Abfragen ohne messbare Etappen verwenden einen
+unbestimmten Balken.
 
 Nach bestätigter Online-Verbindung beendet die App die eigene Outlook-Instanz
 über `Application.Quit` und wartet auf deren vollständiges Ende. Prozess-ID,
 Startzeit und Profil müssen weiterhin übereinstimmen; offene Inspector-Fenster
-oder Inline-Antworten verhindern den automatischen Abschluss. Fremde oder neu
-gestartete Instanzen werden nicht geschlossen. Es gibt keinen erzwungenen
-Prozessabbruch. In diesen Ausnahmefällen ist ein manuelles Schließen erforderlich.
+oder Inline-Antworten verhindern das automatische Schließen. Bei einer explizit
+gestarteten Migration kann auch eine wiederaufgenommene Sitzung des exakten
+Zielprofils regulär geschlossen werden. Andere Zielprofile und während der
+Prozesserfassung neu gestartete Instanzen werden nicht geschlossen. Es gibt
+keinen erzwungenen Prozessabbruch und keine automatische Verwerfung von Entwürfen.
+Bei offenen Elementen oder Outlook-Dialogen erscheint ein gezielter Hinweis.
+Die Inbox-Fenster werden beim Start mehrfach und während der aktiven Prüfung
+erneut verborgen; Microsoft-Anmeldung und MFA bleiben sichtbar.
 Erst nach dem Prozessende werden Standard und gegebenenfalls IMAP-Name gespeichert,
 „Immer dieses Profil verwenden“ aktiviert und der Standard in einem getrennten
 Helper-Prozess erneut gelesen. Vorher erscheint keine Erfolgsmeldung. Ein bereits
@@ -77,8 +123,10 @@ aktualisiert.
 2. Die native App bestätigt die bestehende Microsoft-365-Verbindung über
    Microsoft Graph und verwendet die dort bereits hinterlegte Kontoadresse.
    Eine frei eingegebene Adresse aus der Oberfläche wird nicht übernommen.
-3. Läuft Outlook noch, muss der Benutzer seine Arbeit speichern und Outlook
-   schließen. Die App beendet Outlook nicht zwangsweise.
+3. Läuft Outlook noch, schließt die App es über `Application.Quit`, sofern keine
+   offenen Elemente, Inline-Antworten oder blockierenden Dialoge vorliegen.
+   Bei solchen Ausnahmen muss der Benutzer seine Arbeit speichern; die App
+   setzt die Einrichtung anschließend per erneutem Klick fort.
 4. Der zur Adresse passende IMAP-Profilname wird ermittelt. Mehrere passende
    Profile erfordern eine Prüfung durch die EDV. Nicht lesbare Profile werden
    nicht übersprungen oder umbenannt.

@@ -387,8 +387,8 @@ export function connectMicrosoft365WithWindowsAccount(): Promise<import("../type
   return invoke("connect_m365_with_windows_account");
 }
 
-export function getOutlookExchangeSetupStatus(): Promise<import("../types/outlookExchange").OutlookExchangeSetupStatus> {
-  return invoke("get_outlook_exchange_setup_status");
+export function getOutlookExchangeSetupStatus(background = false): Promise<import("../types/outlookExchange").OutlookExchangeSetupStatus> {
+  return background ? invoke("get_outlook_exchange_setup_status", { background: true }) : invoke("get_outlook_exchange_setup_status");
 }
 
 export function getOutlookAccountConfiguration(): Promise<import("../types/outlookExchange").OutlookAccountConfiguration> {
@@ -424,7 +424,7 @@ export function getOutlookOfficeAccountCheck(): Promise<import("../types/outlook
 }
 
 export function prepareOutlookExchangeProfile(excelEmail: string): Promise<import("../types/outlookExchange").OutlookExchangeSetupStatus> {
-  return invoke("prepare_outlook_exchange_profile", { excelEmail, excelAccountConfirmed: true });
+  return invoke("prepare_outlook_exchange_profile", { excelEmail, excelAccountConfirmed: false, automaticAccountCheck: true, closeExistingOutlook: true });
 }
 
 export function completeOutlookExchangeProfile(): Promise<import("../types/outlookExchange").OutlookExchangeSetupStatus> {

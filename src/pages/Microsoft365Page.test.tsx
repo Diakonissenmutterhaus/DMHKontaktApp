@@ -1,4 +1,4 @@
-import { render, screen, waitFor, cleanup } from "@testing-library/react";
+import { act, render, screen, waitFor, cleanup } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { defaultSyncConfig } from "../types/sync";
@@ -30,6 +30,62 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe("Microsoft365Page Windows account login", () => {
+  it("keeps one loading window from login until sync, overview and both Outlook queries finish", async () => {
+    const deferred = <T,>() => {
+      let resolve!: (value: T) => void;
+      const promise = new Promise<T>((done) => { resolve = done; });
+      return { promise, resolve };
+    };
+    const login = deferred<typeof account>();
+    const setup = deferred<typeof defaultSyncConfig>();
+    const firstSync = deferred<"success">();
+    const overview = deferred<string | null>();
+    const outlook = deferred<any>();
+    const exchange = deferred<any>();
+    db.connectMicrosoft365WithWindowsAccount.mockReturnValue(login.promise);
+    vi.mocked(enableCompleteAutomaticMicrosoft365Sync).mockReturnValue(setup.promise);
+    db.getOutlookAccountConfiguration.mockReturnValue(outlook.promise);
+    db.getOutlookExchangeSetupStatus.mockReturnValue(exchange.promise);
+    const synchronize = vi.fn(() => firstSync.promise);
+    render(<Microsoft365Page synchronizeAfterConnection={synchronize} />);
+    await userEvent.click(await screen.findByRole("button", { name: "Mit Microsoft 365 verbinden" }));
+    const modal = await screen.findByRole("dialog");
+    await waitFor(() => expect(db.connectMicrosoft365WithWindowsAccount).toHaveBeenCalled());
+    await act(async () => login.resolve(account));
+    await act(async () => setup.resolve(defaultSyncConfig));
+    expect(synchronize).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole("dialog")).toBe(modal);
+    db.getAppSetting.mockReturnValue(overview.promise);
+    await act(async () => firstSync.resolve("success"));
+    expect(screen.getByRole("dialog")).toBe(modal);
+    await act(async () => overview.resolve(null));
+    expect(screen.getByRole("dialog")).toBe(modal);
+    await act(async () => exchange.resolve({ stage: "ready", email: account.email }));
+    expect(screen.getByRole("dialog")).toBe(modal);
+    await act(async () => outlook.resolve({ email: account.email, defaultProfile: "Exchange", source: "default", accounts: [] }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(screen.getByText("Exchange")).toBeVisible();
+  });
+
+  it("waits for initial overview reads even when the account status already returned", async () => {
+    let finish!: (value: null) => void;
+    db.getAppSetting.mockReturnValue(new Promise<null>((resolve) => { finish = resolve; }));
+    render(<Microsoft365Page />);
+    await waitFor(() => expect(db.getAppSetting).toHaveBeenCalled());
+    expect(screen.getByRole("dialog")).toBeVisible();
+    await act(async () => finish(null));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  });
+
+  it("ends loading with an actionable error instead of success when the first sync fails", async () => {
+    render(<Microsoft365Page synchronizeAfterConnection={async () => "error"} />);
+    await userEvent.click(await screen.findByRole("button", { name: "Mit Microsoft 365 verbinden" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(screen.getByText("Anna Test")).toBeVisible();
+    expect(screen.getByRole("alert")).toHaveTextContent("nicht vollständig geladen");
+    expect(screen.queryByText(/Microsoft 365 wurde verbunden\./)).toBeNull();
+  });
+
   it("connects only after a click through the native Windows-first flow", async () => {
     render(<Microsoft365Page title="M365 Anmeldung" />);
     const button = await screen.findByRole("button", { name: "Mit Microsoft 365 verbinden" });

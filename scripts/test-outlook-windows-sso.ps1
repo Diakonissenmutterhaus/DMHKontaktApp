@@ -25,6 +25,13 @@ $script:fakeKey | Add-Member ScriptMethod Dispose {}
 function Open-OutlookStartupPreferences { $script:opened++; return $script:fakeKey }
 function Get-WindowsPrimarySmtp { return $script:email }
 function Start-Sleep { param($Milliseconds) }
+$script:startupHides = 0
+function Hide-OutlookSetupExplorer {
+    param($ExpectedId, $StartedAt, $Profile)
+    if ($ExpectedId -ne 1234 -or -not $StartedAt -or $Profile -ne 'Profile Exchange') { throw 'Wrong background startup identity' }
+    if ($script:values.ZeroConfigExchange -ne 1) { throw 'Startup hint removed before hiding the Inbox' }
+    $script:startupHides++
+}
 function Start-Process {
     param($FilePath, $ArgumentList, $WindowStyle, [switch]$PassThru)
     if ($FilePath -ne 'OUTLOOK.EXE' -or ($ArgumentList -join ' ') -ne '/profile "Profile Exchange"') { throw 'Unexpected launch target' }
@@ -63,6 +70,7 @@ $script:expectSso = $true
 $script:email = 'anna@example.test'
 $identity = Start-OutlookProfile -Executable 'OUTLOOK.EXE' -Profile 'Profile Exchange' -Email 'anna@example.test' -WindowsSso $true -Background $true
 if ($script:lastWindowStyle -ne 'Hidden' -or $identity.processId -ne 1234 -or -not $identity.startedAt) { throw 'Background startup lost process ownership or displayed Outlook' }
+if ($script:startupHides -ne 6) { throw 'Inbox hiding did not run during background SSO initialization' }
 Write-Host 'PASS: matching identity, exact profile launch, temporary SSO preference, restoration on success/failure, mismatched account refused, MAPI fallback.'
 
 $definition = $ast.Find({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Get-OutlookProfileNames' }, $true)

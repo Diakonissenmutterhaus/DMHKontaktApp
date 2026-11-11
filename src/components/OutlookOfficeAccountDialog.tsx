@@ -7,6 +7,7 @@ import { parseSyncConfig } from "../types/sync";
 import { synchronizationConfigKey } from "../utils/automaticCalendarSync";
 import { completeAutomaticSyncInitializedKey } from "../utils/microsoft365SyncConfig";
 import "./OutlookOfficeAccountDialog.css";
+import { M365Loading } from "./M365Loading";
 
 interface Props {
   check: OutlookOfficeAccountCheck;
@@ -53,9 +54,11 @@ export function OutlookOfficeAccountDialog({ check, onContinue, onAccountChanged
   };
 
   return createPortal(<dialog ref={dialog} className="outlook-office-account-dialog" aria-labelledby={titleId} aria-modal="true" onCancel={(event) => { event.preventDefault(); if (!busy) onClose(); }}>
+    <M365Loading active={busy} message="Microsoft-Konto wird verbunden. Bitte warten …" />
     <header><h3 id={titleId}>Excel-Konto prüfen</h3></header>
     <div className="outlook-office-account-content">
       <p><strong>Outlook muss mit demselben Konto wie Excel eingerichtet werden.</strong> Prüfen Sie die E-Mail-Adresse in Excel unter <strong>Datei → Konto</strong>.</p>
+      <p className="outlook-office-account-note">Für die Einrichtung wird Outlook automatisch geschlossen und im Hintergrund konfiguriert. Offene Entwürfe bitte vorher speichern.</p>
       <dl><dt>In DMH angemeldet</dt><dd>{check.dmhEmail}</dd></dl>
       {check.accounts.length > 0 ? <><label htmlFor={selectId}>Im Office gespeicherte Konten</label><select id={selectId} disabled={busy} value={selected} onChange={(event) => { setSelected(event.target.value); setConfirmed(false); setError(""); }}><option value="">Excel-Konto auswählen …</option>{check.accounts.map((account) => <option key={account.email} value={account.email}>{account.email}{account.displayName ? ` · ${account.displayName}` : ""}</option>)}<option value="__manual__">Andere E-Mail-Adresse …</option></select><p className="outlook-office-account-note">Gespeicherte Konten bestätigen nicht, welches Konto gerade in Excel aktiv ist.</p></> : <p>Das aktive Excel-Konto konnte nicht automatisch ermittelt werden. Übernehmen Sie die Adresse aus Excel → Datei → Konto.</p>}
       {(selected === "__manual__" || !check.accounts.length) && <label>Excel-E-Mail-Adresse<input type="email" disabled={busy} maxLength={254} value={manual} onChange={(event) => { setManual(event.target.value); setConfirmed(false); setError(""); }} /></label>}

@@ -4,6 +4,7 @@ import { AlertCircle, AlertTriangle, Bell, CalendarDays, CheckCircle2, ChevronDo
 import { AuditHistoryPanel } from "../components/AuditHistoryPanel";
 import { BulkRemovalPanel } from "../components/BulkRemovalPanel";
 import { PrinterSettings } from "../components/PrinterSettings";
+import { KiSettings } from "../components/KiSettings";
 import { StatusMessage } from "../components/StatusMessage";
 import { updateAvailableEvent } from "../components/UpdateNotifier";
 import type { SettingsSection } from "../components/SettingsSubtabs";
@@ -571,6 +572,7 @@ export function SettingsPage({
       {section === "bulk-removal" && <BulkRemovalPanel />}
 
       {section === "printer" && <PrinterSettings />}
+      {section === "ki" && <KiSettings />}
 
       {revealedPassword && (
         <div className="modal-backdrop" role="presentation" onMouseDown={() => setRevealedPassword(null)}>

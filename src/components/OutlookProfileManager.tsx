@@ -4,6 +4,8 @@ import { FolderOpen, RefreshCw, Plus, Trash2 } from "lucide-react";
 import { getOutlookProfileCatalog, setOutlookDefaultProfile, openOutlookProfile, createOutlookProfile, removeOutlookProfile } from "../services/db";
 import type { OutlookProfileCatalog } from "../types/outlookExchange";
 import { m365SafeImportTestMode } from "../utils/automaticCalendarSync";
+import { M365Loading } from "./M365Loading";
+import { outlookProfileChangedEventName, type OutlookProfileRefreshDetail } from "../utils/outlookProfileRefresh";
 
 export function OutlookProfileManager({ onDefaultChanged }: { onDefaultChanged: (profile: string) => void }) {
   const [catalog, setCatalog] = useState<OutlookProfileCatalog | null>(null);
@@ -24,18 +26,29 @@ export function OutlookProfileManager({ onDefaultChanged }: { onDefaultChanged: 
 
   useEffect(() => {
     let cancelled = false;
-    setLoading(true);
-    setError("");
-    setRemoving(false);
-    void getOutlookProfileCatalog().then((next) => {
-      if (cancelled) return;
-      setCatalog(next);
-      setStartupProfile(next.defaultProfile);
-      setSelected((current) => next.profiles.some((profile) => profile.name === current) ? current : next.defaultProfile || next.profiles[0]?.name || "");
-    }).catch(() => {
-      if (!cancelled) setError("Outlook-Profile konnten nicht gelesen werden. Bitte erneut aktualisieren.");
-    }).finally(() => { if (!cancelled) setLoading(false); });
-    return () => { cancelled = true; };
+    let pending: Promise<void> | null = null;
+    const load = (): Promise<void> => {
+      if (pending) return pending;
+      setLoading(true);
+      setError("");
+      setRemoving(false);
+      pending = getOutlookProfileCatalog().then((next) => {
+        if (cancelled) return;
+        setCatalog(next);
+        setStartupProfile(next.defaultProfile);
+        setSelected((current) => next.profiles.some((profile) => profile.name === current) ? current : next.defaultProfile || next.profiles[0]?.name || "");
+      }).catch(() => {
+        if (!cancelled) setError("Outlook-Profile konnten nicht gelesen werden. Bitte erneut aktualisieren.");
+      }).finally(() => { pending = null; if (!cancelled) setLoading(false); });
+      return pending;
+    };
+    const onChanged = (event: Event) => {
+      const query = load();
+      (event as CustomEvent<OutlookProfileRefreshDetail>).detail?.waitUntil?.(query);
+    };
+    void load();
+    window.addEventListener(outlookProfileChangedEventName, onChanged);
+    return () => { cancelled = true; window.removeEventListener(outlookProfileChangedEventName, onChanged); };
   }, [refresh]);
 
   const save = async (profile = startupProfile) => {
@@ -102,6 +115,7 @@ export function OutlookProfileManager({ onDefaultChanged }: { onDefaultChanged: 
   };
   return (
     <section className="outlook-profile-manager" aria-label="Outlook-Profile verwalten" aria-busy={busy}>
+      <M365Loading active={busy} message={loading ? "Outlook-Profile werden gelesen. Bitte warten …" : "Outlook-Profil wird verarbeitet. Bitte warten …"} />
       <div className="outlook-profile-general">
         <label htmlFor="outlook-profile-list">Eingerichtete Profile</label>
         <select id="outlook-profile-list" className="outlook-profile-system-list" aria-label="Eingerichtete Profile" size={5} value={selected} disabled={busy} onChange={(event) => selectProfile(event.target.value)}>

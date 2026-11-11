@@ -116,11 +116,19 @@ function Start-OutlookProfile {
         try {
             # Keep the hint until Outlook has initialized its profile UI. This
             # wait is bounded and does not interact with any authentication UI.
-            [void]$process.WaitForInputIdle(10000)
-            Start-Sleep -Milliseconds 1500
-        } catch {
-            # A splash process may exit after starting the main Outlook process.
-            Start-Sleep -Milliseconds 1500
+            try {
+                $idleTimeout = if ($Background) { 500 } else { 10000 }
+                [void]$process.WaitForInputIdle($idleTimeout)
+            } catch { }
+            if ($Background) {
+                # Start hiding as soon as COM becomes available, including while
+                # the scoped SSO hint is still active. Do not wait for a visible
+                # Inbox to finish its entire startup sequence first.
+                for ($attempt = 0; $attempt -lt 6; $attempt++) {
+                    Hide-OutlookSetupExplorer -ExpectedId ([int]$identity.processId) -StartedAt ([string]$identity.startedAt) -Profile $Profile
+                    Start-Sleep -Milliseconds 250
+                }
+            } else { Start-Sleep -Milliseconds 1500 }
         } finally { $process.Dispose() }
         if ($Background) { return $identity }
     } finally {
@@ -149,14 +157,25 @@ function Release-OutlookSetupObject {
 }
 
 function Hide-OutlookSetupExplorer {
-    param([int]$ExpectedId, [string]$StartedAt, [string]$Profile)
+    param([int]$ExpectedId, [string]$StartedAt, [string]$Profile, [bool]$Authorized = $false)
     $process = Get-OwnedOutlookSetupProcess -ExpectedId $ExpectedId -StartedAt $StartedAt
+    # A resumed, explicitly authorized migration may attach the matching profile
+    # even if Outlook replaced its splash process. No other profile is hidden.
+    if ($null -eq $process -and $Authorized) {
+        $processes = @(Get-Process -Name OUTLOOK -ErrorAction SilentlyContinue)
+        if ($processes.Count -eq 1) { $process = $processes[0] }
+    }
     if ($null -eq $process) { return }
     $app = $null; $session = $null; $explorers = $null
     try {
         $app = Get-RunningOutlookApplication
         $session = $app.Session
         if ([string]$session.CurrentProfileName -ine $Profile) { return }
+        if ($Authorized) {
+            $inspectors = $null
+            try { $inspectors = $app.Inspectors; if ($inspectors.Count -gt 0) { return } }
+            finally { Release-OutlookSetupObject $inspectors }
+        }
         if (-not ('DmhOutlookSetupWindow' -as [type])) {
             Add-Type -TypeDefinition 'using System; using System.Runtime.InteropServices; public static class DmhOutlookSetupWindow { [DllImport("user32.dll")] public static extern bool ShowWindowAsync(IntPtr hwnd, int show); }'
         }
@@ -165,6 +184,11 @@ function Hide-OutlookSetupExplorer {
             $explorer = $null
             try {
                 $explorer = $explorers.Item($i)
+                if ($Authorized) {
+                    $inline = $null
+                    try { $inline = $explorer.ActiveInlineResponse; if ($null -ne $inline) { return } }
+                    finally { Release-OutlookSetupObject $inline }
+                }
                 # Only the Inbox explorer is hidden. Authentication, MFA and
                 # account-setup dialogs are separate windows and remain usable.
                 [void][DmhOutlookSetupWindow]::ShowWindowAsync([IntPtr]$explorer.HWND, 0)
@@ -177,7 +201,7 @@ function Hide-OutlookSetupExplorer {
 }
 
 function Close-OutlookSetupProcess {
-    param([int]$ExpectedId, [string]$StartedAt, [string]$Profile)
+    param([int]$ExpectedId, [string]$StartedAt, [string]$Profile, [int]$WaitMs = 8000)
     $process = Get-OwnedOutlookSetupProcess -ExpectedId $ExpectedId -StartedAt $StartedAt
     if ($null -eq $process) { return @{ closed = $false; reason = 'not_owned' } }
     $app = $null; $session = $null; $inspectors = $null; $explorers = $null
@@ -211,7 +235,33 @@ function Close-OutlookSetupProcess {
     # Release COM before waiting for Outlook to finish flushing the profile.
     $remaining = Get-Process -Id $ExpectedId -ErrorAction SilentlyContinue
     if ($null -eq $remaining) { return @{ closed = $true } }
-    try { return @{ closed = $remaining.WaitForExit(8000); reason = 'closing' } } finally { $remaining.Dispose() }
+    try { return @{ closed = $remaining.WaitForExit($WaitMs); reason = 'closing' } } finally { $remaining.Dispose() }
+}
+
+function Close-OutlookForMigration {
+    param([bool]$Authorized, [string]$ExpectedProfile = '')
+    if (-not $Authorized) { return @{ closed = $false; reason = 'not_authorized' } }
+    $processes = @(Get-Process -Name OUTLOOK -ErrorAction SilentlyContinue)
+    if ($processes.Count -eq 0) { return @{ closed = $true } }
+    if ($processes.Count -ne 1) { return @{ closed = $false; reason = 'not_owned' } }
+    $app = $null; $session = $null
+    try {
+        $process = $processes[0]
+        $expectedId = $process.Id
+        $startedAt = $process.StartTime.ToUniversalTime().ToString('o')
+        $app = Get-RunningOutlookApplication
+        $session = $app.Session
+        $profile = [string]$session.CurrentProfileName
+        if (-not $profile) { return @{ closed = $false; reason = 'not_ready' } }
+        if ($ExpectedProfile -and $profile -ine $ExpectedProfile) { return @{ closed = $false; reason = 'not_owned' } }
+    } catch { return @{ closed = $false; reason = 'not_ready' } }
+    finally {
+        foreach ($object in @($session, $app)) { Release-OutlookSetupObject $object }
+        foreach ($candidate in $processes) { $candidate.Dispose() }
+    }
+    # Explicit migration click permits graceful shutdown of the existing session.
+    # Reuse exact process/start/profile checks and protect inspectors/inline drafts.
+    return Close-OutlookSetupProcess -ExpectedId $expectedId -StartedAt $startedAt -Profile $profile -WaitMs 20000
 }
 
 function Open-ExistingOutlookProfile {
@@ -519,6 +569,11 @@ try {
     $running = @(Get-Process -Name 'OUTLOOK' -ErrorAction SilentlyContinue).Count -gt 0
     switch ([string]$request.operation) {
         'office-accounts' { $result = Read-OfficeAccounts }
+        'close-for-migration' { $result = Close-OutlookForMigration -Authorized ([bool]$request.authorized) -ExpectedProfile ([string]$request.profile) }
+        'hide-setup-process' {
+            Hide-OutlookSetupExplorer -ExpectedId ([int]$request.processId) -StartedAt ([string]$request.startedAt) -Profile ([string]$request.profile) -Authorized ([bool]$request.authorized)
+            $result = @{ ok = $true }
+        }
         'close-setup-process' {
             $result = Close-OutlookSetupProcess -ExpectedId ([int]$request.processId) -StartedAt ([string]$request.startedAt) -Profile ([string]$request.profile)
         }
@@ -549,9 +604,13 @@ try {
                 if ([string]::IsNullOrWhiteSpace($executable)) { throw 'CLASSIC_OUTLOOK_MISSING' }
                 $profile = [string]$request.profile
                 if ($profile -notmatch '^[A-Za-z0-9][A-Za-z0-9 _-]{0,63}$') { throw 'INVALID_PROFILE_NAME' }
-                # This is the interactive Outlook window requested by the user.
+                # Start hidden; authentication/MFA dialogs remain interactive.
                 $identity = Start-OutlookProfile -Executable $executable -Profile $profile -Email ([string]$request.email) -WindowsSso ([bool]$request.windowsSso) -Background $true
-                Hide-OutlookSetupExplorer -ExpectedId ([int]$identity.processId) -StartedAt ([string]$identity.startedAt) -Profile $profile
+                # ROT and Explorer windows may appear after Start-Process returns.
+                for ($attempt = 0; $attempt -lt 12; $attempt++) {
+                    Hide-OutlookSetupExplorer -ExpectedId ([int]$identity.processId) -StartedAt ([string]$identity.startedAt) -Profile $profile
+                    Start-Sleep -Milliseconds 250
+                }
                 $result = @{ launched = $true; processId = $identity.processId; startedAt = $identity.startedAt }
             }
         }

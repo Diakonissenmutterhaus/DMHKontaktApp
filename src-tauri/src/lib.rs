@@ -28,6 +28,8 @@ mod diagnostics;
 mod documents;
 mod email_archive;
 mod file_icons;
+mod ki;
+mod ki_news;
 mod m365;
 mod m365_wam;
 mod mail_accounts;
@@ -6641,6 +6643,12 @@ fn open_new_outlook_bulk_email(
 
 #[tauri::command]
 fn get_app_setting(app: AppHandle, key: String) -> Result<Option<String>, String> {
+    if key.starts_with("ki_receipt_v1:")
+        || key.starts_with("ki_access_request_v1:")
+        || ki_news::is_news_key(&key)
+    {
+        diagnostics::require_edv(&app)?;
+    }
     let conn = open_db(&app)?;
     conn.query_row(
         "SELECT value FROM app_settings WHERE key = ?",
@@ -6746,6 +6754,9 @@ fn query_audit_log(conn: &Connection, filter: AuditLogFilter) -> Result<AuditLog
 
 #[tauri::command]
 fn set_app_setting(app: AppHandle, key: String, value: String) -> Result<(), String> {
+    if ki::protected_key(&key) {
+        return Err("KI-Inhalte und Bestätigungen nur über den KI-Bereich speichern.".into());
+    }
     if outlook_exchange::is_setup_state_key(&key) {
         return Err(
             "Die Outlook-Einrichtung kann nur über die Profileinrichtung geändert werden.".into(),
@@ -10622,6 +10633,16 @@ pub fn run() {
             open_new_outlook_bulk_email,
             get_app_setting,
             set_app_setting,
+            ki::get_ki_config,
+            ki::get_ki_pdf,
+            ki::import_ki_pdf,
+            ki::save_ki_config,
+            ki::submit_ki_acknowledgement,
+            ki::list_ki_acknowledgements,
+            ki::save_ki_access_request,
+            ki::list_ki_access_requests,
+            ki_news::list_ki_news,
+            ki_news::save_ki_news,
             m365::get_m365_connection_status,
             m365::get_m365_read_only_test_mode,
             m365::list_m365_master_categories,

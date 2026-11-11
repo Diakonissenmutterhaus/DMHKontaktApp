@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { readFile } from "node:fs/promises";
 import type { CalendarEvent } from "../src/types/calendar";
 import type { AuditLogEntry } from "../src/types/audit";
 
@@ -51,6 +52,306 @@ function mockContact(id: number, firstName: string, lastName: string): MockConta
     updatedAt: "2026-09-24T08:00:00Z"
   };
 }
+
+async function installKiMock(page: Page, published: boolean) {
+  await installTauriMock(page, []);
+  await page.addInitScript(({ published }) => {
+    const w = window as any;
+    const invoke = w.__TAURI_INTERNALS__.invoke;
+    let policy = { revision: "ki-r1", title: "KI-Testdokument", version: "1.0", body: "Testinhalt für die automatisierte Prüfung. Keine offiziellen Richtlinien.", published, trainingUrl: "" };
+    w.__DMH_KI_RECEIPTS__ = [];
+    w.__DMH_KI_ACCESS_REQUESTS__ = [];
+    w.__DMH_KI_MAIL_DRAFTS__ = [];
+    w.__DMH_KI_NEWS__ = [{ id: "policy-news", date: "2026-11-10", title: "KI-Leitlinie vom 10. November 2026 verfügbar", summary: "Das Originaldokument steht unter Richtlinien bereit.", body: "Die KI-Leitlinie ist im Bereich Richtlinien verfügbar.", category: "Richtlinie", published: true, sourceUrl: "", updatedAt: "2026-11-10T00:00:00Z" }];
+    w.__TAURI_INTERNALS__.invoke = async (command: string, args: any) => {
+      if (command === "get_ki_config") return policy;
+      if (command === "save_ki_config") { policy = { ...args.config, revision: "ki-r2" }; return policy; }
+      if (command === "list_ki_acknowledgements") return w.__DMH_KI_RECEIPTS__;
+      if (command === "list_ki_access_requests") return w.__DMH_KI_ACCESS_REQUESTS__;
+      if (command === "list_ki_news") return w.__DMH_KI_NEWS__.filter((entry: any) => args?.includeDrafts || entry.published);
+      if (command === "save_ki_news") {
+        const article = { ...args.article, id: args.article.id || `news-${w.__DMH_KI_NEWS__.length}`, updatedAt: new Date().toISOString() };
+        const index = w.__DMH_KI_NEWS__.findIndex((entry: any) => entry.id === article.id);
+        if (index < 0) w.__DMH_KI_NEWS__.push(article); else w.__DMH_KI_NEWS__[index] = article;
+        return article;
+      }
+      if (command === "save_ki_access_request") { const request = { ...args.input, id: "access-1", createdAt: new Date().toISOString(), status: "prepared" }; w.__DMH_KI_ACCESS_REQUESTS__.push(request); return request; }
+      if (command === "plugin:opener|open_url") { w.__DMH_KI_MAIL_DRAFTS__.push(args.url); return null; }
+      if (command === "submit_ki_acknowledgement") {
+        const receipt = { ...args.submission, id: `ki-${w.__DMH_KI_RECEIPTS__.length}`, policy, policySha256: "test-checksum", submittedAt: new Date().toISOString() };
+        w.__DMH_KI_RECEIPTS__.push(receipt); return receipt;
+      }
+      return invoke(command, args);
+    };
+  }, { published });
+}
+
+async function openKiArea(page: Page, area: "Richtlinien" | "Schulungen" | "Formulare") {
+  await page.getByRole("group", { name: "KI-Bereiche" }).getByRole("button", { name: area, exact: true }).click();
+}
+
+async function openKiForms(page: Page) {
+  const shortcut = page.getByRole("button", { name: "Zu den Formularen", exact: true });
+  if (await shortcut.count()) await shortcut.click();
+  else await openKiArea(page, "Formulare");
+}
+
+test("KI funciona como intranet e publica notícias somente após liberação pela EDV", async ({ page }, testInfo) => {
+  await installKiMock(page, true);
+  await page.goto("/");
+  const main = page.getByRole("navigation", { name: "Hauptmenü" });
+  await main.getByRole("button", { name: "KI", exact: true }).click();
+  await expect(page.getByRole("button", { name: "KI-Leitlinie vom 10. November 2026 verfügbar", exact: true })).toBeVisible();
+  await page.screenshot({ path: testInfo.outputPath("ki-intranet.png") });
+  const openEditor = async () => {
+    await page.getByRole("button", { name: "EDV Tools", exact: true }).click();
+    await page.getByLabel("EDV-Kennwort", { exact: true }).fill("test-edv");
+    await page.getByRole("button", { name: "EDV Tools öffnen" }).click();
+    await page.getByRole("navigation", { name: "Unterseiten der EDV Tools" }).getByRole("button", { name: "KI", exact: true }).click();
+    await page.getByRole("navigation", { name: "KI-Verwaltung" }).getByRole("button", { name: "Nachrichten", exact: true }).click();
+  };
+  await openEditor();
+  await page.getByRole("button", { name: "Neuer Beitrag", exact: true }).click();
+  await page.getByLabel("Titel", { exact: true }).fill("Neue KI-Schulung · Testbeitrag");
+  await page.getByLabel("Kurzbeschreibung", { exact: true }).fill("Information zum nächsten Schulungsangebot.");
+  await page.getByLabel("Nachricht", { exact: true }).fill("Testinhalt der EDV. Der Termin wird gesondert bekannt gegeben.");
+  await page.getByRole("dialog").getByRole("button", { name: "Speichern", exact: true }).click();
+  await expect(page.getByRole("table", { name: "KI-Nachrichten", exact: true })).toContainText("Entwurf");
+  await main.getByRole("button", { name: "KI", exact: true }).click();
+  await expect(page.getByRole("button", { name: "KI-Leitlinie vom 10. November 2026 verfügbar", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Neue KI-Schulung · Testbeitrag", exact: true })).toHaveCount(0);
+  await openEditor();
+  await page.getByRole("table", { name: "KI-Nachrichten", exact: true }).getByRole("button", { name: "Neue KI-Schulung · Testbeitrag", exact: true }).click();
+  await page.getByRole("checkbox", { name: "Auf der KI-Startseite veröffentlichen", exact: true }).check();
+  await page.getByRole("dialog").getByRole("button", { name: "Speichern", exact: true }).click();
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+  await main.getByRole("button", { name: "KI", exact: true }).click();
+  await page.getByRole("button", { name: "Neue KI-Schulung · Testbeitrag", exact: true }).click();
+  await expect(page.getByRole("dialog")).toContainText("Testinhalt der EDV");
+  await page.getByRole("dialog").getByRole("button", { name: "Schließen", exact: true }).click();
+  await page.setViewportSize({ width: 760, height: 800 });
+  expect(await page.getByRole("region", { name: "Aktuelles zur KI", exact: true }).evaluate((element) => element.scrollWidth > element.clientWidth + 1)).toBe(false);
+  await page.screenshot({ path: testInfo.outputPath("ki-intranet-compact.png") });
+});
+
+test("KI abre com três botões e separa confirmação e pedido de acesso pago", async ({ page }, testInfo) => {
+  await installKiMock(page, true);
+  await page.goto("/");
+  await page.getByRole("navigation", { name: "Hauptmenü" }).getByRole("button", { name: "KI", exact: true }).click();
+  const menu = page.getByRole("group", { name: "KI-Bereiche" });
+  await expect(menu.getByRole("button")).toHaveCount(3);
+  await expect(page.getByText(/Informationen zum Einsatz von KI im Mutterhaus/)).toBeVisible();
+  await expect(page.getByLabel("Vor- und Nachname", { exact: true })).toHaveCount(0);
+  await page.screenshot({ path: testInfo.outputPath("ki-start.png") });
+  await openKiArea(page, "Formulare");
+  await expect(page.getByRole("region", { name: "Kenntnisnahme", exact: true })).toBeVisible();
+  await expect(page.getByRole("region", { name: "Kostenpflichtiger KI-Zugang", exact: true })).toBeVisible();
+  await page.screenshot({ path: testInfo.outputPath("ki-formulare.png") });
+  await page.getByRole("button", { name: "Kostenpflichtigen KI-Zugang beantragen", exact: true }).click();
+  await expect(page.getByRole("button", { name: "Antrag vorbereiten", exact: true })).toBeDisabled();
+  await page.getByLabel("Vor- und Nachname", { exact: true }).fill("Anna Muster");
+  await page.getByLabel("Dienstliche E-Mail", { exact: true }).fill("anna@example.test");
+  await page.getByLabel("Abteilung / Bereich (optional)").fill("Verwaltung");
+  await page.getByRole("combobox", { name: "KI-Anwendung", exact: true }).selectOption("ChatGPT Business");
+  await page.getByLabel("Einsatzzweck", { exact: true }).fill("Öffentliche Veranstaltungstexte sprachlich überarbeiten.");
+  await page.screenshot({ path: testInfo.outputPath("ki-zugangsantrag.png") });
+  await page.getByRole("button", { name: "Antrag vorbereiten", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "KI-Antrag vorbereitet", exact: true })).toBeVisible();
+  await expect(page.getByText("Lokal gespeichert · noch nicht an die EDV gesendet.", { exact: true })).toBeVisible();
+  expect(await page.evaluate(() => (window as any).__DMH_KI_MAIL_DRAFTS__)).toEqual([]);
+  await page.getByRole("button", { name: "E-Mail an EDV", exact: true }).click();
+  await expect(page.getByRole("status")).toContainText("selbst absenden");
+  const drafts = await page.evaluate(() => (window as any).__DMH_KI_MAIL_DRAFTS__);
+  expect(drafts).toHaveLength(1);
+  const draft = new URL(drafts[0]);
+  expect(draft.protocol).toBe("mailto:");
+  expect(draft.pathname).toBe("edv@dmh-aidlingen.de");
+  expect(draft.searchParams.get("body")).toContain("Öffentliche Veranstaltungstexte sprachlich überarbeiten.");
+  await page.getByRole("dialog").getByRole("button", { name: "Schließen", exact: true }).click();
+  await page.getByRole("button", { name: "EDV Tools", exact: true }).click();
+  await page.getByLabel("EDV-Kennwort", { exact: true }).fill("test-edv");
+  await page.getByRole("button", { name: "EDV Tools öffnen" }).click();
+  await page.getByRole("navigation", { name: "Unterseiten der EDV Tools" }).getByRole("button", { name: "KI", exact: true }).click();
+  await page.getByRole("button", { name: "Zugangsanträge (1)", exact: true }).click();
+  await page.getByRole("table", { name: "KI-Zugangsanträge" }).getByRole("button", { name: "Anna Muster", exact: true }).click();
+  await expect(page.getByRole("dialog")).toContainText("Öffentliche Veranstaltungstexte sprachlich überarbeiten.");
+  await expect(page.getByRole("dialog")).toContainText("Versand an die EDV ist nicht bestätigt");
+});
+
+test("KI bloqueia confirmação sem documento oficial publicado", async ({ page }, testInfo) => {
+  await installKiMock(page, false);
+  await page.goto("/");
+  await page.getByRole("navigation", { name: "Hauptmenü" }).getByRole("button", { name: "KI", exact: true }).click();
+  await openKiArea(page, "Richtlinien");
+  await expect(page.getByText("Noch nicht veröffentlicht", { exact: true })).toBeVisible();
+  await openKiForms(page);
+  await expect(page.getByRole("button", { name: "Bestätigung ausfüllen" })).toBeDisabled();
+  await page.getByRole("button", { name: "KI-Übersicht" }).click();
+  await openKiArea(page, "Schulungen");
+  await expect(page.getByRole("button", { name: "Schulung ansehen" })).toBeDisabled();
+  await page.getByRole("button", { name: "KI-Übersicht" }).click();
+  await expect(page.getByLabel("Vor- und Nachname", { exact: true })).toHaveCount(0);
+  await page.screenshot({ path: testInfo.outputPath("ki-dokument-ausstehend.png"), fullPage: true });
+});
+
+test("KI mostra o PDF original de 11 páginas e libera formulário após carregar", async ({ page }, testInfo) => {
+  await installKiMock(page, true);
+  const pdf = (await readFile("src-tauri/resources/ki/ki-leitlinie-2026-11-10.pdf")).toString("base64");
+  await page.addInitScript(({ pdf }) => {
+    const w = window as any; const invoke = w.__TAURI_INTERNALS__.invoke;
+    w.__TAURI_INTERNALS__.invoke = async (command: string, args: any) => {
+      if (command === "get_ki_config") return { revision: "current-pdf", title: "KI-Leitlinie", version: "10.11.2026", body: "Originaldokument · 11 Seiten", trainingUrl: "", published: true, pdfSha256: "3d0aa3ce7b3745c51b63485f85bbd9f0b9f2825a5f1e9197c765a153ff3fab72", pdfName: "KI-Leitlinie 10.11.2026.pdf" };
+      if (command === "get_ki_pdf") return pdf;
+      return invoke(command, args);
+    };
+  }, { pdf });
+  await page.goto("/");
+  await page.getByRole("navigation", { name: "Hauptmenü" }).getByRole("button", { name: "KI", exact: true }).click();
+  await expect(page.getByRole("group", { name: "KI-Bereiche" }).getByRole("button")).toHaveCount(3);
+  await page.screenshot({ path: testInfo.outputPath("ki-overview-classic.png") });
+  await openKiArea(page, "Richtlinien");
+  await page.getByRole("button", { name: "Original-PDF lesen", exact: true }).click();
+  await expect(page.getByText("Seite 1 von 11", { exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Bestätigung ausfüllen" })).toHaveCount(0);
+  await expect(page.getByRole("status", { name: "PDF wird geladen …" })).toHaveCount(0);
+  await page.screenshot({ path: testInfo.outputPath("ki-original-pdf.png"), fullPage: true });
+  await page.getByRole("button", { name: "Nächste PDF-Seite", exact: true }).click();
+  await expect(page.getByText("Seite 2 von 11", { exact: true })).toBeVisible();
+  await page.getByRole("dialog").getByRole("button", { name: "Schließen", exact: true }).click();
+  await openKiForms(page);
+  await page.getByRole("button", { name: "Bestätigung ausfüllen" }).click();
+  await expect(page.getByRole("dialog", { name: "Bestätigung", exact: true })).toBeVisible();
+  await expect(page.getByLabel("Vor- und Nachname", { exact: true })).toBeEnabled();
+});
+
+test("KI importa nova edição como rascunho e exige informar sua versão", async ({ page }) => {
+  await installKiMock(page, true);
+  const pdf = (await readFile("src-tauri/resources/ki/ki-leitlinie-2026-11-10.pdf")).toString("base64");
+  await page.addInitScript(({ pdf }) => {
+    const w = window as any; const invoke = w.__TAURI_INTERNALS__.invoke;
+    w.__TAURI_INTERNALS__.invoke = async (command: string, args: any) => {
+      if (command === "import_ki_pdf") return { name: args.name, sha256: "3d0aa3ce7b3745c51b63485f85bbd9f0b9f2825a5f1e9197c765a153ff3fab72" };
+      if (command === "get_ki_pdf") return pdf;
+      return invoke(command, args);
+    };
+  }, { pdf });
+  await page.goto("/");
+  await page.getByRole("button", { name: "EDV Tools", exact: true }).click();
+  await page.getByLabel("EDV-Kennwort", { exact: true }).fill("test-edv");
+  await page.getByRole("button", { name: "EDV Tools öffnen" }).click();
+  await page.getByRole("navigation", { name: "Unterseiten der EDV Tools" }).getByRole("button", { name: "KI", exact: true }).click();
+  await page.getByLabel("PDF hinzufügen / durch neue Fassung ersetzen").setInputFiles({ name: "KI-Test-Neufassung.pdf", mimeType: "application/pdf", buffer: Buffer.from(pdf, "base64") });
+  await expect(page.getByRole("status").filter({ hasText: "Neues PDF importiert" })).toBeVisible();
+  await expect(page.getByLabel("Dokumentversion")).toHaveValue("");
+  await expect(page.getByRole("checkbox", { name: /Offizielle Richtlinien veröffentlichen/ })).not.toBeChecked();
+  await page.getByRole("button", { name: "Speichern", exact: true }).click();
+  await expect(page.getByRole("status").filter({ hasText: "Entwurf gespeichert" })).toBeVisible();
+  await page.getByRole("navigation", { name: "Hauptmenü" }).getByRole("button", { name: "KI", exact: true }).click();
+  await openKiForms(page);
+  await expect(page.getByRole("button", { name: "Bestätigung ausfüllen" })).toBeDisabled();
+});
+
+test("KI permite à EDV publicar documento e consultar confirmação assinada", async ({ page }, testInfo) => {
+  await installKiMock(page, false);
+  await page.goto("/");
+  const nav = page.getByRole("navigation", { name: "Hauptmenü" });
+  const openSettings = async () => {
+    await page.getByRole("button", { name: "EDV Tools", exact: true }).click();
+    await page.getByLabel("EDV-Kennwort", { exact: true }).fill("test-edv");
+    await page.getByRole("button", { name: "EDV Tools öffnen" }).click();
+    await page.getByRole("navigation", { name: "Unterseiten der EDV Tools" }).getByRole("button", { name: "KI", exact: true }).click();
+  };
+  await openSettings();
+  await page.getByLabel("Titel", { exact: true }).fill("KI-Testdokument 2");
+  await page.getByLabel("Dokumentversion").fill("2.0");
+  await page.getByLabel("Offizieller Richtlinientext").fill("Ein weiterer Testtext, keine offiziellen Richtlinien.");
+  await page.getByRole("checkbox", { name: /Offizielle Richtlinien veröffentlichen/ }).check();
+  await page.getByRole("button", { name: "Speichern", exact: true }).click();
+  await expect(page.getByRole("status")).toContainText("Richtlinien veröffentlicht");
+  await nav.getByRole("button", { name: "KI", exact: true }).click();
+  await openKiArea(page, "Richtlinien");
+  await expect(page.getByRole("region", { name: "KI-Richtlinie" }).getByText("KI-Testdokument 2", { exact: true })).toBeVisible();
+  await openKiForms(page);
+  await page.getByRole("button", { name: "Bestätigung ausfüllen" }).click();
+  await page.getByLabel("Vor- und Nachname", { exact: true }).fill("Anna Muster");
+  await page.getByLabel("E-Mail", { exact: true }).fill("anna@example.test");
+  await page.getByRole("checkbox", { name: "Richtlinie gelesen und verstanden" }).check();
+  await page.getByRole("button", { name: "Weiter", exact: true }).click();
+  await page.getByLabel("Datum der Schulung").fill("2026-01-01");
+  await page.getByRole("checkbox", { name: "Schulung vollständig besucht" }).check();
+  await page.getByRole("button", { name: "Weiter", exact: true }).click();
+  await page.getByRole("group", { name: "Art der Unterschrift" }).getByRole("button", { name: "Name", exact: true }).click();
+  await page.getByRole("button", { name: "Verbindlich bestätigen" }).click();
+  await expect(page.getByRole("heading", { name: "Bestätigung gespeichert" })).toBeVisible();
+  await page.getByRole("dialog").getByRole("button", { name: "Schließen", exact: true }).click();
+  await openSettings();
+  await page.getByRole("button", { name: "Nachweise (1)", exact: true }).click();
+  await page.getByRole("table", { name: "KI-Nachweise" }).getByRole("button", { name: "Anna Muster", exact: true }).click();
+  await expect(page.getByAltText("Unterschrift von Anna Muster")).toBeVisible();
+  await expect(page.getByRole("dialog")).toContainText("2.0");
+  await page.screenshot({ path: testInfo.outputPath("ki-edv-nachweis.png"), fullPage: true });
+});
+
+test("KI confirma leitura e aula com assinatura desenhada, digitada ou importada", async ({ page }, testInfo) => {
+  await installKiMock(page, true);
+  await page.goto("/");
+  await page.getByRole("navigation", { name: "Hauptmenü" }).getByRole("button", { name: "KI", exact: true }).click();
+  await openKiForms(page);
+  await page.getByRole("button", { name: "Bestätigung ausfüllen" }).click();
+  let drawnSignature = "";
+  for (const method of ["draw", "typed", "import"]) {
+    await expect(page.getByRole("button", { name: "Weiter", exact: true })).toBeDisabled();
+    await page.getByLabel("Vor- und Nachname", { exact: true }).fill("Anna Muster");
+    await page.getByLabel("E-Mail", { exact: true }).fill("anna@example.test");
+    await page.getByRole("checkbox", { name: "Richtlinie gelesen und verstanden" }).check();
+    await page.getByRole("button", { name: "Weiter", exact: true }).click();
+    await page.getByLabel("Datum der Schulung").fill("2026-01-01");
+    await page.getByRole("checkbox", { name: "Schulung vollständig besucht" }).check();
+    await page.getByRole("button", { name: "Weiter", exact: true }).click();
+    await page.getByRole("group", { name: "Art der Unterschrift" }).getByRole("button", { name: method === "draw" ? "Zeichnen" : method === "typed" ? "Name" : "Bild", exact: true }).click();
+    if (method === "draw") {
+      const canvas = page.getByLabel("Unterschrift mit der Maus zeichnen");
+      await canvas.scrollIntoViewIfNeeded();
+      const rect = (await canvas.boundingBox())!;
+      await page.mouse.move(rect.x + 30, rect.y + 40); await page.mouse.down();
+      await page.mouse.move(rect.x + 90, rect.y + 65, { steps: 8 });
+      await page.mouse.move(rect.x + 130, rect.y + 30, { steps: 8 }); await page.mouse.up();
+      drawnSignature = await canvas.evaluate((element: HTMLCanvasElement) => element.toDataURL());
+      const alphaSum = await canvas.evaluate((element: HTMLCanvasElement) => element.getContext("2d")!.getImageData(0, 0, 900, 220).data.reduce((sum, value, index) => sum + (index % 4 === 3 ? value : 0), 0));
+      await page.getByRole("dialog").getByRole("button", { name: "Schließen", exact: true }).click();
+      await page.getByRole("button", { name: "Bestätigung ausfüllen" }).click();
+      await page.getByRole("navigation", { name: "Bestätigungsschritte" }).getByRole("button", { name: "Unterschrift", exact: true }).click();
+      await expect.poll(() => canvas.evaluate((element: HTMLCanvasElement) => element.getContext("2d")!.getImageData(0, 0, 900, 220).data.reduce((sum, value, index) => sum + (index % 4 === 3 ? value : 0), 0))).toBe(alphaSum);
+    } else if (method === "import") {
+      const image = await page.evaluate(() => {
+        const canvas = document.createElement("canvas"); canvas.width = 250; canvas.height = 80;
+        const ctx = canvas.getContext("2d")!; ctx.font = "30px cursive"; ctx.fillText("Anna", 15, 50);
+        return canvas.toDataURL("image/png").split(",")[1];
+      });
+      await page.getByLabel("Bilddatei").setInputFiles({ name: "signature.png", mimeType: "image/png", buffer: Buffer.from(image, "base64") });
+      await expect(page.getByAltText("Importierte Unterschrift")).toBeVisible();
+    }
+    await expect(page.getByRole("button", { name: "Verbindlich bestätigen" })).toBeEnabled();
+    if (method === "typed") {
+      await page.screenshot({ path: testInfo.outputPath("ki-bestaetigung.png"), fullPage: true });
+      for (const width of [760, 520]) {
+        await page.setViewportSize({ width, height: 700 });
+        const dialog = page.getByRole("dialog", { name: "Bestätigung", exact: true });
+        expect(await dialog.evaluate((element) => element.scrollWidth > element.clientWidth + 1)).toBe(false);
+        await expect(page.getByRole("button", { name: "Verbindlich bestätigen" })).toBeInViewport();
+        if (width === 760) await page.screenshot({ path: testInfo.outputPath("ki-bestaetigung-compact.png") });
+      }
+      await page.setViewportSize({ width: 1440, height: 900 });
+    }
+    await page.getByRole("button", { name: "Verbindlich bestätigen" }).click();
+    await expect(page.getByRole("heading", { name: "Bestätigung gespeichert" })).toBeVisible();
+    await page.getByRole("button", { name: "Weitere Bestätigung" }).click();
+  }
+  const records = await page.evaluate(() => (window as any).__DMH_KI_RECEIPTS__);
+  expect(records.map((record: any) => record.signatureMethod)).toEqual(["draw", "typed", "import"]);
+  expect(records[0].signaturePng).toBe(drawnSignature);
+  expect(records.every((record: any) => record.signaturePng.startsWith("data:image/png;base64,") && record.revision === "ki-r1" && record.readConfirmed && record.trainingConfirmed)).toBe(true);
+});
 
 async function installTauriMock(page: Page, contacts: MockContact[], options: { loadDelayMs?: number; calendarEvents?: CalendarEvent[]; auditEntries?: AuditLogEntry[]; emailSave?: boolean } = {}) {
   await page.addInitScript(({ seedContacts, seedCalendarEvents, loadDelayMs, auditEntries, emailSave }) => {
@@ -598,6 +899,139 @@ test("mini calendário permite navegar por meses, semanas, ano e teclado sem per
   await page.setViewportSize({width:800,height:900});
   await page.locator(".advanced-calendar-navigation").screenshot({ path:testInfo.outputPath("mini-kalender-klein.png") });
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+});
+
+test("M365 mostra janela antes de consultar o PC e mantém progresso durante toda migração", async ({ page }, testInfo) => {
+  await installTauriMock(page, []);
+  await page.addInitScript(() => {
+    const w = window as any; const invoke = w.__TAURI_INTERNALS__.invoke;
+    const originalTransform = w.__TAURI_INTERNALS__.transformCallback;
+    const callbacks = new Map(); let progressCallback: any;
+    w.__TAURI_INTERNALS__.transformCallback = (callback: any) => { const id = originalTransform(callback); callbacks.set(id, callback); return id; };
+    const email = "anna@example.test";
+    const account = { id: "anna", displayName: "Anna Test", email, userPrincipalName: email, connectedAt: "2026-11-11T10:00:00Z" };
+    const status = { stage: "ready", email, previousProfile: "Outlook", exchangeProfile: "Profile Exchange", imapProfile: "Profile IMAP", message: "" };
+    w.__DMH_MIGRATION_CALLS__ = [];
+    w.__TAURI_INTERNALS__.invoke = async (command: string, args: any) => {
+      if (command === "plugin:event|listen" && args.event === "dmh:outlook-setup-progress") progressCallback = callbacks.get(args.handler);
+      if (command === "get_m365_connection_status") { await new Promise(resolve => setTimeout(resolve, 300)); return { configured: true, connected: true, account }; }
+      if (command === "get_app_setting" && args.key === "m365_complete_automatic_sync_initialized_v1") return "true";
+      if (command === "get_outlook_account_configuration") {
+        if (w.__DMH_SETUP_COMPLETE__) {
+          await new Promise<void>(resolve => { w.__DMH_FINISH_REFRESH__ = resolve; });
+          return { email, defaultProfile: "Profile Exchange", profile: "Profile Exchange", source: "default", accounts: [] };
+        }
+        await new Promise(resolve => setTimeout(resolve, 200));
+        return { email, defaultProfile: "Outlook", profile: "Outlook", source: "default", accounts: [] };
+      }
+      if (command === "get_outlook_exchange_setup_status") return status;
+      if (command === "get_outlook_office_account_check") { await new Promise(resolve => setTimeout(resolve, 300)); return { dmhEmail: email, dmhEmails: [email], accounts: [{ email, displayName: "Anna" }], suggestedEmail: email, readSucceeded: true }; }
+      if (command === "prepare_outlook_exchange_profile") {
+        w.__DMH_MIGRATION_CALLS__.push(args);
+        progressCallback?.({ payload: { email, value: 2, label: "Outlook-Profile werden geprüft …" } });
+        return new Promise(resolve => { w.__DMH_FINISH_PREPARE__ = () => resolve({ ...status, stage: "connected" }); });
+      }
+      if (command === "complete_outlook_exchange_profile") {
+        progressCallback?.({ payload: { email, value: 5, label: "Standardprofil wird eingerichtet …" } });
+        return new Promise(resolve => { w.__DMH_FINISH_SETUP__ = () => { w.__DMH_SETUP_COMPLETE__ = true; resolve({ ...status, stage: "complete", message: "Exchange eingerichtet." }); }; });
+      }
+      return invoke(command, args);
+    };
+  });
+  await page.goto("/");
+  await page.getByRole("navigation", { name: "Hauptmenü" }).getByRole("button", { name: "Microsoft 365", exact: true }).click();
+  await expect(page.getByRole("dialog", { name: /Microsoft-365-Verbindung wird geprüft/ })).toBeVisible();
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+  await page.getByRole("button", { name: "Zu Exchange wechseln", exact: true }).click();
+  const progress = page.getByRole("dialog", { name: "Wird eingerichtet. Bitte warten und die Anwendung nicht schließen." });
+  await expect(progress).toBeVisible();
+  await expect(progress.getByRole("progressbar")).toHaveAttribute("value", "2");
+  await expect(page.getByRole("dialog", { name: "Excel-Konto prüfen" })).toHaveCount(0);
+  await expect(page.getByRole("checkbox", { name: /Ich habe in Excel/ })).toHaveCount(0);
+  const assertCentered = async () => {
+    await expect.poll(async () => progress.evaluate((element) => {
+      const box = element.getBoundingClientRect();
+      return Math.max(Math.abs(box.x + box.width / 2 - innerWidth / 2), Math.abs(box.y + box.height / 2 - innerHeight / 2));
+    })).toBeLessThan(2);
+  };
+  await assertCentered();
+  const originalViewport = page.viewportSize()!;
+  await page.setViewportSize({ width: 720, height: 420 });
+  await page.evaluate(() => { document.scrollingElement?.scrollTo(0, 600); document.querySelector("main")?.scrollTo(0, 400); });
+  await assertCentered();
+  await page.setViewportSize(originalViewport);
+  await assertCentered();
+  await page.screenshot({ path: testInfo.outputPath("m365-migration-progress.png") });
+  expect(await page.evaluate(() => (window as any).__DMH_MIGRATION_CALLS__)).toEqual([{ excelEmail: "anna@example.test", excelAccountConfirmed: false, automaticAccountCheck: true, closeExistingOutlook: true }]);
+  await page.evaluate(() => (window as any).__DMH_FINISH_PREPARE__());
+  await expect(progress.getByRole("progressbar")).toHaveAttribute("value", "5");
+  await page.evaluate(() => (window as any).__DMH_FINISH_SETUP__());
+  await expect.poll(() => page.evaluate(() => typeof (window as any).__DMH_FINISH_REFRESH__)).toBe("function");
+  await expect(progress).toBeVisible();
+  await expect(page.getByText("Exchange eingerichtet.", { exact: true })).toHaveCount(0);
+  await page.evaluate(() => (window as any).__DMH_FINISH_REFRESH__());
+  await expect(page.getByText("Exchange eingerichtet.", { exact: true })).toBeVisible();
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+  await expect(page.getByText("Standardprofil:", { exact: false })).toContainText("Profile Exchange");
+});
+
+test("M365 mantém carregamento após login até terminar a última consulta do Outlook", async ({ page }, testInfo) => {
+  await installTauriMock(page, []);
+  await page.addInitScript(() => {
+    const w = window as any;
+    const original = w.__TAURI_INTERNALS__.invoke;
+    let connected = false;
+    const account = { id: "one", displayName: "Anna Windows", email: "anna@example.test", userPrincipalName: "anna@example.test", connectedAt: "2026-10-13T12:00:00Z" };
+    const settings: Record<string, string> = { m365_complete_automatic_sync_initialized_v1: "true" };
+    const sourcesReady = new Promise<void>(resolve => { w.__RELEASE_M365_SOURCES__ = resolve; });
+    const outlookReady = new Promise<void>(resolve => { w.__RELEASE_M365_OUTLOOK__ = resolve; });
+    w.__TAURI_INTERNALS__.invoke = async (command: string, args: any) => {
+      if (command === "get_m365_connection_status") return { configured: true, connected, account: connected ? account : null };
+      if (command === "get_app_setting") return settings[args.key] ?? null;
+      if (command === "set_app_setting") { settings[args.key] = args.value; return null; }
+      if (command === "connect_m365_with_windows_account") {
+        w.__LOGIN_SAW_LOADING__ = Boolean(document.querySelector("dialog.m365-loading-window[open]"));
+        connected = true;
+        return account;
+      }
+      if (command === "list_m365_sync_sources") {
+        w.__M365_SOURCES_PENDING__ = true;
+        await sourcesReady;
+        return { contacts: [], calendars: [], warnings: [] };
+      }
+      if (command === "get_outlook_account_configuration") {
+        w.__M365_OUTLOOK_PENDING__ = true;
+        await outlookReady;
+        return { email: account.email, defaultProfile: "Exchange", source: "default", accounts: [] };
+      }
+      if (command === "get_outlook_exchange_setup_status") return { stage: "ready", email: account.email };
+      return original(command, args);
+    };
+  });
+  await page.goto("/");
+  await page.getByRole("navigation", { name: "Hauptmenü" }).getByRole("button", { name: "Microsoft 365", exact: true }).click();
+  await page.getByRole("button", { name: "Mit Microsoft 365 verbinden", exact: true }).click();
+  await expect.poll(() => page.evaluate(() => Boolean((window as any).__M365_SOURCES_PENDING__ && (window as any).__M365_OUTLOOK_PENDING__))).toBe(true);
+  const loading = page.getByRole("dialog");
+  await expect(loading).toBeVisible();
+  expect(await page.evaluate(() => (window as any).__LOGIN_SAW_LOADING__)).toBe(true);
+  await page.evaluate(() => {
+    const w = window as any;
+    w.__M365_LOADING_NODE__ = document.querySelector("dialog.m365-loading-window");
+    w.__M365_LOADING_REMOVED__ = false;
+    new MutationObserver(() => {
+      if (!w.__M365_LOADING_NODE__.isConnected) w.__M365_LOADING_REMOVED__ = true;
+    }).observe(document.body, { childList: true, subtree: true });
+    w.__RELEASE_M365_SOURCES__();
+  });
+  // Sources and the first sync have settled, but Outlook is still deliberately held.
+  await expect(page.getByText("nicht vollständig geladen", { exact: false })).toHaveCount(1);
+  await expect(loading).toBeVisible();
+  expect(await page.evaluate(() => (window as any).__M365_LOADING_REMOVED__)).toBe(false);
+  await page.screenshot({ path: testInfo.outputPath("m365-connection-loading.png") });
+  await page.evaluate(() => (window as any).__RELEASE_M365_OUTLOOK__());
+  await expect(loading).toHaveCount(0);
+  await expect(page.getByText("Standardprofil:", { exact: false })).toBeVisible();
 });
 
 test("M365 Anmeldung usa conta Windows, permite escolher outra e mantém o login fora da sincronização automática", async ({ page }, testInfo) => {

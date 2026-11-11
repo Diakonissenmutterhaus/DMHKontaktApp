@@ -11,7 +11,7 @@ use std::{
     process::Stdio,
     time::Duration,
 };
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Emitter, Manager};
 use tokio::io::AsyncWriteExt;
 
 static SETUP_GATE: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
@@ -19,6 +19,13 @@ const SCRIPT: &str = include_str!("outlook_exchange_profile.ps1");
 // m365_ is excluded from portable exports/restores: Outlook profiles belong to
 // this Windows account and cannot travel with the contact/calendar backup.
 const STATE_PREFIX: &str = "m365_outlook_exchange_setup_v1_";
+
+fn setup_progress(app: &AppHandle, email: &str, value: u8, label: &str) {
+    let _ = app.emit(
+        "dmh:outlook-setup-progress",
+        serde_json::json!({"email":email,"value":value,"label":label}),
+    );
+}
 
 pub(crate) fn is_setup_state_key(key: &str) -> bool {
     key.starts_with(STATE_PREFIX)
@@ -54,6 +61,8 @@ struct SetupState {
     launched_started_at: Option<String>,
     #[serde(default)]
     confirmed_excel_email: Option<String>,
+    #[serde(default)]
+    automatic_close: bool,
 }
 
 #[derive(Deserialize)]
@@ -733,7 +742,10 @@ pub async fn open_outlook_profile(profile: String) -> Result<serde_json::Value, 
 }
 
 #[tauri::command]
-pub async fn get_outlook_exchange_setup_status(app: AppHandle) -> Result<SetupStatus, String> {
+pub async fn get_outlook_exchange_setup_status(
+    app: AppHandle,
+    background: Option<bool>,
+) -> Result<SetupStatus, String> {
     if !cfg!(windows) {
         return Ok(initial(
             String::new(),
@@ -746,6 +758,11 @@ pub async fn get_outlook_exchange_setup_status(app: AppHandle) -> Result<SetupSt
         .map_err(|_| "Die Outlook-Einrichtung läuft bereits.")?;
     let _process_guard = process_lock(&app)?;
     let (id, email) = m365::outlook_profile_identity(&app)?;
+    if background == Some(true) {
+        if let Some(state) = read_state(&app, &id, &email)? {
+            let _: serde_json::Value = powershell(serde_json::json!({"operation":"hide-setup-process","processId":state.launched_process_id,"startedAt":state.launched_started_at,"profile":state.exchange_profile,"authorized":state.automatic_close})).await?;
+        }
+    }
     current_status(&app, &id, &email).await
 }
 
@@ -759,11 +776,53 @@ pub async fn get_outlook_office_account_check(app: AppHandle) -> Result<serde_js
     Ok(office)
 }
 
+fn automatic_office_email(
+    office: &serde_json::Value,
+    aliases: &[String],
+) -> Result<String, String> {
+    let unknown = "Das Office-Konto konnte nicht automatisch ermittelt werden. Bitte in Excel unter Datei → Konto anmelden und erneut versuchen.";
+    if office.get("readSucceeded").and_then(|v| v.as_bool()) != Some(true) {
+        return Err(unknown.into());
+    }
+    let accounts = office
+        .get("accounts")
+        .and_then(|v| v.as_array())
+        .filter(|a| !a.is_empty())
+        .ok_or(unknown)?;
+    let matches = |email: &str| {
+        !email.is_empty()
+            && aliases
+                .iter()
+                .any(|alias| alias.eq_ignore_ascii_case(email))
+    };
+    if accounts
+        .iter()
+        .any(|a| !matches(a.get("email").and_then(|v| v.as_str()).unwrap_or("")))
+    {
+        return Err("Die Office-Konten stimmen nicht eindeutig mit dem DMH-Konto überein. In DMH und Excel muss dasselbe Geschäftskonto angemeldet sein. Bitte die Konten prüfen und erneut versuchen.".into());
+    }
+    let suggested = office
+        .get("suggestedEmail")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    if !suggested.is_empty() && !matches(suggested) {
+        return Err("Das bevorzugte Office-Konto unterscheidet sich vom DMH-Konto. Bitte in DMH und Excel dasselbe Geschäftskonto verbinden.".into());
+    }
+    Ok(if suggested.is_empty() {
+        accounts[0]["email"].as_str().ok_or(unknown)?
+    } else {
+        suggested
+    }
+    .to_owned())
+}
+
 #[tauri::command]
 pub async fn prepare_outlook_exchange_profile(
     app: AppHandle,
     excel_email: String,
     excel_account_confirmed: bool,
+    close_existing_outlook: bool,
+    automatic_account_check: Option<bool>,
 ) -> Result<SetupStatus, String> {
     if m365::get_m365_read_only_test_mode() {
         return Err(
@@ -781,19 +840,66 @@ pub async fn prepare_outlook_exchange_profile(
         .try_lock()
         .map_err(|_| "Die Outlook-Einrichtung läuft bereits.")?;
     let _process_guard = process_lock(&app)?;
-    m365::confirm_excel_account(&app, &excel_email, excel_account_confirmed)?;
+    if automatic_account_check == Some(true) {
+        let office: serde_json::Value =
+            powershell(serde_json::json!({"operation":"office-accounts"})).await?;
+        let aliases = m365::excel_account_aliases(&app)?;
+        let detected = automatic_office_email(&office, &aliases)?;
+        if !detected.eq_ignore_ascii_case(&excel_email) {
+            return Err(
+                "Das Office-Konto wurde inzwischen geändert. Bitte erneut versuchen.".into(),
+            );
+        }
+        m365::confirm_excel_account(&app, &excel_email, true)?;
+    } else {
+        m365::confirm_excel_account(&app, &excel_email, excel_account_confirmed)?;
+    }
+    setup_progress(&app, &excel_email, 0, "Microsoft-Konto wird geprüft …");
     m365::test_m365_connection(app.clone()).await?;
     let (id, email) = m365::outlook_profile_identity(&app)?;
-    let installed = inventory().await?;
+    let mut installed = inventory().await?;
     if installed.executable.is_empty() {
         return Ok(initial(email, "unavailable", "Bitte Outlook Classic installieren. Das neue Outlook unterstützt diese Profileinrichtung nicht."));
     }
     let path = helper_path(&app, &installed.executable)?;
     let mut saved = read_state(&app, &id, &email)?;
+    if let Some(state) = saved.as_mut() {
+        state.automatic_close = close_existing_outlook;
+        state.confirmed_excel_email = Some(excel_email.clone());
+        save_state(&app, state)?;
+    }
     let profiles: ProfileList = helper(&path, &["exchange-list"]).await?;
     if let Some(existing) = configured_exchange_default(&email, &profiles.profiles).await? {
         return Ok(existing);
     }
+    if installed.running && close_existing_outlook {
+        // A resumed Exchange login must finish before its Outlook is closed.
+        if let Some(state) = saved.as_ref() {
+            let connection = probe().await?;
+            if connection
+                .active_profile
+                .eq_ignore_ascii_case(&state.exchange_profile)
+            {
+                return current_status(&app, &id, &email).await;
+            }
+        }
+        setup_progress(&app, &email, 1, "Outlook wird geschlossen …");
+        let closed: serde_json::Value =
+            powershell(serde_json::json!({"operation":"close-for-migration","authorized":true}))
+                .await?;
+        installed = inventory().await?;
+        if installed.running {
+            let message = if closed.get("reason").and_then(|value| value.as_str())
+                == Some("user_work")
+            {
+                "Outlook enthält ein geöffnetes Element oder einen Entwurf. Bitte speichern und schließen; anschließend die Einrichtung fortsetzen."
+            } else {
+                "Outlook konnte noch nicht regulär geschlossen werden. Bitte offene Outlook-Dialoge prüfen und die Einrichtung fortsetzen."
+            };
+            return Ok(initial(email, "outlook_open", message));
+        }
+    }
+    setup_progress(&app, &email, 2, "Outlook-Profile werden geprüft …");
     if saved.as_ref().is_some_and(|state| {
         state.phase != "reserved"
             && !profiles
@@ -865,6 +971,7 @@ pub async fn prepare_outlook_exchange_profile(
             launched_process_id: None,
             launched_started_at: None,
             confirmed_excel_email: Some(excel_email.clone()),
+            automatic_close: close_existing_outlook,
         };
         save_state(&app, &state)?;
         state
@@ -896,6 +1003,7 @@ pub async fn prepare_outlook_exchange_profile(
         .iter()
         .any(|profile| profile.name.eq_ignore_ascii_case(&state.exchange_profile))
     {
+        setup_progress(&app, &email, 3, "Exchange-Profil wird vorbereitet …");
         let command = if state.windows_sso {
             "exchange-create-windows-sso"
         } else {
@@ -920,6 +1028,12 @@ pub async fn prepare_outlook_exchange_profile(
     if m365::outlook_profile_identity(&app)? != (id.clone(), email.clone()) {
         return Err("Das Microsoft-365-Konto wurde während der Einrichtung geändert. Bitte erneut versuchen.".into());
     }
+    setup_progress(
+        &app,
+        &email,
+        4,
+        "Outlook wird im Hintergrund eingerichtet …",
+    );
     let launched: serde_json::Value =
         powershell(serde_json::json!({"operation":"launch","profile":state.exchange_profile,"email":email,"windowsSso":state.windows_sso}))
             .await?;
@@ -972,13 +1086,24 @@ pub async fn complete_outlook_exchange_profile(app: AppHandle) -> Result<SetupSt
     if !previously_verified && !proves_connection(&probe().await?, &state) {
         return Ok(status(&state, "awaiting_login", "Die Verbindung zur richtigen Exchange-Mailbox ist noch nicht bestätigt. Bitte die Anmeldung in Outlook abschließen; der bisherige Standard bleibt erhalten."));
     }
+    setup_progress(
+        &app,
+        &email,
+        5,
+        "Verbindung bestätigt. Standardprofil wird eingerichtet …",
+    );
     let mut installed = inventory().await?;
     if installed.running {
         if !previously_verified {
             state.phase = "verified".into();
             save_state(&app, &state)?;
         }
-        let closed: serde_json::Value = powershell(serde_json::json!({"operation":"close-setup-process", "processId":state.launched_process_id, "startedAt":state.launched_started_at, "profile":state.exchange_profile})).await?;
+        let mut closed: serde_json::Value = powershell(serde_json::json!({"operation":"close-setup-process", "processId":state.launched_process_id, "startedAt":state.launched_started_at, "profile":state.exchange_profile})).await?;
+        if state.automatic_close
+            && closed.get("reason").and_then(|value| value.as_str()) == Some("not_owned")
+        {
+            closed = powershell(serde_json::json!({"operation":"close-for-migration","authorized":true,"profile":state.exchange_profile})).await?;
+        }
         if closed.get("closed").and_then(|value| value.as_bool()) != Some(true) {
             let needs_user = matches!(
                 closed.get("reason").and_then(|value| value.as_str()),
@@ -1085,6 +1210,33 @@ mod tests {
     use super::*;
 
     #[test]
+    fn automatic_office_account_requires_unambiguous_matching_metadata() {
+        let aliases = vec![
+            "anna@example.test".to_owned(),
+            "anna@tenant.test".to_owned(),
+        ];
+        let matching = serde_json::json!({"readSucceeded":true,"accounts":[{"email":"ANNA@example.test"}],"suggestedEmail":"anna@example.test"});
+        assert_eq!(
+            automatic_office_email(&matching, &aliases).unwrap(),
+            "anna@example.test"
+        );
+        for invalid in [
+            serde_json::json!({"readSucceeded":false,"accounts":[{"email":"anna@example.test"}]}),
+            serde_json::json!({"readSucceeded":true,"accounts":[]}),
+            serde_json::json!({"readSucceeded":true,"accounts":[{"email":"admin@example.test"}]}),
+            serde_json::json!({"readSucceeded":true,"accounts":[{"email":"anna@example.test"},{"email":"admin@example.test"}]}),
+            serde_json::json!({"readSucceeded":true,"accounts":[{"email":"anna@example.test"}],"suggestedEmail":"admin@example.test"}),
+        ] {
+            assert!(automatic_office_email(&invalid, &aliases).is_err());
+        }
+        let aliases_only = serde_json::json!({"readSucceeded":true,"accounts":[{"email":"anna@example.test"},{"email":"anna@tenant.test"}]});
+        assert_eq!(
+            automatic_office_email(&aliases_only, &aliases).unwrap(),
+            "anna@example.test"
+        );
+    }
+
+    #[test]
     fn completion_requires_native_default_and_automatic_startup() {
         let profiles = vec![Profile {
             name: "Profile Exchange".into(),
@@ -1127,6 +1279,7 @@ mod tests {
             launched_process_id: None,
             launched_started_at: None,
             confirmed_excel_email: Some("anna@example.test".into()),
+            automatic_close: false,
         }
     }
     fn connection() -> Probe {

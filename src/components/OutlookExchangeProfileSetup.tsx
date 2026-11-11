@@ -1,51 +1,23 @@
 import { CheckCircle2, LoaderCircle, Mail, RefreshCw } from "lucide-react";
-import { useCallback, useEffect, useId, useRef, useState, type ReactNode } from "react";
-import { createPortal } from "react-dom";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { listen } from "@tauri-apps/api/event";
+import { M365Loading, showM365LoadingFrame } from "./M365Loading";
 import { completeOutlookExchangeProfile, getOutlookExchangeSetupStatus, getOutlookOfficeAccountCheck, prepareOutlookExchangeProfile } from "../services/db";
-import type { OutlookExchangeSetupStatus, OutlookOfficeAccountCheck } from "../types/outlookExchange";
-import type { Microsoft365Account } from "../types/m365";
-import { OutlookOfficeAccountDialog } from "./OutlookOfficeAccountDialog";
+import type { OutlookExchangeSetupStatus } from "../types/outlookExchange";
 import "./OutlookExchangeProfileSetup.css";
+import { refreshOutlookProfileViews } from "../utils/outlookProfileRefresh";
 
 interface OutlookExchangeProfileSetupProps {
   email: string;
   disabled?: boolean;
   compact?: boolean;
   leadingAction?: ReactNode;
-  onAccountChanged?: (account: Microsoft365Account) => void;
 }
 
 const pollIntervalMs = 4_000;
 const pollingLimitMs = 4 * 60_000;
 
-function SetupLoadingDialog() {
-  const messageId = useId();
-  const dialog = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    const previousFocus = document.activeElement;
-    const root = document.getElementById("root");
-    const previousInert = root?.getAttribute("inert");
-    root?.setAttribute("inert", "");
-    dialog.current?.focus();
-    return () => {
-      if (previousInert == null) root?.removeAttribute("inert");
-      else root?.setAttribute("inert", previousInert);
-      if (previousFocus instanceof HTMLElement && previousFocus.isConnected) previousFocus.focus();
-    };
-  }, []);
-  return createPortal(
-    <div className="modal-backdrop outlook-setup-loading-backdrop">
-      <div ref={dialog} className="modal-card outlook-setup-loading-dialog" role="dialog" aria-modal="true" aria-labelledby={messageId} aria-busy="true" tabIndex={-1} onKeyDown={(event) => {
-        if (event.key === "Tab" || event.key === "Escape") { event.preventDefault(); event.stopPropagation(); }
-      }}>
-        <LoaderCircle className="spin" size={22} aria-hidden="true" />
-        <p id={messageId} role="status">Wird eingerichtet. Bitte warten und die Anwendung nicht schließen.</p>
-      </div>
-    </div>, document.body
-  );
-}
-
-export function OutlookExchangeProfileSetup({ email, disabled = false, compact = false, leadingAction, onAccountChanged }: OutlookExchangeProfileSetupProps) {
+export function OutlookExchangeProfileSetup({ email, disabled = false, compact = false, leadingAction }: OutlookExchangeProfileSetupProps) {
   const [status, setStatus] = useState<OutlookExchangeSetupStatus | null>(null);
   const [busy, setBusy] = useState(false);
   const [finishing, setFinishing] = useState(false);
@@ -56,9 +28,18 @@ export function OutlookExchangeProfileSetup({ email, disabled = false, compact =
   const requestId = useRef(0);
   const mounted = useRef(true);
   const deadline = useRef(0);
-  const [officeCheck, setOfficeCheck] = useState<OutlookOfficeAccountCheck | null>(null);
-  const confirmedExcelEmail = useRef<string | null>(null);
-  const pendingAction = useRef<"prepare" | "check">("prepare");
+  const detectedOfficeEmail = useRef<string | null>(null);
+  const [initialLoading, setInitialLoading] = useState(true);
+  const [progress, setProgress] = useState({ value: 0, label: "Informationen werden geprüft …" });
+  const progressListener = useRef<Promise<(() => void) | undefined>>(Promise.resolve(undefined));
+
+  useEffect(() => {
+    const pending = listen<{ email: string; value: number; label: string }>("dmh:outlook-setup-progress", ({ payload }) => {
+      if (payload.email.toLowerCase() === email.toLowerCase() && mounted.current && payload.value >= 0 && payload.value <= 6) setProgress({ value: payload.value, label: payload.label });
+    }).catch(() => undefined);
+    progressListener.current = pending;
+    return () => { void pending.then((unlisten) => unlisten?.()); };
+  }, [email]);
 
   useEffect(() => {
     mounted.current = true;
@@ -76,7 +57,7 @@ export function OutlookExchangeProfileSetup({ email, disabled = false, compact =
     // Restore an already completed view without creating/activating any profile.
     void getOutlookExchangeSetupStatus().then((next) => {
       if (!cancelled && currentRequest(id) && next.stage === "complete" && next.email.toLowerCase() === email.toLowerCase()) setStatus(next);
-    }).catch(() => undefined);
+    }).catch(() => undefined).finally(() => { if (!cancelled && currentRequest(id)) setInitialLoading(false); });
     return () => { cancelled = true; };
   }, [currentRequest, email]);
 
@@ -95,7 +76,7 @@ export function OutlookExchangeProfileSetup({ email, disabled = false, compact =
       try {
         accepted = await completeOutlookExchangeProfile();
       } finally {
-        if (currentRequest(id)) { setFinishing(false); setBusy(false); }
+        if (currentRequest(id)) setFinishing(false);
       }
       if (!currentRequest(id)) return null;
       if (accepted.email && accepted.email.toLowerCase() !== email.toLowerCase()) {
@@ -103,33 +84,44 @@ export function OutlookExchangeProfileSetup({ email, disabled = false, compact =
       }
       setConnectedPending(accepted.stage === "connected");
     }
+    if (accepted.stage === "complete") {
+      setBusy(true);
+      await refreshOutlookProfileViews();
+      if (!currentRequest(id)) return null;
+    }
     setStatus(accepted);
     if (accepted.stage !== "awaiting_login" && accepted.stage !== "awaiting_close") setPolling(false);
-    if (accepted.stage === "complete") window.dispatchEvent(new Event("dmh:outlook-profile-changed"));
     return accepted;
   }, [currentRequest, email]);
 
   const runAction = async (action: "prepare" | "check") => {
+    setInitialLoading(false);
     const id = ++requestId.current;
     setBusy(true);
     setPolling(false);
     setTimedOut(false);
     setError("");
+    setProgress({ value: 0, label: detectedOfficeEmail.current ? "Microsoft-Konto wird geprüft …" : "Office-Konten werden gelesen …" });
     deadline.current = Date.now() + pollingLimitMs;
     try {
-      if (!confirmedExcelEmail.current) {
+      await showM365LoadingFrame();
+      await progressListener.current;
+      if (!detectedOfficeEmail.current) {
         const check = await getOutlookOfficeAccountCheck();
         if (!currentRequest(id)) return;
         if (check.dmhEmail.toLowerCase() !== email.toLowerCase()) throw new Error("Das Microsoft-365-Konto wurde geändert. Bitte die Seite erneut öffnen.");
-        pendingAction.current = action;
-        setOfficeCheck(check);
-        return;
+        const aliases = check.dmhEmails.map((alias) => alias.toLowerCase());
+        if (!check.readSucceeded || !check.accounts.length) throw new Error("Das Office-Konto konnte nicht automatisch ermittelt werden. Bitte in Excel unter Datei → Konto anmelden und erneut versuchen. Es wurde kein Outlook-Profil geändert.");
+        if (check.accounts.some((account) => !aliases.includes(account.email.toLowerCase())) || (check.suggestedEmail && !aliases.includes(check.suggestedEmail.toLowerCase()))) {
+          throw new Error("Die Office-Konten stimmen nicht eindeutig mit dem DMH-Konto überein. In DMH und Excel muss dasselbe Geschäftskonto angemeldet sein. Bitte die Konten prüfen und erneut versuchen. Es wurde kein Outlook-Profil geändert.");
+        }
+        detectedOfficeEmail.current = check.suggestedEmail || check.accounts[0].email;
       }
-      const next = await (action === "prepare" ? prepareOutlookExchangeProfile(confirmedExcelEmail.current) : getOutlookExchangeSetupStatus());
+      const next = await (action === "prepare" ? prepareOutlookExchangeProfile(detectedOfficeEmail.current) : getOutlookExchangeSetupStatus(true));
       const accepted = await acceptStatus(next, id);
       if (currentRequest(id) && (accepted?.stage === "awaiting_login" || accepted?.stage === "awaiting_close")) setPolling(true);
     } catch (cause) {
-      confirmedExcelEmail.current = null;
+      detectedOfficeEmail.current = null;
       if (currentRequest(id)) setError(String(cause));
     } finally {
       if (currentRequest(id)) setBusy(false);
@@ -149,7 +141,7 @@ export function OutlookExchangeProfileSetup({ email, disabled = false, compact =
         return;
       }
       try {
-        const next = await getOutlookExchangeSetupStatus();
+        const next = await getOutlookExchangeSetupStatus(true);
         if (cancelled || !currentRequest(id)) return;
         const accepted = await acceptStatus(next, id);
         if (!cancelled && currentRequest(id) && (accepted?.stage === "awaiting_login" || accepted?.stage === "awaiting_close")) {
@@ -161,7 +153,9 @@ export function OutlookExchangeProfileSetup({ email, disabled = false, compact =
           setError(String(cause));
         }
       } finally {
-        if (!cancelled && currentRequest(id)) setBusy(false);
+        // Accepting completion ends the polling effect; its cleanup must not
+        // leave the shared loading window active after the final refresh.
+        if (currentRequest(id)) setBusy(false);
       }
     };
     timer = window.setTimeout(() => void poll(), pollIntervalMs);
@@ -179,12 +173,8 @@ export function OutlookExchangeProfileSetup({ email, disabled = false, compact =
 
   return (
     <section className={`outlook-exchange-setup${compact ? " outlook-exchange-setup-compact" : ""}`} aria-label="Outlook auf Exchange umstellen" aria-busy={configuring}>
-      {officeCheck && <OutlookOfficeAccountDialog check={officeCheck} onClose={() => setOfficeCheck(null)} onAccountChanged={onAccountChanged} onContinue={(chosenEmail) => {
-        confirmedExcelEmail.current = chosenEmail;
-        setOfficeCheck(null);
-        void runAction(pendingAction.current);
-      }} />}
-      {configuring ? <SetupLoadingDialog /> : status && !error && !timedOut && <div className={`outlook-exchange-setup-status${complete ? " complete" : ""}`} role="status" aria-live="polite">{complete && <CheckCircle2 size={19} aria-hidden="true" />}<span>{status.message}</span></div>}
+      <M365Loading active={configuring || initialLoading} message={configuring ? "Wird eingerichtet. Bitte warten und die Anwendung nicht schließen." : "Outlook-Informationen werden geladen. Bitte warten …"} value={configuring ? progress.value : undefined} label={configuring ? progress.label : undefined} priority={10} />
+      {!configuring && status && !error && !timedOut && <div className={`outlook-exchange-setup-status${complete ? " complete" : ""}`} role="status" aria-live="polite">{complete && <CheckCircle2 size={19} aria-hidden="true" />}<span>{status.message}</span></div>}
       {timedOut && <p role="status">Die automatische Prüfung wurde nach vier Minuten angehalten. Sie können die Anmeldung fertigstellen und die Verbindung erneut prüfen.</p>}
       {error && <p className="outlook-exchange-setup-error" role="alert">{error}</p>}
       {!configuring && (!complete || leadingAction) && <div className="button-row">

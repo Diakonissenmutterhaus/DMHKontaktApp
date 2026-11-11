@@ -1,8 +1,10 @@
 import { useEffect, useState } from "react";
-import { FolderOpen, Settings2 } from "lucide-react";
+import { FolderOpen, RefreshCw, Settings2 } from "lucide-react";
+import { M365Loading } from "./M365Loading";
 import { getOutlookAccountConfiguration, openOutlookDefaultProfile } from "../services/db";
 import { OutlookProfileManager } from "./OutlookProfileManager";
 import type { OutlookAccountConfiguration } from "../types/outlookExchange";
+import { outlookProfileChangedEventName, type OutlookProfileRefreshDetail } from "../utils/outlookProfileRefresh";
 
 export function OutlookAccountSummary({ email }: { email: string }) {
   const [configuration, setConfiguration] = useState<OutlookAccountConfiguration | null>(null);
@@ -26,38 +28,39 @@ export function OutlookAccountSummary({ email }: { email: string }) {
 
   useEffect(() => {
     let cancelled = false;
-    let pending = false;
-    const load = async () => {
-      if (pending) return;
-      pending = true;
+    let pending: Promise<void> | null = null;
+    const load = (): Promise<void> => {
+      if (pending) return pending;
       setLoading(true);
-      try {
-        const next = await getOutlookAccountConfiguration();
-        if (next.email.toLowerCase() !== email.toLowerCase()) throw new Error("Account changed");
-        if (!cancelled) {
-          setConfiguration(next);
-          setError(false);
+      pending = (async () => {
+        try {
+          const next = await getOutlookAccountConfiguration();
+          if (next.email.toLowerCase() !== email.toLowerCase()) throw new Error("Account changed");
+          if (!cancelled) {
+            setConfiguration(next);
+            setError(false);
+          }
+        } catch {
+          if (!cancelled) {
+            setConfiguration(null);
+            setError(true);
+          }
+        } finally {
+          pending = null;
+          if (!cancelled) setLoading(false);
         }
-      } catch {
-        if (!cancelled) {
-          setConfiguration(null);
-          setError(true);
-        }
-      } finally {
-        pending = false;
-        if (!cancelled) setLoading(false);
-      }
+      })();
+      return pending;
     };
     void load();
-    const onFocus = () => void load();
-    const timer = window.setInterval(onFocus, 15_000);
-    window.addEventListener("focus", onFocus);
-    window.addEventListener("dmh:outlook-profile-changed", onFocus);
+    const onChanged = (event: Event) => {
+      const query = load();
+      (event as CustomEvent<OutlookProfileRefreshDetail>).detail?.waitUntil?.(query);
+    };
+    window.addEventListener(outlookProfileChangedEventName, onChanged);
     return () => {
       cancelled = true;
-      window.clearInterval(timer);
-      window.removeEventListener("focus", onFocus);
-      window.removeEventListener("dmh:outlook-profile-changed", onFocus);
+      window.removeEventListener(outlookProfileChangedEventName, onChanged);
     };
   }, [email, refresh]);
 
@@ -65,12 +68,14 @@ export function OutlookAccountSummary({ email }: { email: string }) {
   const activeProfile = configuration?.activeProfile ?? (configuration?.source === "active" ? configuration.profile : "");
   return (
     <section className="m365-outlook-summary" aria-label="Outlook-Konfiguration" aria-busy={loading}>
+      <M365Loading active={loading || opening} message={opening ? "Outlook wird geöffnet. Bitte warten …" : "Outlook-Informationen werden gelesen. Bitte warten …"} />
       <div className="m365-outlook-summary-heading">
         <div className="m365-outlook-identity">
           <strong>Outlook</strong>
           <span className="m365-outlook-default">Standardprofil: <strong>{configuration ? defaultProfile || "Nicht festgelegt" : loading ? "Wird geprüft …" : "Nicht verfügbar"}</strong></span>
         </div>
         <div className="m365-outlook-actions">
+          <button type="button" disabled={loading || opening} aria-label="Outlook-Informationen aktualisieren" onClick={() => setRefresh((value) => value + 1)}><RefreshCw size={14} /></button>
           {!showProfiles && <button type="button" disabled={opening || !defaultProfile} onClick={() => void openOutlook()}><FolderOpen size={14} />{opening ? "Wird geöffnet …" : "Outlook öffnen"}</button>}
           <button type="button" aria-expanded={showProfiles} onClick={() => setShowProfiles((value) => !value)}><Settings2 size={14} />{showProfiles ? "Schließen" : "Profile verwalten"}</button>
         </div>

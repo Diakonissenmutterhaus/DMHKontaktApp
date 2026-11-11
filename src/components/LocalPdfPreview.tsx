@@ -6,7 +6,7 @@ import { reportDiagnostic } from "../utils/notificationPolicy";
 
 GlobalWorkerOptions.workerSrc = workerUrl;
 
-export default function LocalPdfPreview({ bytes, messageId, name }: { bytes: Uint8Array; messageId: string; name: string }) {
+export default function LocalPdfPreview({ bytes, messageId, name, onDocumentReady }: { bytes: Uint8Array; messageId: string; name: string; onDocumentReady?: (ready: boolean) => void }) {
   const [document, setDocument] = useState<PDFDocumentProxy | null>(null);
   const [pageNumber, setPageNumber] = useState(1);
   const [zoom, setZoom] = useState(1);
@@ -21,6 +21,7 @@ export default function LocalPdfPreview({ bytes, messageId, name }: { bytes: Uin
   const renderQueue = useRef<Promise<unknown>>(Promise.resolve());
   useEffect(() => {
     let active = true;
+    onDocumentReady?.(false);
     const base = `${import.meta.env.BASE_URL}pdfjs/`;
     // Render canvas pixels only; XFA, scripting, forms and interactive links
     // are not enabled. Fonts and decoders are bundled with the application.
@@ -38,7 +39,7 @@ export default function LocalPdfPreview({ bytes, messageId, name }: { bytes: Uin
         setBusy(false); setError("Das PDF konnte nicht angezeigt werden. Bitte „Speichern unter“ verwenden.");
       } });
     return () => { active = false; passwordCallback.current = null; void task.destroy(); };
-  }, [bytes, messageId, name]);
+  }, [bytes, messageId, name, onDocumentReady]);
   useEffect(() => {
     if (!stage.current) return;
     const observer = new ResizeObserver(entries => setWidth(Math.max(150, entries[0].contentRect.width - 32)));
@@ -61,15 +62,17 @@ export default function LocalPdfPreview({ bytes, messageId, name }: { bytes: Uin
       render = page.render({ canvas: target, canvasContext: context, viewport, annotationMode: AnnotationMode.DISABLE,
         transform: pixelRatio === 1 ? undefined : [pixelRatio,0,0,pixelRatio,0,0] });
       await render.promise;
+      if (active) onDocumentReady?.(true);
     });
     renderQueue.current = job.catch(() => undefined);
     void job.catch(error => { if (active) {
+      onDocumentReady?.(false);
       void reportDiagnostic({ origin:"LocalPdfPreview",level:"error",entityKind:"email-attachment",entityId:messageId,title:name,operation:"render",message:error instanceof Error ? error.message : String(error) });
       setError("Diese PDF-Seite konnte nicht angezeigt werden. Bitte „Speichern unter“ verwenden.");
     } })
       .finally(() => { if (active) setBusy(false); });
     return () => { active = false; render?.cancel(); };
-  }, [document, pageNumber, zoom, width, messageId, name]);
+  }, [document, pageNumber, zoom, width, messageId, name, onDocumentReady]);
   return <div className="email-pdf-preview">
     <div className="email-pdf-toolbar">
       <button type="button" aria-label="Vorherige PDF-Seite" disabled={!document || pageNumber <= 1} onClick={() => setPageNumber(current => current - 1)}><ChevronLeft size={17} /></button>

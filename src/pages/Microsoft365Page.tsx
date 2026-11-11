@@ -19,6 +19,7 @@ import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { StatusMessage } from "../components/StatusMessage";
 import { OutlookExchangeProfileSetup } from "../components/OutlookExchangeProfileSetup";
 import { OutlookAccountSummary } from "../components/OutlookAccountSummary";
+import { M365Loading, M365LoadingScope, showM365LoadingFrame } from "../components/M365Loading";
 import {
   cancelMicrosoft365Connection,
   connectMicrosoft365Interactively,
@@ -62,7 +63,16 @@ function formatSyncTime(value: string | null, emptyLabel = "Noch nicht geprüft"
   return date.toLocaleString("de-DE", { dateStyle: "short", timeStyle: "short" });
 }
 
-export function Microsoft365Page({ title = "Microsoft 365" }: { title?: string } = {}) {
+interface Microsoft365PageProps {
+  title?: string;
+  synchronizeAfterConnection?: () => Promise<"success" | "error" | "skipped">;
+}
+
+export function Microsoft365Page({ title = "Microsoft 365", synchronizeAfterConnection }: Microsoft365PageProps = {}) {
+  return <M365LoadingScope><Microsoft365Content title={title} synchronizeAfterConnection={synchronizeAfterConnection} /></M365LoadingScope>;
+}
+
+function Microsoft365Content({ title, synchronizeAfterConnection }: Microsoft365PageProps) {
   const [status, setStatus] = useState<Microsoft365ConnectionStatus | null>(null);
   const [deviceCode, setDeviceCode] = useState<Microsoft365DeviceCode | null>(null);
   const [busyAction, setBusyAction] = useState<string | null>(null);
@@ -73,6 +83,7 @@ export function Microsoft365Page({ title = "Microsoft 365" }: { title?: string }
   const [syncConfig, setSyncConfig] = useState<SyncConfig>(defaultSyncConfig);
   const [syncRuntimeStatus, setSyncRuntimeStatus] = useState<Microsoft365SynchronizationRuntimeStatus>(emptyMicrosoft365SynchronizationRuntimeStatus);
   const [syncPreparing, setSyncPreparing] = useState(false);
+  const [overviewLoading, setOverviewLoading] = useState(true);
   const pollingRef = useRef(false);
 
   const loadSynchronizationOverview = async () => {
@@ -84,13 +95,22 @@ export function Microsoft365Page({ title = "Microsoft 365" }: { title?: string }
     setSyncRuntimeStatus(parseSynchronizationRuntimeStatus(rawRuntimeStatus));
   };
 
-  const prepareCompleteSynchronization = async (force = false): Promise<boolean> => {
+  const prepareCompleteSynchronization = async (force = false, afterConnection = false): Promise<boolean> => {
     setSyncPreparing(true);
     try {
       const configured = await enableCompleteAutomaticMicrosoft365Sync(force);
       setSyncConfig(configured);
       setConnectionError("");
-      window.dispatchEvent(new Event(calendarChangedEventName));
+      if (afterConnection && synchronizeAfterConnection) {
+        const outcome = await synchronizeAfterConnection();
+        await loadSynchronizationOverview();
+        if (outcome === "error") {
+          setConnectionError("Microsoft 365 ist verbunden. Einige Informationen konnten nicht vollständig geladen werden. Bitte erneut synchronisieren oder die EDV informieren.");
+          return false;
+        }
+      } else {
+        window.dispatchEvent(new Event(calendarChangedEventName));
+      }
       return true;
     } catch (error) {
       setMessageType("error");
@@ -110,11 +130,13 @@ export function Microsoft365Page({ title = "Microsoft 365" }: { title?: string }
       } catch {
         // The account remains connected even if the local status card cannot be read yet.
       }
-      if (nextStatus.connected) void prepareCompleteSynchronization(false);
+      if (nextStatus.connected) await prepareCompleteSynchronization(false);
     } catch (error) {
       setStatus(emptyStatus);
       setMessageType("error");
       setMessage(`Microsoft-365-Status konnte nicht geladen werden: ${error}`);
+    } finally {
+      setOverviewLoading(false);
     }
   };
 
@@ -150,12 +172,13 @@ export function Microsoft365Page({ title = "Microsoft 365" }: { title?: string }
         if (result.state === "connected") {
           pollingRef.current = false;
           setDeviceCode(null);
-          setBusyAction(null);
+          setBusyAction("connect");
           setStatus({ configured: true, connected: true, account: result.account });
-          if (await prepareCompleteSynchronization(true)) {
+          if (await prepareCompleteSynchronization(true, true)) {
             setMessageType("success");
             setMessage("Microsoft 365 wurde verbunden. Kontakte und Kalender werden jetzt automatisch synchronisiert.");
           }
+          setBusyAction(null);
           return;
         }
         timeout = window.setTimeout(
@@ -183,15 +206,16 @@ export function Microsoft365Page({ title = "Microsoft 365" }: { title?: string }
     setMessage("");
     setConnectionError("");
     try {
+      await showM365LoadingFrame();
       const account = await (chooseAccount ? connectMicrosoft365Interactively() : connectMicrosoft365WithWindowsAccount());
       setStatus({ configured: true, connected: true, account });
-      const synchronizationReady = await prepareCompleteSynchronization(true);
+      const synchronizationReady = await prepareCompleteSynchronization(true, true);
       setShowCodeFallback(false);
       if (synchronizationReady) {
         setMessageType("success");
         setMessage("Microsoft 365 wurde verbunden. Kontakte und Kalender werden jetzt automatisch synchronisiert.");
       } else {
-        setConnectionError("Microsoft 365 ist verbunden, aber die automatische Synchronisierung konnte nicht eingerichtet werden. Bitte „Automatik einschalten“ wählen oder die EDV informieren.");
+        setConnectionError((current) => current || "Microsoft 365 ist verbunden, aber die automatische Synchronisierung konnte nicht eingerichtet werden. Bitte „Automatik einschalten“ wählen oder die EDV informieren.");
       }
     } catch (error) {
       setShowCodeFallback(true);
@@ -299,6 +323,7 @@ export function Microsoft365Page({ title = "Microsoft 365" }: { title?: string }
   if (!status) {
     return (
       <div className="page m365-page">
+        <M365Loading active message="Microsoft-365-Verbindung wird geprüft. Bitte warten …" />
         <section className="form-panel m365-loading">
           <LoaderCircle className="spin" size={28} />
           <p>Microsoft-365-Verbindung wird geprüft …</p>
@@ -309,6 +334,7 @@ export function Microsoft365Page({ title = "Microsoft 365" }: { title?: string }
 
   return (
     <div className="page m365-page">
+      <M365Loading active={overviewLoading || (busyAction !== null && !deviceCode) || syncPreparing} message="Microsoft 365 wird eingerichtet. Bitte warten und die Anwendung nicht schließen." />
       <header className="page-header">
         <div>
           <h2>{title}</h2>
@@ -457,11 +483,6 @@ export function Microsoft365Page({ title = "Microsoft 365" }: { title?: string }
               key={`${status.account.id}:${status.account.email || status.account.userPrincipalName}`}
               email={status.account.email || status.account.userPrincipalName}
               disabled={busyAction !== null || m365SafeImportTestMode}
-              onAccountChanged={(account) => {
-                setStatus({ configured: true, connected: true, account });
-                setConnectionError("");
-                void loadSynchronizationOverview();
-              }}
               compact
               leadingAction={
                 <button type="button" onClick={() => void synchronizeEverythingNow()} disabled={syncPreparing}>

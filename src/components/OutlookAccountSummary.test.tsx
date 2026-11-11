@@ -39,7 +39,7 @@ describe("Outlook account configuration", () => {
     render(<OutlookAccountSummary email={email} />);
     await screen.findByText("IMAP");
     db.getOutlookAccountConfiguration.mockResolvedValue({ email, profile: "Profile Exchange", source: "active", accounts: [{ accountType: "Exchange", server: "exchange.example.test" }], message: "" });
-    fireEvent.focus(window);
+    fireEvent.click(screen.getByRole("button", { name: "Outlook-Informationen aktualisieren" }));
     expect(await screen.findByText("Exchange")).toBeVisible();
     expect(screen.getByText(/exchange.example.test/)).toBeVisible();
     expect(screen.getByText(/Geöffnet:/)).toBeVisible();

@@ -24,6 +24,7 @@ import { DocumentsPage } from "./pages/DocumentsPage";
 import { FeatureDevelopmentPage } from "./pages/FeatureDevelopmentPage";
 import { RecoveryPage } from "./pages/RecoveryPage";
 import { WelcomePage } from "./pages/WelcomePage";
+import { KiPage } from "./pages/KiPage";
 import { createAutomaticSafetyBackup, getMicrosoft365ConnectionStatus, getVaultStatus, syncOfflineDocuments } from "./services/db";
 import type { VaultStatus } from "./types/vault";
 import { captureBrowserStorage } from "./utils/backup";
@@ -492,6 +493,7 @@ export default function App() {
         <main className="content">
           <StatusMessage message={exchangeMessage} type="error" recordInActivity={false} />
           {page === "welcome" && <WelcomePage onNavigate={navigate} />}
+          {page === "ki" && <KiPage />}
           {page === "contacts" && !hiddenDataSections.includes("contacts") && (
             <ContactsPage onNavigate={navigate} onRegisterNavigationBlocker={registerNavigationBlocker} />
           )}
@@ -508,8 +510,8 @@ export default function App() {
               onReset={() => setFeatureAvailability(clearFeatureOverrides())}
             />
           )}
-          {page === "m365" && <Microsoft365Page />}
-          {page === "m365-login" && <Microsoft365Page title="M365 Anmeldung" />}
+          {page === "m365" && <Microsoft365Page synchronizeAfterConnection={() => runCalendarSync("change")} />}
+          {page === "m365-login" && <Microsoft365Page title="M365 Anmeldung" synchronizeAfterConnection={() => runCalendarSync("change")} />}
           {page === "email-save" && featureAvailability.emailSave && <EmailSavePage />}
           {page === "recovery" && <RecoveryPage />}
           {page === "trash" && <TrashPage />}

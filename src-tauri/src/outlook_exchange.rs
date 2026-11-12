@@ -15,6 +15,64 @@ use tauri::{AppHandle, Emitter, Manager};
 use tokio::io::AsyncWriteExt;
 
 static SETUP_GATE: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+struct BackgroundVisibilityGuard {
+    process_id: u32,
+    started_at: String,
+    task: tokio::task::JoinHandle<()>,
+}
+static BACKGROUND_VISIBILITY_GUARD: std::sync::Mutex<Option<BackgroundVisibilityGuard>> =
+    std::sync::Mutex::new(None);
+
+fn stop_background_watcher() {
+    if let Ok(mut current) = BACKGROUND_VISIBILITY_GUARD.lock() {
+        if let Some(watcher) = current.take() {
+            watcher.task.abort();
+        }
+    }
+}
+
+fn keep_setup_in_background(state: &SetupState) -> Result<(), String> {
+    if state.phase == "complete" {
+        stop_background_watcher();
+        return Ok(());
+    }
+    let (Some(process_id), Some(started_at)) = (
+        state.launched_process_id,
+        state.launched_started_at.as_ref(),
+    ) else {
+        return Ok(());
+    };
+    let mut current = BACKGROUND_VISIBILITY_GUARD
+        .lock()
+        .map_err(|_| "Outlook-Hintergrundbetrieb konnte nicht vorbereitet werden.")?;
+    if current.as_ref().is_some_and(|guard| {
+        guard.process_id == process_id
+            && &guard.started_at == started_at
+            && !guard.task.is_finished()
+    }) {
+        return Ok(());
+    }
+    if let Some(previous) = current.take() {
+        previous.task.abort();
+    }
+    let input = serde_json::json!({"operation":"watch-setup-process", "processId":process_id, "startedAt":started_at, "profile":state.exchange_profile, "ownerProcessId":std::process::id()});
+    let task = tokio::spawn(async move {
+        // Cancellation drops the hidden helper with kill_on_drop enabled.
+        // A watcher failure never replaces the actual setup/connection result.
+        let _ = powershell::<serde_json::Value>(input).await;
+    });
+    *current = Some(BackgroundVisibilityGuard {
+        process_id,
+        started_at: started_at.clone(),
+        task,
+    });
+    Ok(())
+}
+
+#[tauri::command]
+pub fn stop_outlook_setup_background() {
+    stop_background_watcher();
+}
 const SCRIPT: &str = include_str!("outlook_exchange_profile.ps1");
 const BOOTSTRAP: &str = include_str!("outlook_exchange_bootstrap.ps1");
 // m365_ is excluded from portable exports/restores: Outlook profiles belong to
@@ -332,6 +390,12 @@ async fn powershell_script<T: DeserializeOwned>(
     script: &str,
     input: serde_json::Value,
 ) -> Result<T, String> {
+    let timeout_seconds =
+        if input.get("operation").and_then(|value| value.as_str()) == Some("watch-setup-process") {
+            245
+        } else {
+            25
+        };
     let mut command = tokio::process::Command::from(hidden_command("powershell.exe"));
     command.args([
         "-NoProfile",
@@ -348,7 +412,7 @@ async fn powershell_script<T: DeserializeOwned>(
         "script": script,
         "request": serde_json::to_string(&input).map_err(|_| "Outlook-Anfrage ist ungültig.")?
     });
-    output_json(command, Some(envelope), 25).await
+    output_json(command, Some(envelope), timeout_seconds).await
 }
 
 async fn inventory() -> Result<Inventory, String> {
@@ -782,7 +846,10 @@ pub async fn get_outlook_exchange_setup_status(
     let _process_guard = process_lock(&app)?;
     let (id, email) = m365::outlook_profile_identity(&app)?;
     if background == Some(true) {
-        if let Some(state) = read_state(&app, &id, &email)? {
+        if let Some(state) =
+            read_state(&app, &id, &email)?.filter(|state| state.phase != "complete")
+        {
+            keep_setup_in_background(&state)?;
             let _: serde_json::Value = powershell(serde_json::json!({"operation":"hide-setup-process","processId":state.launched_process_id,"startedAt":state.launched_started_at,"profile":state.exchange_profile,"authorized":state.automatic_close})).await?;
         }
     }
@@ -1075,6 +1142,7 @@ pub async fn prepare_outlook_exchange_profile(
         .get("startedAt")
         .and_then(|value| value.as_str())
         .map(str::to_owned);
+    keep_setup_in_background(&state)?;
     save_state(&app, &state)?;
     let message = if state.windows_sso {
         "Outlook wurde mit der automatischen Windows-Kontoeinrichtung gestartet. Die E-Mail-Adresse wird aus Ihrem passenden Domaenenkonto uebernommen. Microsoft kann weiterhin eine Bestaetigung oder MFA verlangen."
@@ -1099,6 +1167,7 @@ pub async fn complete_outlook_exchange_profile(app: AppHandle) -> Result<SetupSt
     let (id, email) = m365::outlook_profile_identity(&app)?;
     let mut state =
         read_state(&app, &id, &email)?.ok_or("Bitte die Outlook-Einrichtung zuerst starten.")?;
+    keep_setup_in_background(&state)?;
     m365::confirm_excel_account(
         &app,
         state.confirmed_excel_email.as_deref().unwrap_or(""),
@@ -1225,6 +1294,7 @@ pub async fn complete_outlook_exchange_profile(app: AppHandle) -> Result<SetupSt
     }
     state.phase = "complete".into();
     save_state(&app, &state)?;
+    stop_background_watcher();
     Ok(status(&state, "complete", completion_message(&state)))
 }
 

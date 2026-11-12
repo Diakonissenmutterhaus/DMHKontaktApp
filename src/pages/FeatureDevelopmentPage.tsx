@@ -12,6 +12,7 @@ import { captureBrowserStorage } from "../utils/backup";
 import type { AppFeature, AppFeatureAvailability } from "../utils/featureFlags";
 import { releaseFeatureDefaults } from "../utils/featureFlags";
 import { KiRolloutSettings } from "../components/KiRolloutSettings";
+import { ProcedureReportingSettings } from "../components/ProcedureReportingSettings";
 import type { KiRolloutStatus } from "../hooks/useKiRollout";
 
 interface FeatureDevelopmentPageProps {
@@ -169,6 +170,7 @@ export function FeatureDevelopmentPage({ availability, onFeatureChange, onReset,
       </section>
 
       <KiRolloutSettings status={kiRollout.status} refreshing={kiRollout.refreshing} onRefresh={kiRollout.refresh} />
+      <ProcedureReportingSettings />
       <section className="feature-admin-tools" aria-labelledby="feature-admin-tools-title">
           <div className="feature-admin-tools-heading">
             <div>

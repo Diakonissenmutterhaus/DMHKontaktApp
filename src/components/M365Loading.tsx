@@ -1,24 +1,36 @@
-import { createContext, useCallback, useContext, useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useId, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { Clock3, LoaderCircle, Settings2 } from "lucide-react";
 import "./M365Loading.css";
 
 interface Job { message: string; value?: number; label?: string; priority?: number }
 const LoadingContext = createContext<((id: string, job: Job | null) => void) | null>(null);
+let loadingWindowCount = 0;
+let loadingRootWasInert = false;
+let loadingPreviousFocus: Element | null = null;
 
 function LoadingWindow({ message, value, label }: Job) {
   const id = useId();
   const panel = useRef<HTMLDialogElement>(null);
-  useEffect(() => {
-    const previousFocus = document.activeElement;
+  useLayoutEffect(() => {
     const root = document.getElementById("root");
-    const previousInert = root?.getAttribute("inert");
+    if (loadingWindowCount === 0) {
+      loadingRootWasInert = root?.hasAttribute("inert") ?? false;
+      loadingPreviousFocus = document.activeElement;
+    }
+    loadingWindowCount += 1;
+    document.documentElement.setAttribute("data-m365-loading", "true");
     root?.setAttribute("inert", "");
     if (panel.current?.showModal) panel.current.showModal(); else panel.current?.setAttribute("open", "");
     panel.current?.focus();
     return () => {
-      if (previousInert == null) root?.removeAttribute("inert"); else root?.setAttribute("inert", previousInert);
-      if (previousFocus instanceof HTMLElement && previousFocus.isConnected) previousFocus.focus();
+      loadingWindowCount = Math.max(0, loadingWindowCount - 1);
+      if (loadingWindowCount === 0) {
+        document.documentElement.removeAttribute("data-m365-loading");
+        if (!loadingRootWasInert) root?.removeAttribute("inert");
+        if (loadingPreviousFocus instanceof HTMLElement && loadingPreviousFocus.isConnected) loadingPreviousFocus.focus();
+        loadingPreviousFocus = null;
+      }
     };
   }, []);
   return createPortal(<dialog ref={panel} className="m365-loading-window" aria-modal="true" aria-labelledby={id} aria-describedby={`${id}-duration`} aria-busy="true" tabIndex={-1} onCancel={(event) => event.preventDefault()} onKeyDown={(event) => {

@@ -1,11 +1,13 @@
 import { CheckCircle2, LoaderCircle, Mail, RefreshCw } from "lucide-react";
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { listen } from "@tauri-apps/api/event";
+import { invoke } from "@tauri-apps/api/core";
 import { M365Loading, showM365LoadingFrame } from "./M365Loading";
 import { completeOutlookExchangeProfile, getOutlookExchangeSetupStatus, getOutlookOfficeAccountCheck, prepareOutlookExchangeProfile } from "../services/db";
 import type { OutlookExchangeSetupStatus } from "../types/outlookExchange";
 import "./OutlookExchangeProfileSetup.css";
 import { refreshOutlookProfileViews } from "../utils/outlookProfileRefresh";
+import { beginProcedureReport, finishProcedureReport } from "../services/procedureReports";
 
 interface OutlookExchangeProfileSetupProps {
   email: string;
@@ -16,6 +18,7 @@ interface OutlookExchangeProfileSetupProps {
 
 const pollIntervalMs = 4_000;
 const pollingLimitMs = 4 * 60_000;
+const stopBackgroundWatcher = () => Promise.resolve().then(() => invoke("stop_outlook_setup_background")).catch(() => undefined);
 
 export function OutlookExchangeProfileSetup({ email, disabled = false, compact = false, leadingAction }: OutlookExchangeProfileSetupProps) {
   const [status, setStatus] = useState<OutlookExchangeSetupStatus | null>(null);
@@ -29,6 +32,7 @@ export function OutlookExchangeProfileSetup({ email, disabled = false, compact =
   const mounted = useRef(true);
   const deadline = useRef(0);
   const detectedOfficeEmail = useRef<string | null>(null);
+  const report = useRef<Awaited<ReturnType<typeof beginProcedureReport>> | null>(null);
   const [initialLoading, setInitialLoading] = useState(true);
   const [progress, setProgress] = useState({ value: 0, label: "Informationen werden geprüft …" });
   const progressListener = useRef<Promise<(() => void) | undefined>>(Promise.resolve(undefined));
@@ -46,6 +50,7 @@ export function OutlookExchangeProfileSetup({ email, disabled = false, compact =
     return () => {
       mounted.current = false;
       requestId.current += 1;
+      void stopBackgroundWatcher();
     };
   }, []);
 
@@ -88,8 +93,10 @@ export function OutlookExchangeProfileSetup({ email, disabled = false, compact =
       setBusy(true);
       await refreshOutlookProfileViews();
       if (!currentRequest(id)) return null;
+      await finishProcedureReport(report.current, "success", "Exchange verbunden und Standardprofil bestätigt.", email, accepted.exchangeProfile);
     }
     setStatus(accepted);
+    if (!["awaiting_login", "awaiting_close", "connected"].includes(accepted.stage)) await stopBackgroundWatcher();
     if (accepted.stage !== "awaiting_login" && accepted.stage !== "awaiting_close") setPolling(false);
     return accepted;
   }, [currentRequest, email]);
@@ -104,6 +111,7 @@ export function OutlookExchangeProfileSetup({ email, disabled = false, compact =
     setProgress({ value: 0, label: detectedOfficeEmail.current ? "Microsoft-Konto wird geprüft …" : "Office-Konten werden gelesen …" });
     deadline.current = Date.now() + pollingLimitMs;
     try {
+      report.current = await beginProcedureReport("outlook_exchange", email);
       await showM365LoadingFrame();
       await progressListener.current;
       if (!detectedOfficeEmail.current) {
@@ -121,6 +129,8 @@ export function OutlookExchangeProfileSetup({ email, disabled = false, compact =
       const accepted = await acceptStatus(next, id);
       if (currentRequest(id) && (accepted?.stage === "awaiting_login" || accepted?.stage === "awaiting_close")) setPolling(true);
     } catch (cause) {
+      await stopBackgroundWatcher();
+      await finishProcedureReport(report.current, "error", String(cause), email);
       detectedOfficeEmail.current = null;
       if (currentRequest(id)) setError(String(cause));
     } finally {
@@ -136,6 +146,8 @@ export function OutlookExchangeProfileSetup({ email, disabled = false, compact =
     const poll = async () => {
       if (cancelled || !currentRequest(id)) return;
       if (Date.now() >= deadline.current) {
+        await stopBackgroundWatcher();
+        await finishProcedureReport(report.current, "interrupted", "Prüfung nach vier Minuten ohne bestätigten Abschluss beendet.", email);
         setPolling(false);
         setTimedOut(true);
         return;
@@ -148,6 +160,8 @@ export function OutlookExchangeProfileSetup({ email, disabled = false, compact =
           timer = window.setTimeout(() => void poll(), pollIntervalMs);
         }
       } catch (cause) {
+        await stopBackgroundWatcher();
+        await finishProcedureReport(report.current, "error", String(cause), email);
         if (!cancelled && currentRequest(id)) {
           setPolling(false);
           setError(String(cause));
@@ -169,14 +183,14 @@ export function OutlookExchangeProfileSetup({ email, disabled = false, compact =
 
   const waiting = status?.stage === "awaiting_login" || status?.stage === "awaiting_close" || status?.stage === "connected";
   const blocked = disabled || busy || polling;
-  const configuring = !error && !timedOut && (busy || polling);
+  const configuring = busy || polling || finishing;
 
   return (
     <section className={`outlook-exchange-setup${compact ? " outlook-exchange-setup-compact" : ""}`} aria-label="Outlook auf Exchange umstellen" aria-busy={configuring}>
       <M365Loading active={configuring || initialLoading} message={configuring ? "Wird eingerichtet. Bitte warten und die Anwendung nicht schließen." : "Outlook-Informationen werden geladen. Bitte warten …"} value={configuring ? progress.value : undefined} label={configuring ? progress.label : undefined} priority={10} />
       {!configuring && status && !error && !timedOut && <div className={`outlook-exchange-setup-status${complete ? " complete" : ""}`} role="status" aria-live="polite">{complete && <CheckCircle2 size={19} aria-hidden="true" />}<span>{status.message}</span></div>}
-      {timedOut && <p role="status">Die automatische Prüfung wurde nach vier Minuten angehalten. Sie können die Anmeldung fertigstellen und die Verbindung erneut prüfen.</p>}
-      {error && <p className="outlook-exchange-setup-error" role="alert">{error}</p>}
+      {!configuring && !initialLoading && timedOut && <p role="status">Die automatische Prüfung wurde nach vier Minuten angehalten. Sie können die Anmeldung fertigstellen und die Verbindung erneut prüfen.</p>}
+      {!configuring && !initialLoading && error && <p className="outlook-exchange-setup-error" role="alert">{error}</p>}
       {!configuring && (!complete || leadingAction) && <div className="button-row">
         {leadingAction}
         {!complete && (waiting ? <>

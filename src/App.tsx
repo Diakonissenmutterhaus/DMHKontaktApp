@@ -26,6 +26,7 @@ import { RecoveryPage } from "./pages/RecoveryPage";
 import { WelcomePage } from "./pages/WelcomePage";
 import { KiPage } from "./pages/KiPage";
 import { useKiRollout } from "./hooks/useKiRollout";
+import { startReportDelivery } from "./services/procedureReports";
 import { createAutomaticSafetyBackup, getMicrosoft365ConnectionStatus, getVaultStatus, syncOfflineDocuments } from "./services/db";
 import type { VaultStatus } from "./types/vault";
 import { captureBrowserStorage } from "./utils/backup";
@@ -86,6 +87,7 @@ export default function App() {
   const [vaultStatus, setVaultStatus] = useState<VaultStatus | null>(null);
   const kiRollout = useKiRollout(Boolean(vaultStatus?.unlocked));
   const kiEnabled = featureAvailability.ki || kiRollout.enabled;
+  useEffect(() => { if (vaultStatus?.unlocked) return startReportDelivery(); }, [vaultStatus?.unlocked]);
   const [startupError, setStartupError] = useDiagnosticMessage("App:startupError", "inline");
   const [edvUnlocked, setEdvUnlocked] = useState(false);
   const [exchangeMessage, setExchangeMessage] = useDiagnosticMessage("App:exchangeMessage");
@@ -498,7 +500,7 @@ export default function App() {
         {settingsAreaOpen && <SettingsSubtabs activePage={page} activeSection={settingsSection} onNavigate={navigate} />}
         <main className="content">
           <StatusMessage message={exchangeMessage} type="error" recordInActivity={false} />
-          {page === "welcome" && <WelcomePage onNavigate={navigate} />}
+          {page === "welcome" && <WelcomePage onNavigate={navigate} kiEnabled={kiEnabled} />}
           {page === "ki" && <KiPage />}
           {page === "contacts" && !hiddenDataSections.includes("contacts") && (
             <ContactsPage onNavigate={navigate} onRegisterNavigationBlocker={registerNavigationBlocker} />

@@ -49,6 +49,7 @@ import {
   type Microsoft365SynchronizationRuntimeStatus
 } from "../utils/automaticCalendarSync";
 import { enableCompleteAutomaticMicrosoft365Sync } from "../utils/microsoft365SyncConfig";
+import { beginProcedureReport, finishProcedureReport } from "../services/procedureReports";
 
 const emptyStatus: Microsoft365ConnectionStatus = {
   configured: false,
@@ -85,6 +86,7 @@ function Microsoft365Content({ title, synchronizeAfterConnection }: Microsoft365
   const [syncPreparing, setSyncPreparing] = useState(false);
   const [overviewLoading, setOverviewLoading] = useState(true);
   const pollingRef = useRef(false);
+  const loginReport = useRef<Awaited<ReturnType<typeof beginProcedureReport>> | null>(null);
 
   const loadSynchronizationOverview = async () => {
     const [rawConfig, rawRuntimeStatus] = await Promise.all([
@@ -170,6 +172,7 @@ function Microsoft365Content({ title, synchronizeAfterConnection }: Microsoft365
       try {
         const result = await pollMicrosoft365Connection();
         if (result.state === "connected") {
+          await finishProcedureReport(loginReport.current, "success", "Microsoft-365-Anmeldung bestätigt.", result.account?.email || "");
           pollingRef.current = false;
           setDeviceCode(null);
           setBusyAction("connect");
@@ -187,6 +190,7 @@ function Microsoft365Content({ title, synchronizeAfterConnection }: Microsoft365
         );
       } catch (error) {
         pollingRef.current = false;
+        await finishProcedureReport(loginReport.current, "error", String(error));
         setDeviceCode(null);
         setBusyAction(null);
         setMessageType("error");
@@ -206,8 +210,10 @@ function Microsoft365Content({ title, synchronizeAfterConnection }: Microsoft365
     setMessage("");
     setConnectionError("");
     try {
+      loginReport.current = await beginProcedureReport("m365_login");
       await showM365LoadingFrame();
       const account = await (chooseAccount ? connectMicrosoft365Interactively() : connectMicrosoft365WithWindowsAccount());
+      await finishProcedureReport(loginReport.current, "success", "Microsoft-365-Anmeldung bestätigt.", account.email);
       setStatus({ configured: true, connected: true, account });
       const synchronizationReady = await prepareCompleteSynchronization(true, true);
       setShowCodeFallback(false);
@@ -219,6 +225,7 @@ function Microsoft365Content({ title, synchronizeAfterConnection }: Microsoft365
       }
     } catch (error) {
       setShowCodeFallback(true);
+      await finishProcedureReport(loginReport.current, "error", String(error));
       setConnectionError("Die Anmeldung wurde nicht abgeschlossen. Bitte erneut verbinden oder „Anderes Konto verwenden“ wählen. Wenn es weiterhin nicht klappt, die EDV informieren.");
       setMessageType("error");
       setMessage(`Microsoft-365-Anmeldung wurde nicht abgeschlossen: ${error}`);
@@ -231,12 +238,14 @@ function Microsoft365Content({ title, synchronizeAfterConnection }: Microsoft365
     setBusyAction("device-code");
     setMessage("");
     try {
+      loginReport.current = await beginProcedureReport("m365_login");
       const code = await startMicrosoft365Connection();
       setDeviceCode(code);
       setMessageType("info");
       setMessage("Alternative Anmeldung: Geben Sie den angezeigten Code bei Microsoft ein.");
       await openMicrosoft365SignIn();
     } catch (error) {
+      await finishProcedureReport(loginReport.current, "error", String(error));
       setBusyAction(null);
       setMessageType("error");
       setMessage(`Alternative Microsoft-Anmeldung konnte nicht gestartet werden: ${error}`);
@@ -244,6 +253,7 @@ function Microsoft365Content({ title, synchronizeAfterConnection }: Microsoft365
   };
 
   const cancelConnection = async () => {
+    await finishProcedureReport(loginReport.current, "cancelled", "Anmeldung vom Benutzer abgebrochen.");
     pollingRef.current = false;
     setDeviceCode(null);
     setBusyAction(null);

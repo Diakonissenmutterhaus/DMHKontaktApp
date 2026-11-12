@@ -1,6 +1,6 @@
 [package]
 name = "agendakontakte"
-version = "0.1.1"
+version = "0.1.38"
 description = "DMH Backup"
 authors = ["Diakonissenmutterhaus Aidlingen e.V."]
 edition = "2021"

@@ -56,7 +56,7 @@ pub fn record(app: &AppHandle, mut entry: DiagnosticMessage) -> Result<(), Strin
     record_in_db(&open_db(app)?, entry)
 }
 
-fn redact(message: &str) -> String {
+pub(crate) fn redact(message: &str) -> String {
     // Never persist credential-bearing server responses. Identity and operation
     // are stored separately, so the error remains searchable after redaction.
     let lower = message.to_ascii_lowercase();
@@ -65,9 +65,12 @@ fn redact(message: &str) -> String {
         "access_token",
         "refresh_token",
         "client_secret",
-        "password=",
-        "kennwort=",
-        "authorization:",
+        "password",
+        "passwort",
+        "kennwort",
+        "id_token",
+        "authorization",
+        "eyj",
         "otpauth",
     ]
     .iter()

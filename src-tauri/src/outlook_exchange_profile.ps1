@@ -577,6 +577,26 @@ try {
             Hide-OutlookSetupExplorer -ExpectedId ([int]$request.processId) -StartedAt ([string]$request.startedAt) -Profile ([string]$request.profile) -Authorized ([bool]$request.authorized)
             $result = @{ ok = $true }
         }
+        'watch-setup-process' {
+            # Continuous, bounded visibility guard. Startup-only hiding and
+            # four-second status polls leave late Explorer windows visible.
+            # Match the exact setup-owned process before touching any window;
+            # Hide-OutlookSetupExplorer additionally verifies the profile and
+            # only hides Explorers, never authentication/MFA dialogs.
+            $owner = Get-Process -Id ([int]$request.ownerProcessId) -ErrorAction Stop
+            $until = [DateTime]::UtcNow.AddSeconds(240)
+            try {
+                while ([DateTime]::UtcNow -lt $until -and -not $owner.HasExited) {
+                    $owned = Get-OwnedOutlookSetupProcess -ExpectedId ([int]$request.processId) -StartedAt ([string]$request.startedAt)
+                    if ($null -eq $owned) { break }
+                    $owned.Dispose()
+                    Hide-OutlookSetupExplorer -ExpectedId ([int]$request.processId) -StartedAt ([string]$request.startedAt) -Profile ([string]$request.profile) -Authorized $true
+                    Start-Sleep -Milliseconds 150
+                    $owner.Refresh()
+                }
+            } finally { $owner.Dispose() }
+            $result = @{ ok = $true }
+        }
         'close-setup-process' {
             $result = Close-OutlookSetupProcess -ExpectedId ([int]$request.processId) -StartedAt ([string]$request.startedAt) -Profile ([string]$request.profile)
         }

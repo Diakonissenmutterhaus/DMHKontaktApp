@@ -4,7 +4,7 @@ import { currentState, digest, equal, hasSession, logoutCookie, redact, secret, 
 import { read, scan, write } from '../server/storage.mjs';
 
 const labels = { running: 'In Bearbeitung', success: 'Erfolgreich', error: 'Fehler', cancelled: 'Abgebrochen', interrupted: 'Unterbrochen' };
-const procedures = { m365_login: 'Microsoft-365-Anmeldung', outlook_exchange: 'Outlook Exchange' };
+const procedures = { m365_login: 'Microsoft-365-Anmeldung', outlook_exchange: 'Outlook Exchange', diagnostics: 'PC-Diagnose' };
 const headers = { 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff', 'X-Robots-Tag': 'noindex, nofollow' };
 const json = (value, status = 200, extra = {}) => Response.json(value, { status, headers: { ...headers, ...extra } });
 async function body(request) {

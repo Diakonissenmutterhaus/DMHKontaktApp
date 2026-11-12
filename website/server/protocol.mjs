@@ -26,7 +26,7 @@ export function redact(value) {
 }
 function text(value, limit) { return typeof value === 'string' ? value.replace(/[\u0000-\u001f]/g, ' ').slice(0, limit).trim() : ''; }
 export function validateEvent(input, deviceId) {
-  if (!input || !uuid(input.eventId) || !uuid(input.attemptId) || !['m365_login', 'outlook_exchange'].includes(input.procedure)
+  if (!input || !uuid(input.eventId) || !uuid(input.attemptId) || !['m365_login', 'outlook_exchange', 'diagnostics'].includes(input.procedure)
     || !['running', 'success', 'error', 'cancelled', 'interrupted'].includes(input.status)
     || !Number.isSafeInteger(input.sequence) || input.sequence < 0 || input.sequence > 10000
     || !Number.isFinite(Date.parse(input.occurredAt))) throw new Error('Ungültiger Bericht.');

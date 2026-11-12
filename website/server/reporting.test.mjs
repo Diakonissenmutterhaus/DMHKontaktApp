@@ -51,3 +51,12 @@ test('current view replaces an old failure with the successful retry, preserving
     {deviceId:'pc',windowsUser:'bert',procedure:'outlook_exchange',attemptId:'other-user',sequence:1,status:'error',receivedAt:'2026-11-02'}];
   const attempts=summarize(events);assert.equal(attempts.length,3);const current=currentState(attempts);assert.equal(current.length,2);assert.equal(current.find(row=>row.windowsUser==='anna').status,'success');
 });
+
+test('diagnostic reports reach the private overview and Excel without gaining read access',async()=>{
+  const {request}=fixture();const config=await(await request('devices',{name:'PC-Diagnose'})).json();const headers={'x-dmh-device':config.deviceId,authorization:`Bearer ${config.token}`};
+  const event={eventId:randomUUID(),attemptId:randomUUID(),sequence:1,procedure:'diagnostics',status:'success',occurredAt:new Date().toISOString(),message:'Outlook: Exchange',computer:'PC-Diagnose',windowsUser:'employee'};
+  assert.equal((await request('ingest',event,'',headers)).status,200);
+  assert.equal((await request('reports',null,'',headers)).status,401);
+  const reports=await(await request('reports')).json();assert.equal(reports.reports[0].procedure,'diagnostics');
+  const exported=await request('export');assert.equal(exported.status,200);const book=new ExcelJS.Workbook();await book.xlsx.load(Buffer.from(await exported.arrayBuffer()));assert(book.worksheets.some(sheet=>JSON.stringify(sheet.getSheetValues()).includes('PC-Diagnose')));
+});

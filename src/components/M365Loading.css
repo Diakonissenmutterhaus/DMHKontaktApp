@@ -21,6 +21,14 @@
 }
 .m365-loading-window[open] { display: block; }
 .m365-loading-window::backdrop { background: #20212466; }
+/* Keep diagnostics in state/history, but do not show red background messages
+   through the loading backdrop. Reveal them only after the last loader closes. */
+html[data-m365-loading="true"] #root [role="alert"],
+html[data-m365-loading="true"] #root .status.error,
+html[data-m365-loading="true"] #root .m365-sync-error,
+html[data-m365-loading="true"] #root .outlook-exchange-setup-error {
+  visibility: hidden;
+}
 .m365-loading-titlebar { display: flex; align-items: center; gap: 9px; padding: 11px 18px; border-bottom: 1px solid var(--border); background: var(--surface-alt); }
 .m365-loading-titlebar > strong { font-size: .8rem; font-weight: 600; }
 .m365-loading-titlebar > svg { color: var(--primary); flex: none; }

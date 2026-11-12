@@ -39,9 +39,11 @@ mod outlook_calendar_export;
 mod outlook_exchange;
 mod phone_transfer;
 mod printers;
+mod procedure_reports;
 mod recovery_history;
 mod thunderbird;
 mod vault;
+mod workstation_health;
 
 #[cfg(target_os = "windows")]
 use std::os::windows::process::CommandExt;
@@ -6291,6 +6293,8 @@ fn clear_local_database(conn: &mut Connection) -> Result<(), String> {
             DELETE FROM mail_accounts;
             DELETE FROM vault_entries;
             DELETE FROM vault_config;
+            DROP TABLE IF EXISTS procedure_report_outbox;
+            DROP TABLE IF EXISTS procedure_report_history;
             DELETE FROM app_settings;
             DELETE FROM sqlite_sequence
              WHERE name IN ('contacts', 'groups', 'import_history', 'mail_accounts', 'vault_entries');
@@ -6644,6 +6648,9 @@ fn open_new_outlook_bulk_email(
 
 #[tauri::command]
 fn get_app_setting(app: AppHandle, key: String) -> Result<Option<String>, String> {
+    if procedure_reports::protected_key(&key) {
+        return Err("PC-Zugang ist Windows-geschützt und nicht lesbar.".into());
+    }
     if key.starts_with("ki_receipt_v1:")
         || key.starts_with("ki_access_request_v1:")
         || ki_news::is_news_key(&key)
@@ -6755,7 +6762,11 @@ fn query_audit_log(conn: &Connection, filter: AuditLogFilter) -> Result<AuditLog
 
 #[tauri::command]
 fn set_app_setting(app: AppHandle, key: String, value: String) -> Result<(), String> {
-    if ki::protected_key(&key) || feature_rollout::protected_key(&key) {
+    if ki::protected_key(&key)
+        || feature_rollout::protected_key(&key)
+        || workstation_health::protected_key(&key)
+        || procedure_reports::protected_key(&key)
+    {
         return Err("KI-Inhalte und Bestätigungen nur über den KI-Bereich speichern.".into());
     }
     if outlook_exchange::is_setup_state_key(&key) {
@@ -10551,6 +10562,10 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            workstation_health::get_workstation_health,
+            workstation_health::check_migration_services,
+            workstation_health::get_edv_announcements,
+            procedure_reports::list_local_procedure_reports,
             email_archive::scan_local_email_sources,
             email_archive::get_local_email_copy_status,
             email_archive::copy_local_emails,
@@ -10642,6 +10657,10 @@ pub fn run() {
             ki::list_ki_acknowledgements,
             ki::list_my_ki_acknowledgements,
             feature_rollout::get_ki_rollout_status,
+            procedure_reports::configure_procedure_reporting,
+            procedure_reports::get_procedure_reporting_status,
+            procedure_reports::record_procedure_report,
+            procedure_reports::flush_procedure_reports,
             ki::save_ki_access_request,
             ki::list_ki_access_requests,
             ki_news::list_ki_news,
@@ -10664,6 +10683,7 @@ pub fn run() {
             m365::open_m365_sign_in,
             m365::test_m365_connection,
             outlook_exchange::get_outlook_exchange_setup_status,
+            outlook_exchange::stop_outlook_setup_background,
             outlook_exchange::get_outlook_account_configuration,
             outlook_exchange::get_outlook_profile_catalog,
             outlook_exchange::set_outlook_default_profile,
@@ -11656,6 +11676,10 @@ mod tests {
             );
             CREATE TABLE import_history (id INTEGER PRIMARY KEY AUTOINCREMENT);
             CREATE TABLE app_settings (key TEXT PRIMARY KEY);
+            CREATE TABLE procedure_report_history (event_id TEXT PRIMARY KEY);
+            CREATE TABLE procedure_report_outbox (event_id TEXT PRIMARY KEY);
+            INSERT INTO procedure_report_history VALUES ('event');
+            INSERT INTO procedure_report_outbox VALUES ('event');
             CREATE TABLE mail_accounts (id INTEGER PRIMARY KEY AUTOINCREMENT);
             CREATE TABLE vault_entries (id INTEGER PRIMARY KEY AUTOINCREMENT);
             CREATE TABLE vault_config (id INTEGER PRIMARY KEY);
@@ -11676,6 +11700,7 @@ mod tests {
         .expect("test schema and data");
 
         clear_local_database(&mut conn).expect("full local reset");
+        assert_eq!(conn.query_row("SELECT count(*) FROM sqlite_master WHERE name IN ('procedure_report_history','procedure_report_outbox')", [], |r|r.get::<_,i64>(0)).unwrap(),0);
 
         for table in [
             "contact_groups",

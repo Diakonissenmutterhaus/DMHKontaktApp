@@ -1,3 +1,4 @@
+import { saveUpdateHealth } from "../services/workstationHealth";
 import { useDiagnosticMessage } from "../hooks/useDiagnosticMessage";
 import { CheckCircle2, CircleAlert, DownloadCloud, LoaderCircle } from "lucide-react";
 import { useEffect, useState } from "react";
@@ -58,6 +59,7 @@ export function UpdateNotifier() {
           return;
         }
 
+        saveUpdateHealth(nextUpdate?.version ?? null);
         if (nextUpdate && !updateIsSnoozed(nextUpdate.version)) {
           setAvailableUpdate(nextUpdate);
           setStatus("available");
@@ -67,6 +69,7 @@ export function UpdateNotifier() {
         if (cancelled) {
           return;
         }
+        saveUpdateHealth(null, true);
         console.warn("DMH Backup update check failed:", error);
         schedule(retryDelayMs);
       }

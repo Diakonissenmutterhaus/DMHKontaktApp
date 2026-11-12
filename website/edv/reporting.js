@@ -1,6 +1,6 @@
 const $ = id => document.getElementById(id);
 const statuses = { running:'In Bearbeitung',success:'Erfolgreich',error:'Fehler',cancelled:'Abgebrochen',interrupted:'Unterbrochen' };
-const procedures = { m365_login:'Microsoft-365-Anmeldung',outlook_exchange:'Outlook Exchange' };
+const procedures = { m365_login:'Microsoft-365-Anmeldung',outlook_exchange:'Outlook Exchange',diagnostics:'PC-Diagnose' };
 let busy = false, queued = false;
 function notice(message, error = false) { $('notice').textContent = message; $('notice').classList.toggle('error', error); }
 function date(value) { return new Date(value).toLocaleString('de-DE', {dateStyle:'short',timeStyle:'short'}); }

@@ -20,7 +20,7 @@ Administrator festgelegte, nicht im Quellcode gespeicherte Passwortkonfiguration
 `website/.env.local` enthält `EDV_USERNAME`, einen gesalzenen scrypt-Hash unter
 `EDV_PASSWORD_HASH` und einen separaten `EDV_SESSION_SECRET`. Die Datei ist von
 Git und Deployments ausgeschlossen. Die Anmeldung per Zugangscode wird ersetzt.
-Diese Änderung ist nur lokal vorbereitet; sie wurde nicht in Vercel veröffentlicht.
+Die Anmeldung ist im Projekt dmh-migration eingerichtet. Zugangsdaten werden ausschließlich über die Server-Umgebung konfiguriert.
 Sitzungen laufen nach acht Stunden ab; Cookies sind
 HttpOnly, Secure und SameSite=Strict. POST-Anfragen der Verwaltung prüfen den Ursprung.
 
@@ -31,8 +31,7 @@ widerrufbaren Schreibzugang für diesen PC. Sie muss vertraulich verteilt werden
 Windows DPAPI schützt den Zugang im Benutzerprofil. Er gehört nicht in Git,
 mobile Backups oder öffentliche Download-Verzeichnisse.
 
-Die offizielle App 0.1.37 enthält die Berichtsfunktion noch nicht. Die Änderungen
-am App-Client benötigen eine ausdrücklich beauftragte neue Release.
+Die Berichtsfunktion wird mit der offiziellen Version 0.1.38 eingeführt. Version 0.1.37 und ältere enthalten sie noch nicht.
 Das Webportal allein kann alten App-Versionen keine Berichtsfunktion nachrüsten.
 
 ## Inhalt und Ablauf
@@ -43,7 +42,7 @@ Abbruch und Zeitüberschreitung. Erfolg bei M365 bedeutet bestätigte Anmeldung,
 nicht zwingend vollständige Kontakte-/Kalendersynchronisierung. Exchange-Erfolg
 wird erst nach nativer Abschlussbestätigung und Aktualisierung der Profilansicht gemeldet.
 
-Ohne konfigurierten PC-Zugang werden keine Berichte gespeichert oder hochgeladen.
+Ohne konfigurierten PC-Zugang wird nur der lokale Verlauf gespeichert. Es findet kein Upload statt.
 Nach Einrichtung schreibt die App zuerst in eine SQLite-Outbox; Versand erfolgt
 unabhängig vom M365-Login. Ein Bericht wird erst nach bestätigtem Empfang entfernt.
 Bei fehlender Verbindung wird ungefähr jede Minute und beim Online-Ereignis erneut

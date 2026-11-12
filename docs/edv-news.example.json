@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "items": [
+    {
+      "id": "wartung-beispiel",
+      "title": "Beispiel: Wartung der E-Mail-Dienste",
+      "body": "Vorlage – vor einer Veröffentlichung durch eine tatsächliche Mitteilung der EDV ersetzen.",
+      "publishAt": "2099-01-01T08:00:00+01:00",
+      "expiresAt": "2099-01-02T18:00:00+01:00"
+    }
+  ]
+}

@@ -1,6 +1,8 @@
 # KI: Richtlinien und IT-Schulungen
 
-Der Menüpunkt **KI** ist für alle Benutzer sichtbar. Ohne veröffentlichtes
+Der Menüpunkt **KI** ist standardmäßig ausgeblendet. Die EDV kann ihn auf einem
+PC unter **EDV Tools → Erweitert** oder zentral über GitHub freigeben;
+siehe [KI-Freigabe](ki-rollout.md). Ohne veröffentlichtes
 Dokument bleiben Kenntnisnahme und Unterschrift gesperrt. Die bereitgestellte
 **KI-Leitlinie, Stand 10.11.2026 (11 Seiten)** ist als aktuelle PDF-Fassung
 enthalten und wird ohne bestehende EDV-Konfiguration automatisch verwendet.

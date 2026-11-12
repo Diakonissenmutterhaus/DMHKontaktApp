@@ -1,6 +1,7 @@
-export type AppFeature = "authenticator" | "passwords" | "documents" | "emailSave";
+export type AppFeature = "authenticator" | "passwords" | "documents" | "emailSave" | "ki";
 
 export interface AppFeatureAvailability {
+  ki: boolean;
   authenticator: boolean;
   passwords: boolean;
   documents: boolean;
@@ -15,6 +16,7 @@ interface StoredFeatureOverrides {
 const storageKey = "dmh-backup-feature-overrides-v1";
 
 export const releaseFeatureDefaults: AppFeatureAvailability = {
+  ki: false,
   authenticator: false,
   passwords: false,
   documents: false,
@@ -32,6 +34,7 @@ function readOverrides(): Partial<AppFeatureAvailability> {
     const parsed = JSON.parse(stored) as Partial<StoredFeatureOverrides>;
     if (parsed.version !== 1 || typeof parsed.overrides !== "object" || parsed.overrides === null) return {};
     const overrides: Partial<AppFeatureAvailability> = {};
+    if (typeof parsed.overrides.ki === "boolean") overrides.ki = parsed.overrides.ki;
     if (typeof parsed.overrides.authenticator === "boolean") overrides.authenticator = parsed.overrides.authenticator;
     if (typeof parsed.overrides.passwords === "boolean") overrides.passwords = parsed.overrides.passwords;
     if (typeof parsed.overrides.documents === "boolean") overrides.documents = parsed.overrides.documents;

@@ -23,6 +23,7 @@ interface SidebarProps {
   onNavigate: (page: Page) => void;
   compact?: boolean;
   calendarEnabled: boolean;
+  kiEnabled: boolean;
   contactsEnabled: boolean;
   authenticatorEnabled: boolean;
   documentsEnabled: boolean;
@@ -30,11 +31,12 @@ interface SidebarProps {
   emailSaveEnabled: boolean;
 }
 
-export function Sidebar({ activePage, onNavigate, compact = false, calendarEnabled, contactsEnabled, authenticatorEnabled, documentsEnabled, passwordsEnabled, emailSaveEnabled }: SidebarProps) {
+export function Sidebar({ activePage, onNavigate, compact = false, calendarEnabled, kiEnabled, contactsEnabled, authenticatorEnabled, documentsEnabled, passwordsEnabled, emailSaveEnabled }: SidebarProps) {
   const [suppressHover, setSuppressHover] = useState(activePage === "email-save");
   useEffect(() => { setSuppressHover(activePage === "email-save"); }, [activePage]);
   const visibleItems = items.filter((item) => (
     (item.page !== "contacts" || contactsEnabled)
+    && (item.page !== "ki" || kiEnabled)
     && (item.page !== "calendar" || calendarEnabled)
     && (item.page !== "authenticator" || authenticatorEnabled)
     && (item.page !== "documents" || documentsEnabled)

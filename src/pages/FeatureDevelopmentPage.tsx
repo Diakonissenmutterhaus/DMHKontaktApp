@@ -1,5 +1,5 @@
 import { useDiagnosticMessage } from "../hooks/useDiagnosticMessage";
-import { AlertTriangle, Files, KeyRound, Mail, RotateCcw, ShieldCheck, Trash2 } from "lucide-react";
+import { AlertTriangle, BookOpen, Files, KeyRound, Mail, RotateCcw, ShieldCheck, Trash2 } from "lucide-react";
 import { useState, type ReactNode } from "react";
 import { StatusMessage } from "../components/StatusMessage";
 import {
@@ -11,8 +11,11 @@ import {
 import { captureBrowserStorage } from "../utils/backup";
 import type { AppFeature, AppFeatureAvailability } from "../utils/featureFlags";
 import { releaseFeatureDefaults } from "../utils/featureFlags";
+import { KiRolloutSettings } from "../components/KiRolloutSettings";
+import type { KiRolloutStatus } from "../hooks/useKiRollout";
 
 interface FeatureDevelopmentPageProps {
+  kiRollout: { status: KiRolloutStatus; refreshing: boolean; refresh: () => Promise<void> };
   availability: AppFeatureAvailability;
   onFeatureChange: (feature: AppFeature, enabled: boolean) => void;
   onReset: () => void;
@@ -49,12 +52,13 @@ function FeatureToggleCard({ checked, description, descriptionId, icon, onChange
   );
 }
 
-export function FeatureDevelopmentPage({ availability, onFeatureChange, onReset }: FeatureDevelopmentPageProps) {
+export function FeatureDevelopmentPage({ availability, onFeatureChange, onReset, kiRollout }: FeatureDevelopmentPageProps) {
   const [busyAction, setBusyAction] = useState<string | null>(null);
   const [message, setMessage] = useDiagnosticMessage("FeatureDevelopmentPage:message", "notification");
   const [messageType, setMessageType] = useState<"success" | "error" | "info">("info");
 
   const usesReleaseDefaults = availability.authenticator === releaseFeatureDefaults.authenticator
+    && availability.ki === releaseFeatureDefaults.ki
     && availability.passwords === releaseFeatureDefaults.passwords
     && availability.documents === releaseFeatureDefaults.documents
     && availability.emailSave === releaseFeatureDefaults.emailSave;
@@ -118,10 +122,18 @@ export function FeatureDevelopmentPage({ availability, onFeatureChange, onReset 
 
       <section className="form-panel feature-development-note">
         <strong>Bereiche kontrolliert freigeben</strong>
-        <p>Änderungen gelten nur auf diesem Computer. Die Bereiche bleiben verborgen, bis die EDV sie hier aktiviert.</p>
+        <p>Die Schalter gelten für diesen PC. KI kann zusätzlich zentral über GitHub freigegeben werden.</p>
       </section>
 
       <section className="feature-toggle-list" aria-label="Optionale Bereiche">
+        <FeatureToggleCard
+          checked={availability.ki}
+          description="KI nur auf diesem PC freigeben. Eine zentrale Freigabe über GitHub gilt zusätzlich und unabhängig von diesem Schalter."
+          descriptionId="ki-feature-description"
+          icon={<BookOpen size={25} aria-hidden="true" />}
+          onChange={() => onFeatureChange("ki", !availability.ki)}
+          title="KI"
+        />
         <FeatureToggleCard
           checked={availability.emailSave}
           description="E-Mails aus Outlook und Thunderbird lokal sichern. Blendet den Bereich im Hauptmenü ein."
@@ -156,6 +168,7 @@ export function FeatureDevelopmentPage({ availability, onFeatureChange, onReset 
         />
       </section>
 
+      <KiRolloutSettings status={kiRollout.status} refreshing={kiRollout.refreshing} onRefresh={kiRollout.refresh} />
       <section className="feature-admin-tools" aria-labelledby="feature-admin-tools-title">
           <div className="feature-admin-tools-heading">
             <div>
@@ -198,7 +211,7 @@ export function FeatureDevelopmentPage({ availability, onFeatureChange, onReset 
         <button type="button" onClick={onReset} disabled={usesReleaseDefaults}>
           <RotateCcw size={18} /> Release-Standard verwenden
         </button>
-        <small>Setzt alle optionalen Bereiche wieder auf „verborgen“.</small>
+        <small>Setzt lokale Freigaben zurück. Eine zentrale KI-Freigabe gilt weiterhin.</small>
       </footer>
     </div>
   );

@@ -56,6 +56,10 @@ function mockContact(id: number, firstName: string, lastName: string): MockConta
 async function installKiMock(page: Page, published: boolean) {
   await installTauriMock(page, []);
   await page.addInitScript(({ published }) => {
+    const featureKey = "dmh-backup-feature-overrides-v1";
+    const flags = JSON.parse(localStorage.getItem(featureKey) || '{"version":1,"overrides":{}}');
+    flags.overrides.ki = true;
+    localStorage.setItem(featureKey, JSON.stringify(flags));
     const w = window as any;
     const invoke = w.__TAURI_INTERNALS__.invoke;
     let policy = { revision: "ki-r1", title: "KI-Testdokument", version: "1.0", body: "Testinhalt für die automatisierte Prüfung. Keine offiziellen Richtlinien.", published, trainingUrl: "" };
@@ -90,6 +94,53 @@ async function installKiMock(page: Page, published: boolean) {
 async function openKiArea(page: Page, area: "Richtlinien" | "Schulungen" | "Formulare") {
   await page.getByRole("group", { name: "KI-Bereiche" }).getByRole("button", { name: area, exact: true }).click();
 }
+
+test("KI fica oculta por padrão e a EDV libera somente neste PC com persistência", async ({ page }, testInfo) => {
+  await installTauriMock(page, []);
+  await page.goto("/");
+  const ki = page.getByRole("navigation", { name: "Hauptmenü" }).getByRole("button", { name: "KI", exact: true });
+  await expect(ki).toHaveCount(0);
+  const openSettings = async () => {
+    await page.getByRole("button", { name: "EDV Tools", exact: true }).click();
+    await page.getByLabel("EDV-Kennwort", { exact: true }).fill("test-edv");
+    await page.getByRole("button", { name: "EDV Tools öffnen" }).click();
+    await page.getByRole("navigation", { name: "Unterseiten der EDV Tools" }).getByRole("button", { name: "Erweitert", exact: true }).click();
+  };
+  await openSettings();
+  const toggle = page.locator(".feature-toggle-card").filter({ has: page.getByRole("heading", { name: "KI", exact: true }) }).getByRole("checkbox");
+  await expect(toggle).not.toBeChecked();
+  await toggle.check();
+  await expect(ki).toHaveCount(1);
+  await page.screenshot({ path: testInfo.outputPath("ki-release-settings.png") });
+  await page.reload();
+  await expect(ki).toHaveCount(1);
+  await openSettings();
+  await expect(toggle).toBeChecked();
+  await toggle.uncheck();
+  await expect(ki).toHaveCount(0);
+  await page.reload();
+  await expect(ki).toHaveCount(0);
+});
+
+test("KI recebe liberação central sem recarregar nem alterar a escolha local", async ({ page }) => {
+  await installTauriMock(page, []);
+  await page.addInitScript(() => {
+    const w = window as any;
+    const original = w.__TAURI_INTERNALS__.invoke;
+    w.__KI_CENTRAL_ENABLED__ = false;
+    w.__TAURI_INTERNALS__.invoke = async (command: string, args: any) => command === "get_ki_rollout_status"
+      ? { policy: { schemaVersion: 1, enabled: w.__KI_CENTRAL_ENABLED__, activateAt: null, updatedAt: "2026-11-12T10:00:00Z" }, lastCheckedAt: null, lastSuccessAt: null, error: null }
+      : original(command, args);
+  });
+  await page.goto("/");
+  const ki = page.getByRole("navigation", { name: "Hauptmenü" }).getByRole("button", { name: "KI", exact: true });
+  await expect(ki).toHaveCount(0);
+  await page.evaluate(() => { (window as any).__KI_CENTRAL_ENABLED__ = true; window.dispatchEvent(new Event("online")); });
+  await expect(ki).toBeVisible();
+  expect(await page.evaluate(() => localStorage.getItem("dmh-backup-feature-overrides-v1"))).toBeNull();
+  await page.evaluate(() => { (window as any).__KI_CENTRAL_ENABLED__ = false; window.dispatchEvent(new Event("online")); });
+  await expect(ki).toHaveCount(0);
+});
 
 async function openKiForms(page: Page) {
   const shortcut = page.getByRole("button", { name: "Zu den Formularen", exact: true });
@@ -477,6 +528,7 @@ async function installTauriMock(page: Page, contacts: MockContact[], options: { 
           return ids.size;
         }
         case "record_ui_diagnostic": diagnostics.push(args?.entry); return null;
+        case "get_ki_rollout_status": return { policy: null, lastCheckedAt: null, lastSuccessAt: null, error: null };
         case "unlock_edv_tools": edvUnlocked = args?.password === "test-edv"; return edvUnlocked;
         case "lock_edv_tools": edvUnlocked = false; return null;
         case "list_audit_log": {

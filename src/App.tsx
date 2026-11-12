@@ -25,6 +25,7 @@ import { FeatureDevelopmentPage } from "./pages/FeatureDevelopmentPage";
 import { RecoveryPage } from "./pages/RecoveryPage";
 import { WelcomePage } from "./pages/WelcomePage";
 import { KiPage } from "./pages/KiPage";
+import { useKiRollout } from "./hooks/useKiRollout";
 import { createAutomaticSafetyBackup, getMicrosoft365ConnectionStatus, getVaultStatus, syncOfflineDocuments } from "./services/db";
 import type { VaultStatus } from "./types/vault";
 import { captureBrowserStorage } from "./utils/backup";
@@ -83,6 +84,8 @@ export default function App() {
   const [settingsSection, setSettingsSection] = useState<SettingsSection>("general");
   const [featureAvailability, setFeatureAvailability] = useState(readFeatureAvailability);
   const [vaultStatus, setVaultStatus] = useState<VaultStatus | null>(null);
+  const kiRollout = useKiRollout(Boolean(vaultStatus?.unlocked));
+  const kiEnabled = featureAvailability.ki || kiRollout.enabled;
   const [startupError, setStartupError] = useDiagnosticMessage("App:startupError", "inline");
   const [edvUnlocked, setEdvUnlocked] = useState(false);
   const [exchangeMessage, setExchangeMessage] = useDiagnosticMessage("App:exchangeMessage");
@@ -135,6 +138,7 @@ export default function App() {
 
   const applyNavigation = (nextPage: Page, nextSection?: SettingsSection) => {
     if (nextPage === "services") return;
+    if (nextPage === "ki" && !kiEnabled) return;
     if (nextPage === "contacts" && hiddenDataSections.includes("contacts")) return;
     if (nextPage === "calendar" && hiddenDataSections.includes("calendar")) return;
     if (nextPage === "authenticator" && !featureAvailability.authenticator) return;
@@ -183,6 +187,7 @@ export default function App() {
   };
 
   const changeFeatureAvailability = (feature: AppFeature, enabled: boolean) => {
+    if (!edvUnlocked) return;
     setFeatureAvailability(setFeatureOverride(feature, enabled));
   };
 
@@ -481,6 +486,7 @@ export default function App() {
         <Sidebar
           activePage={page}
           calendarEnabled={!hiddenDataSections.includes("calendar")}
+          kiEnabled={kiEnabled}
           contactsEnabled={!hiddenDataSections.includes("contacts")}
           authenticatorEnabled={featureAvailability.authenticator}
           compact={compactSidebar}
@@ -508,6 +514,7 @@ export default function App() {
               availability={featureAvailability}
               onFeatureChange={changeFeatureAvailability}
               onReset={() => setFeatureAvailability(clearFeatureOverrides())}
+              kiRollout={kiRollout}
             />
           )}
           {page === "m365" && <Microsoft365Page synchronizeAfterConnection={() => runCalendarSync("change")} />}

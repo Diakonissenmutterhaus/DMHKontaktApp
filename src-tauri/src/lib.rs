@@ -28,6 +28,7 @@ mod diagnostics;
 mod documents;
 mod email_archive;
 mod file_icons;
+mod feature_rollout;
 mod ki;
 mod ki_news;
 mod m365;
@@ -6754,7 +6755,7 @@ fn query_audit_log(conn: &Connection, filter: AuditLogFilter) -> Result<AuditLog
 
 #[tauri::command]
 fn set_app_setting(app: AppHandle, key: String, value: String) -> Result<(), String> {
-    if ki::protected_key(&key) {
+    if ki::protected_key(&key) || feature_rollout::protected_key(&key) {
         return Err("KI-Inhalte und Bestätigungen nur über den KI-Bereich speichern.".into());
     }
     if outlook_exchange::is_setup_state_key(&key) {
@@ -10640,6 +10641,7 @@ pub fn run() {
             ki::submit_ki_acknowledgement,
             ki::list_ki_acknowledgements,
             ki::list_my_ki_acknowledgements,
+            feature_rollout::get_ki_rollout_status,
             ki::save_ki_access_request,
             ki::list_ki_access_requests,
             ki_news::list_ki_news,

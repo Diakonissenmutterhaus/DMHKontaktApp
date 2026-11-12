@@ -1,0 +1,67 @@
+name: KI zentral freigeben
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "Zentrale Freigabe: deaktiviert, sofort oder geplant"
+        required: true
+        default: disabled
+        type: choice
+        options: [disabled, immediate, scheduled]
+      activate_at:
+        description: "Nur geplant: ISO-Zeit mit Zeitzone, z. B. 2026-12-01T08:00:00+01:00"
+        required: false
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: ki-central-rollout
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Nur die zentrale KI-Konfiguration veröffentlichen
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          ROLLOUT_MODE: ${{ inputs.mode }}
+          ACTIVATE_AT: ${{ inputs.activate_at }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ($env:REPOSITORY -ne 'Diakonissenmutterhaus/DMHKontaktApp') { throw 'Unerwartetes Repository' }
+          $mode = $env:ROLLOUT_MODE
+          if ($mode -notin @('disabled','immediate','scheduled')) { throw 'Ungültiger Freigabemodus' }
+          $activateAt = $null
+          if ($mode -eq 'scheduled') {
+            $value = $env:ACTIVATE_AT.Trim()
+            if ($value -notmatch '^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,7})?(Z|[+-]\d{2}:\d{2})$') { throw 'Bitte ISO-Zeit mit expliziter Zeitzone angeben.' }
+            $instant = [DateTimeOffset]::Parse($value, [Globalization.CultureInfo]::InvariantCulture)
+            if ($instant -le [DateTimeOffset]::UtcNow) { throw 'Der geplante Zeitpunkt muss in der Zukunft liegen. Für sofort immediate wählen.' }
+            $activateAt = $instant.UtcDateTime.ToString("yyyy-MM-ddTHH:mm:ss.fffZ")
+          } elseif (-not [string]::IsNullOrWhiteSpace($env:ACTIVATE_AT)) { throw 'Ein Datum ist nur bei scheduled erlaubt.' }
+          $policy = @{ schemaVersion=1; enabled=($mode -ne 'disabled'); activateAt=$activateAt; updatedAt=[DateTime]::UtcNow.ToString("yyyy-MM-ddTHH:mm:ss.fffZ") }
+          $json = ($policy | ConvertTo-Json -Depth 3) + "`n"
+          $api = 'https://api.github.com/repos/' + $env:REPOSITORY
+          $headers = @{ Authorization=('Bearer '+$env:GH_TOKEN); Accept='application/vnd.github+json'; 'X-GitHub-Api-Version'='2022-11-28' }
+          function Call-GitHub($method, $path, $body) {
+            $options = @{ Method=$method; Uri=($api+$path); Headers=$headers; ErrorAction='Stop' }
+            if ($null -ne $body) { $options.Body=($body | ConvertTo-Json -Depth 10); $options.ContentType='application/json; charset=utf-8' }
+            Invoke-RestMethod @options
+          }
+          $head = $null
+          try { $head = (Call-GitHub GET '/git/ref/heads/feature-flags' $null).object.sha }
+          catch { if ([int]$_.Exception.Response.StatusCode -ne 404) { throw } }
+          $blob = Call-GitHub POST '/git/blobs' @{ content=$json; encoding='utf-8' }
+          $treeBody = @{ tree=@(@{ path='ki.json'; mode='100644'; type='blob'; sha=$blob.sha }) }
+          if ($head) { $treeBody.base_tree=(Call-GitHub GET ('/git/commits/'+$head) $null).tree.sha }
+          $tree = Call-GitHub POST '/git/trees' $treeBody
+          $commit = Call-GitHub POST '/git/commits' @{ message=('KI rollout: '+$mode); tree=$tree.sha; parents=@($head | Where-Object { $_ }) }
+          if ($head) { $null=Call-GitHub PATCH '/git/refs/heads/feature-flags' @{ sha=$commit.sha; force=$false } }
+          else { $null=Call-GitHub POST '/git/refs' @{ ref='refs/heads/feature-flags'; sha=$commit.sha } }
+          @("## KI-Freigabe", "Modus: $mode", "Freigabe ab (UTC): $activateAt", "Branch: feature-flags", "Datei: ki.json", "Es wurde kein App-Release erstellt.") | Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY

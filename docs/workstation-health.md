@@ -1,6 +1,6 @@
 # Arbeitsplatzübersicht und zentrale EDV-Mitteilungen
 
-Die Startseite zeigt unter „Mein Arbeitsplatz“ Konto, Outlook-Konfiguration,
+EDV Tools → Erweitert zeigt nach dem Entsperren unter „Mein Arbeitsplatz“ Konto, Outlook-Konfiguration,
 Synchronisierung, Version und Berichtsversand. Die Übersicht wird beim Öffnen,
 nach gemeldeten Vorgängen und alle fünf Minuten bei sichtbarer App abgefragt.
 „Aktualisieren“ fragt sofort ab. Profile, Postfächer und PST/OST werden nur bei
@@ -33,7 +33,7 @@ Im Repository `Diakonissenmutterhaus/DMHKontaktApp` auf dem Branch `feature-flag
 die Datei `edv-news.json` erstellen. Die Vorlage liegt neben dieser Dokumentation.
 Nur veröffentlichen, wenn der Administrator dies ausdrücklich beauftragt.
 Die App liest die Datei beim Öffnen und anschließend alle 15 Minuten, solange die
-Startseite sichtbar ist. Der letzte gültige Stand bleibt bei Netzfehlern erhalten.
+EDV-Ansicht sichtbar ist. Der letzte gültige Stand bleibt bei Netzfehlern erhalten.
 Die Nachricht erscheint ab `publishAt` und verschwindet ab `expiresAt`.
 Zeitangaben müssen Zeitzone enthalten; für Deutschland z.B. `+01:00` im Winter.
 Maximal 30 Nachrichten, nur Klartext, keine HTML- oder Skriptinhalte.
@@ -50,3 +50,6 @@ Vorhandene Nachweise werden unverändert aufbewahrt.
 PC-, Office- und Outlook-Abfragen stehen nur in der Tauri-Windows-App zur Verfügung.
 `npm run tauri:dev` startet die native Entwicklung mit derselben lokalen Oberfläche.
 Die Browser-Vorschau zeigt keine erfundenen PC-Daten.
+
+Für reguläre Benutzer bleibt das gesamte Arbeitsplatzpanel ausgeblendet. Es wird
+auf der Startseite nicht eingebunden und startet dort keine PC-/Outlook-Abfragen.

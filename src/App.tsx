@@ -1,3 +1,4 @@
+import { WorkstationPanel } from "./components/WorkstationPanel";
 import { useDiagnosticMessage } from "./hooks/useDiagnosticMessage";
 import { LoaderCircle, RefreshCw } from "lucide-react";
 import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
@@ -500,7 +501,7 @@ export default function App() {
         {settingsAreaOpen && <SettingsSubtabs activePage={page} activeSection={settingsSection} onNavigate={navigate} />}
         <main className="content">
           <StatusMessage message={exchangeMessage} type="error" recordInActivity={false} />
-          {page === "welcome" && <WelcomePage onNavigate={navigate} kiEnabled={kiEnabled} />}
+          {page === "welcome" && <WelcomePage onNavigate={navigate} />}
           {page === "ki" && <KiPage />}
           {page === "contacts" && !hiddenDataSections.includes("contacts") && (
             <ContactsPage onNavigate={navigate} onRegisterNavigationBlocker={registerNavigationBlocker} />
@@ -511,13 +512,15 @@ export default function App() {
           {page === "documents" && featureAvailability.documents && <DocumentsPage />}
           {page === "passwords" && featureAvailability.passwords && <PasswordsPage status={vaultStatus} onStatusChanged={setVaultStatus} />}
           {page === "authenticator" && featureAvailability.authenticator && <AuthenticatorPage />}
-          {page === "feature-development" && (
+          {page === "feature-development" && edvUnlocked && (
             <FeatureDevelopmentPage
               availability={featureAvailability}
               onFeatureChange={changeFeatureAvailability}
               onReset={() => setFeatureAvailability(clearFeatureOverrides())}
               kiRollout={kiRollout}
-            />
+            >
+              <WorkstationPanel onNavigate={navigate} kiEnabled={kiEnabled} />
+            </FeatureDevelopmentPage>
           )}
           {page === "m365" && <Microsoft365Page synchronizeAfterConnection={() => runCalendarSync("change")} />}
           {page === "m365-login" && <Microsoft365Page title="M365 Anmeldung" synchronizeAfterConnection={() => runCalendarSync("change")} />}

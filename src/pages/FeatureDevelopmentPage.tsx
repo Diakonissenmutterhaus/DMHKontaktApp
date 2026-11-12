@@ -20,6 +20,7 @@ interface FeatureDevelopmentPageProps {
   availability: AppFeatureAvailability;
   onFeatureChange: (feature: AppFeature, enabled: boolean) => void;
   onReset: () => void;
+  children?: ReactNode;
 }
 
 interface FeatureToggleCardProps {
@@ -53,7 +54,7 @@ function FeatureToggleCard({ checked, description, descriptionId, icon, onChange
   );
 }
 
-export function FeatureDevelopmentPage({ availability, onFeatureChange, onReset, kiRollout }: FeatureDevelopmentPageProps) {
+export function FeatureDevelopmentPage({ availability, onFeatureChange, onReset, kiRollout, children }: FeatureDevelopmentPageProps) {
   const [busyAction, setBusyAction] = useState<string | null>(null);
   const [message, setMessage] = useDiagnosticMessage("FeatureDevelopmentPage:message", "notification");
   const [messageType, setMessageType] = useState<"success" | "error" | "info">("info");
@@ -171,6 +172,7 @@ export function FeatureDevelopmentPage({ availability, onFeatureChange, onReset,
 
       <KiRolloutSettings status={kiRollout.status} refreshing={kiRollout.refreshing} onRefresh={kiRollout.refresh} />
       <ProcedureReportingSettings />
+      {children}
       <section className="feature-admin-tools" aria-labelledby="feature-admin-tools-title">
           <div className="feature-admin-tools-heading">
             <div>

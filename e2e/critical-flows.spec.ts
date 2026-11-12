@@ -2029,3 +2029,30 @@ test("gerenciador de categorias permite buscar e selecionar em janelas menores",
     await expect(dialog.getByRole("button", { name: "Kategorie anlegen" })).toBeVisible();
   }
 });
+
+test("Arbeitsplatzdiagnose fica oculta dos usuários e só abre após desbloquear EDV Tools", async ({ page }) => {
+  await installTauriMock(page, []);
+  await page.addInitScript(() => {
+    const w=window as any;w.isTauri=true;w.__workstationReads=0;
+    const original=w.__TAURI_INTERNALS__.invoke;
+    w.__TAURI_INTERNALS__.invoke=async (command:string,args?:unknown)=>{
+      if(command==='get_workstation_health'){w.__workstationReads++;return {checkedAt:new Date().toISOString(),appVersion:'0.1.38',outlookInstalled:true,outlookRunning:false,freeBytes:10000000000,drive:'C:',computer:'Test-PC',windowsUser:'Test'};}
+      if(command==='get_procedure_reporting_status')return {configured:false,pending:0,error:null};
+      if(command==='list_local_procedure_reports')return [];
+      if(command==='get_edv_announcements')return {items:[],lastCheckedAt:null,lastSuccessAt:null,error:null};
+      return original(command,args);
+    };
+  });
+  await page.goto('/');
+  await expect(page.getByRole('region',{name:'Mein Arbeitsplatz'})).toHaveCount(0);
+  expect(await page.evaluate(()=>(window as any).__workstationReads)).toBe(0);
+  await page.getByRole('button',{name:'EDV Tools',exact:true}).click();
+  await expect(page.getByRole('region',{name:'Mein Arbeitsplatz'})).toHaveCount(0);
+  await page.getByLabel('EDV-Kennwort',{exact:true}).fill('test-edv');
+  await page.getByRole('button',{name:'EDV Tools öffnen'}).click();
+  await page.getByRole('navigation',{name:'Unterseiten der EDV Tools'}).getByRole('button',{name:'Erweitert',exact:true}).click();
+  await expect(page.getByRole('region',{name:'Mein Arbeitsplatz'})).toBeVisible();
+  await expect.poll(()=>page.evaluate(()=>(window as any).__workstationReads)).toBeGreaterThan(0);
+  await page.getByRole('button',{name:'Startseite',exact:true}).click();
+  await expect(page.getByRole('region',{name:'Mein Arbeitsplatz'})).toHaveCount(0);
+});

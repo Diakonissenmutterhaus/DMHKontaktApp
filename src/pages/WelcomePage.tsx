@@ -1,4 +1,3 @@
-import { WorkstationPanel } from "../components/WorkstationPanel";
 import { useDiagnosticMessage } from "../hooks/useDiagnosticMessage";
 import { ArrowRight, CalendarDays, Check, LoaderCircle, MailCheck, MailOpen, UsersRound } from "lucide-react";
 import { useEffect, useState } from "react";
@@ -13,10 +12,9 @@ import type { MigrationCaptureResult, MigrationCaptureStatus } from "../types/ma
 
 interface WelcomePageProps {
   onNavigate: (page: Page) => void;
-  kiEnabled?: boolean;
 }
 
-export function WelcomePage({ onNavigate, kiEnabled = false }: WelcomePageProps) {
+export function WelcomePage({ onNavigate }: WelcomePageProps) {
   const [migrationStatus, setMigrationStatus] = useState<MigrationCaptureStatus | null>(null);
   const [statusLoading, setStatusLoading] = useState(true);
   const [migrationDialogOpen, setMigrationDialogOpen] = useState(false);
@@ -106,7 +104,6 @@ export function WelcomePage({ onNavigate, kiEnabled = false }: WelcomePageProps)
 
   return (
     <div className="page migration-welcome-page">
-      <WorkstationPanel onNavigate={onNavigate} kiEnabled={kiEnabled} />
       <section className={everythingCompleted ? "migration-email completed" : "migration-email"} aria-labelledby="migration-email-subject">
         <header className="migration-email-toolbar">
           <span className="migration-email-symbol"><MailOpen size={25} aria-hidden="true" /></span>

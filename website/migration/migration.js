@@ -29,6 +29,9 @@ function localMedia(value) {
 const videoUrl = localMedia(media.video);
 if (videoUrl) {
   video.src = videoUrl;
+  if (media.temporaryVideo) {
+    video.setAttribute('aria-label', 'Bisherige Videoanleitung für DMH Backup');
+  }
   const poster = localMedia(media.poster);
   if (poster) video.poster = poster;
   video.hidden = false;
@@ -46,4 +49,37 @@ for (const figure of document.querySelectorAll("[data-capture]")) {
   image.addEventListener("error", () => { figure.hidden = true; });
   image.src = source;
   figure.hidden = false;
+}
+// The guide shares the previous site's help/download interaction. Native dialog
+// supplies keyboard focus management and Escape without exposing an admin link.
+const helpButton = document.getElementById('more-help-button');
+const helpDialog = document.getElementById('download');
+const helpClose = document.getElementById('more-help-close');
+function openHelp() {
+  if (!helpDialog || helpDialog.open) return;
+  helpDialog.showModal();
+  helpButton?.setAttribute('aria-expanded', 'true');
+  document.body.classList.add('help-panel-open');
+}
+helpButton?.addEventListener('click', openHelp);
+helpClose?.addEventListener('click', () => helpDialog?.close());
+helpDialog?.addEventListener('close', () => {
+  helpButton?.setAttribute('aria-expanded', 'false');
+  document.body.classList.remove('help-panel-open');
+  helpButton?.focus();
+});
+helpDialog?.addEventListener('click', event => {
+  if (event.target !== helpDialog) return;
+  const rect = helpDialog.getBoundingClientRect();
+  if (event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom) helpDialog.close();
+});
+if (window.location.hash === '#download') openHelp();
+window.addEventListener('hashchange', () => { if (window.location.hash === '#download') openHelp(); });
+const playButton = document.getElementById('video-play');
+if (videoUrl && playButton) {
+  playButton.hidden = false;
+  playButton.addEventListener('click', () => { void video.play().catch(() => undefined); });
+  video.addEventListener('play', () => video.parentElement.classList.add('is-playing'));
+  for (const event of ['pause', 'ended']) video.addEventListener(event, () => video.parentElement.classList.remove('is-playing'));
+  video.addEventListener('error', () => { playButton.hidden = true; });
 }

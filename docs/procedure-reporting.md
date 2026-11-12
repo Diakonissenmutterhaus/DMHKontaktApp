@@ -10,8 +10,7 @@ zur Anmeldung oder Verwaltung. Die Anmeldung ist nur direkt unter `/login` errei
 alte HTML-Adressen unter `/edv/` leiten dorthin um. CSS und JavaScript des Panels
 liegen weiterhin unter `/edv/` und enthalten keine Zugangsdaten.
 Die Quelldateien der Startseite liegen unter `website/migration`. Video und echte
-vollständige App-Captures werden in `migration-media.js` eingetragen. Der Film
-der vorherigen Backup-/Importetappe wird dafür nicht wiederverwendet.
+vollständige App-Captures werden in `migration-media.js` eingetragen. Auf ausdrücklichen Wunsch der EDV wird vorübergehend der Film der bisherigen Backup-/Importetappe wiederverwendet. Die Seite kennzeichnet dies; die Exchange-Anleitung steht darunter. `temporaryVideo` nach Einfügen der neuen Aufnahme entfernen.
 
 ## Zugriff und Inbetriebnahme
 

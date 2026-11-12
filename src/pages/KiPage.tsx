@@ -76,24 +76,44 @@ export function KiPage() {
     </> : <nav className="ki-breadcrumb" aria-label="KI-Pfad"><button type="button" aria-label="KI-Übersicht" onClick={() => setView("home")}><ChevronLeft size={16} />KI</button><ChevronRight size={15} /><strong>{view === "document" ? "Richtlinien" : view === "training" ? "Schulungen" : "Formulare"}</strong><button className="ki-command-refresh" type="button" disabled={loading} aria-label="KI aktualisieren" title="Aktualisieren" onClick={() => void load()}><RefreshCw size={16} /></button></nav>}
     {error && !activeWindow && <p className="ki-error" role="alert">{error}</p>}
     {loading && <p role="status">Wird geladen …</p>}
-    {view === "document" && <section className="ki-action-card" aria-label="KI-Richtlinie"><FileText className="ki-card-icon" size={28} /><div className="ki-card-title"><strong title={config?.title}>{config?.title.split(" · ")[0] || "KI-Leitlinie"}</strong><small>{published ? config?.version : "Noch nicht veröffentlicht"}</small></div><div className="ki-card-actions"><button type="button" disabled={loading || !published} aria-label="Original-PDF lesen" onClick={() => setActiveWindow("document")}><BookOpen size={16} />Lesen</button><button type="button" disabled={!published || !config?.pdfSha256} onClick={() => void downloadPdf()}><Download size={16} />Speichern</button><button type="button" disabled={!config} onClick={() => setActiveWindow("details")}><Info size={16} />Details</button><button className="primary" type="button" onClick={() => setView("forms")}><ClipboardList size={16} />Zu den Formularen</button></div></section>}
+    {view === "document" && <section className="ki-workspace" aria-label="KI-Richtlinie">
+      <div className="ki-commandbar" role="group" aria-label="Dokumentaktionen">
+        <button type="button" disabled={loading || !published} aria-label="Original-PDF lesen" onClick={() => setActiveWindow("document")}><BookOpen size={14} />Lesen</button>
+        <button type="button" disabled={!published || !config?.pdfSha256} onClick={() => void downloadPdf()}><Download size={14} />Speichern</button>
+        <button type="button" disabled={!config} onClick={() => setActiveWindow("details")}><Info size={14} />Details</button>
+        <span className="ki-command-separator" aria-hidden="true" />
+        <button className="primary" type="button" onClick={() => setView("forms")}><ClipboardList size={14} />Zu den Formularen</button>
+      </div>
+      <div className="ki-explorer-scroll">
+        <table className="ki-explorer-list ki-document-list" aria-label="KI-Richtlinien">
+          <thead><tr><th scope="col">Name</th><th scope="col">Typ</th><th scope="col">Version</th><th scope="col">Status</th></tr></thead>
+          <tbody><tr>
+            <td><div className="ki-explorer-name"><FileText size={18} aria-hidden="true" /><span><strong title={config?.title}>{config?.title.split(" · ")[0] || "KI-Leitlinie"}</strong>{config?.pdfName && <small>{config.pdfName}</small>}</span></div></td>
+            <td>{config?.pdfSha256 ? "PDF-Dokument" : "Richtlinie"}</td>
+            <td>{config?.version || "—"}</td>
+            <td>{loading ? "Wird geladen …" : published ? "Veröffentlicht" : "Noch nicht veröffentlicht"}</td>
+          </tr></tbody>
+        </table>
+      </div>
+      <footer className="ki-statusbar"><span>{config ? "1 Dokument" : "Kein Dokument"}</span>{published && <span>Aktuelle Fassung</span>}</footer>
+    </section>}
     {view === "training" && <section className="ki-action-card" aria-label="IT-Schulung"><Play className="ki-card-icon" size={28} /><div className="ki-card-title"><strong>IT-Schulung</strong><small>{config?.trainingUrl ? "Online verfügbar" : "Online folgt"}</small></div><div className="ki-card-actions"><button type="button" disabled={!published || !config?.trainingUrl} aria-label="Schulung ansehen" onClick={openTraining}><Play size={16} />Ansehen</button><button className="primary" type="button" onClick={() => setView("forms")}><ClipboardList size={16} />Zu den Formularen</button></div></section>}
     {view === "forms" && <section className="ki-workspace ki-forms-explorer" aria-label="KI-Formulare">
-      <div className="ki-form-list-scroll">
-        <table className="ki-form-list" aria-label="Verfügbare KI-Formulare">
+      <div className="ki-explorer-scroll">
+        <table className="ki-explorer-list" aria-label="Verfügbare KI-Formulare">
           <thead><tr><th scope="col">Name</th><th scope="col">Typ</th><th scope="col">Status</th><th scope="col">Aktion</th></tr></thead>
           <tbody>
             <tr>
-              <td><div className="ki-form-name"><FileText size={18} aria-hidden="true" /><span><strong>Kenntnisnahme & Teilnahme</strong><small>Richtlinie gelesen · Schulung besucht</small></span></div></td>
+              <td><div className="ki-explorer-name"><FileText size={18} aria-hidden="true" /><span><strong>Kenntnisnahme & Teilnahme</strong><small>Richtlinie gelesen · Schulung besucht</small></span></div></td>
               <td>Bestätigung</td>
               <td>{receipt?.revision === config?.revision && receipt ? "Bestätigt" : published ? "Verfügbar" : "Nicht veröffentlicht"}</td>
-              <td><div className="ki-form-actions">{receipt && <button type="button" onClick={() => setActiveWindow("receipt")}><Info size={14} />Nachweis anzeigen</button>}<button className="primary" type="button" disabled={!published || loading} aria-label="Bestätigung ausfüllen" onClick={() => { if (ready) openForm(); else setActiveWindow("read-first"); }}><PenLine size={14} />Ausfüllen</button></div></td>
+              <td><div className="ki-explorer-actions">{receipt && <button type="button" onClick={() => setActiveWindow("receipt")}><Info size={14} />Nachweis anzeigen</button>}<button className="primary" type="button" disabled={!published || loading} aria-label="Bestätigung ausfüllen" onClick={() => { if (ready) openForm(); else setActiveWindow("read-first"); }}><PenLine size={14} />Ausfüllen</button></div></td>
             </tr>
             <tr>
-              <td><div className="ki-form-name"><KeyRound size={18} aria-hidden="true" /><span><strong>KI-Zugang beantragen</strong><small>Kostenpflichtige KI-Anwendung</small></span></div></td>
+              <td><div className="ki-explorer-name"><KeyRound size={18} aria-hidden="true" /><span><strong>KI-Zugang beantragen</strong><small>Kostenpflichtige KI-Anwendung</small></span></div></td>
               <td>Zugangsantrag</td>
               <td>Verfügbar</td>
-              <td><div className="ki-form-actions"><button className="primary" type="button" aria-label="Kostenpflichtigen KI-Zugang beantragen" onClick={() => setActiveWindow("access")}><KeyRound size={14} />Beantragen</button></div></td>
+              <td><div className="ki-explorer-actions"><button className="primary" type="button" aria-label="Kostenpflichtigen KI-Zugang beantragen" onClick={() => setActiveWindow("access")}><KeyRound size={14} />Beantragen</button></div></td>
             </tr>
           </tbody>
         </table>

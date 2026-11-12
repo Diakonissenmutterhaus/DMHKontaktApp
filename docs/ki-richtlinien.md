@@ -14,7 +14,9 @@ nach Auswahl des jeweiligen Bereichs. Unter Formulare liegen zwei getrennte
 Vorgänge: Kenntnisnahme/Schulung bestätigen und kostenpflichtigen KI-Zugang
 beantragen. Die kompakte Explorer-Liste zeigt Name, Typ, Status und direkte
 Aktionen sowie Formularanzahl und Richtlinienversion in der Statusleiste.
-Dokumentinformationen liegen hinter „Details“. Der PDF-Reader und die Bestätigung
+Die Richtlinienübersicht nutzt dieselbe Explorer-Ansicht mit Name, Dokumenttyp,
+Version, Veröffentlichungsstatus und den Aktionen Lesen/Speichern/Details.
+Weitere Dokumentinformationen liegen hinter „Details“. Der PDF-Reader und die Bestätigung
 öffnen eigene klassische Dialogfenster. Das Formular trennt Person, Schulung
 und Unterschrift in kurze Schritte mit Zurück/Weiter. Die Signaturarten werden
 über Zeichnen/Name/Bild gewählt. Die verbindliche Abgabe ist erst im letzten

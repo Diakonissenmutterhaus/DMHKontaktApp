@@ -212,6 +212,11 @@ test("KI mostra o PDF original de 11 páginas e libera formulário após carrega
   await expect(page.getByRole("group", { name: "KI-Bereiche" }).getByRole("button")).toHaveCount(3);
   await page.screenshot({ path: testInfo.outputPath("ki-overview-classic.png") });
   await openKiArea(page, "Richtlinien");
+  const documents = page.getByRole("table", { name: "KI-Richtlinien", exact: true });
+  await expect(documents.getByRole("row")).toHaveCount(2);
+  await expect(documents.getByRole("row", { name: /KI-Leitlinie/ })).toContainText("PDF-Dokument");
+  await expect(documents.getByRole("row", { name: /KI-Leitlinie/ })).toContainText("10.11.2026");
+  await page.screenshot({ path: testInfo.outputPath("ki-richtlinien-explorer.png") });
   await page.getByRole("button", { name: "Original-PDF lesen", exact: true }).click();
   await expect(page.getByText("Seite 1 von 11", { exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "Bestätigung ausfüllen" })).toHaveCount(0);

@@ -1,0 +1,7 @@
+{
+  "name": "dmh-backup-website",
+  "private": true,
+  "type": "module",
+  "scripts": { "build": "node build.mjs", "test": "node --test server/*.test.mjs" },
+  "dependencies": { "@vercel/blob": "2.9.0", "exceljs": "4.4.0" }
+}

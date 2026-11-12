@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#891538">
+  <meta name="description" content="Microsoft 365 verbinden und Outlook Classic auf Exchange umstellen. Video und Schritt-für-Schritt-Anleitung für DMH Backup.">
+  <title>Outlook auf Exchange umstellen · DMH Backup</title>
+  <link rel="stylesheet" href="migration.css">
+  <script src="migration-media.js" defer></script><script src="migration.js" defer></script>
+</head>
+<body>
+  <a class="skip-link" href="#anleitung">Zur schriftlichen Anleitung</a>
+  <main>
+    <section class="video-section" aria-label="Videoanleitung">
+      <div class="video-frame">
+        <video id="migration-video" controls playsinline preload="metadata" aria-label="Video: Microsoft 365 verbinden und Outlook auf Exchange umstellen" hidden>Ihr Browser unterstützt die Videowiedergabe nicht.</video>
+        <div class="video-pending" id="video-pending" role="status"><strong>Video zur Exchange-Umstellung</strong><span>Das Video für diesen Schritt wird hier ergänzt.</span></div>
+      </div>
+    </section>
+    <section class="written-guide" id="anleitung" aria-labelledby="guide-title">
+      <p class="eyebrow">DMH Backup · Nächster Schritt</p>
+      <h1 id="guide-title">Microsoft 365 verbinden.<br>Outlook auf Exchange umstellen.</h1>
+      <p class="introduction">Öffnen Sie DMH Backup und führen Sie die folgenden Schritte der Reihe nach aus.</p>
+      <div class="download-block">
+        <a class="download-button" id="migration-download" href="https://github.com/Diakonissenmutterhaus/DMHKontaktApp/releases/latest">DMH Backup herunterladen</a>
+        <span id="migration-download-version">Windows · Offizielle Version</span>
+      </div>
+      <ol class="steps">
+        <li><div class="step-copy"><h2>DMH Backup öffnen</h2><p>Laden Sie die App über den Button oben herunter, falls sie noch fehlt. Installieren und öffnen Sie DMH Backup auf Ihrem PC.</p><p class="screen-description">In der App führen Sie die Anmeldung und die Outlook-Umstellung durch. Diese Website erklärt die einzelnen Schritte.</p></div></li>
+        <li>
+          <div class="step-copy"><h2>Mit Microsoft 365 verbinden</h2><p>Wählen Sie links <strong>„Microsoft 365“</strong> und klicken Sie auf <strong>„Mit Microsoft 365 verbinden“</strong>. Verwenden Sie dasselbe Geschäftskonto wie in Excel. Bestätigen Sie die Microsoft-Anmeldung, falls danach gefragt wird.</p></div>
+          <p class="screen-description">Diese Seite verbindet DMH Backup mit Ihrem Geschäftskonto. Ist Ihr Konto bereits verbunden, müssen Sie sich nicht erneut anmelden.</p>
+          <figure data-capture="connect" hidden><img alt="Vollständige Microsoft-365-Seite in DMH Backup vor der Anmeldung mit dem Button Mit Microsoft 365 verbinden" loading="lazy" decoding="async"><figcaption>In DMH Backup: Microsoft 365 → Mit Microsoft 365 verbinden.</figcaption></figure>
+        </li>
+        <li><div class="step-copy"><h2>Warten, bis die Anmeldung abgeschlossen ist</h2><p>Lassen Sie die App geöffnet, bis das Konto und alle Informationen vollständig geladen sind. Fahren Sie fort, sobald Ihr verbundenes Konto angezeigt wird und das Ladefenster verschwunden ist.</p><p class="screen-description">Die Ladeanzeige bedeutet, dass die Anmeldung und die Informationen zu Outlook noch verarbeitet werden. Ihr Name und Ihre E-Mail-Adresse zeigen anschließend, welches Konto verbunden ist.</p></div></li>
+        <li>
+          <div class="step-copy"><h2>Auf Exchange umstellen</h2><p>Speichern Sie offene Arbeiten in Outlook. Klicken Sie anschließend in DMH Backup auf <strong>„Zu Exchange wechseln“</strong>.</p><p>Die automatische Einrichtung kann <strong>1–3 Minuten</strong> dauern. Bitte warten und die App nicht schließen. Falls Microsoft eine Bestätigung verlangt, schließen Sie diese ab.</p></div>
+          <p class="screen-description">Die App richtet das Exchange-Profil für Outlook Classic ein, prüft die Verbindung und speichert das bestätigte Profil als Standard. In der Kontoinformation sehen Sie das aktuelle Standardprofil und den Kontotyp, zum Beispiel IMAP oder Exchange.</p>
+          <figure data-capture="exchange" hidden><img alt="Vollständige Microsoft-365-Seite in DMH Backup nach der Anmeldung mit dem Button Zu Exchange wechseln" loading="lazy" decoding="async"><figcaption>Nach der Anmeldung: Zu Exchange wechseln.</figcaption></figure>
+        </li>
+        <li>
+          <div class="step-copy"><h2>Outlook wieder öffnen</h2><p>Warten Sie auf die Erfolgsmeldung. Klicken Sie danach auf <strong>„Outlook öffnen“</strong>. Das bestätigte Exchange-Profil wird als Standard verwendet.</p><p class="screen-description">Die Erfolgsmeldung bestätigt den Abschluss der Einrichtung. Wenn stattdessen ein Fehler angezeigt wird, geben Sie die Meldung an die EDV weiter.</p></div>
+          <figure data-capture="complete" hidden><img alt="Vollständige Microsoft-365-Seite nach bestätigter Einrichtung des Exchange-Standardprofils" loading="lazy" decoding="async"><figcaption>Erst nach der bestätigten Einrichtung ist der Vorgang abgeschlossen.</figcaption></figure>
+        </li>
+      </ol>
+    </section>
+  </main>
+</body>
+</html>

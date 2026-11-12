@@ -3,3 +3,6 @@ media/dmh-backup-anleitung.mp4
 README.md
 .env*
 .vercel/
+node_modules/
+public/
+server/*.test.mjs

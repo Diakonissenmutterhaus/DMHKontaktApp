@@ -1,0 +1,26 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "buildCommand": "npm run build",
+  "outputDirectory": "public",
+  "regions": ["fra1"],
+  "redirects": [
+    { "source": "/edv", "destination": "/login", "permanent": false },
+    { "source": "/edv/", "destination": "/login", "permanent": false },
+    { "source": "/edv/index.html", "destination": "/login", "permanent": false }
+  ],
+  "rewrites": [{ "source": "/login", "destination": "/edv/index.html" }],
+  "functions": { "api/edv.js": { "maxDuration": 60 } },
+  "headers": [{ "source": "/", "has": [{ "type": "host", "value": "migration.dmh-aidlingen.de" }], "headers": [
+    { "key": "Cache-Control", "value": "no-store" },
+    { "key": "X-Robots-Tag", "value": "noindex, nofollow" },
+    { "key": "Content-Security-Policy", "value": "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'self' https://api.github.com; frame-ancestors 'none'; base-uri 'none'; form-action 'self'" }
+  ] }, { "source": "/login", "headers": [
+    { "key": "Cache-Control", "value": "no-store" },
+    { "key": "X-Robots-Tag", "value": "noindex, nofollow" },
+    { "key": "Content-Security-Policy", "value": "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'" }
+  ] }, { "source": "/edv/(.*)", "headers": [
+    { "key": "Cache-Control", "value": "no-store" },
+    { "key": "X-Robots-Tag", "value": "noindex, nofollow" },
+    { "key": "Content-Security-Policy", "value": "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'" }
+  ] }]
+}

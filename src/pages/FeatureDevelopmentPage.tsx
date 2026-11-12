@@ -1,5 +1,5 @@
 import { useDiagnosticMessage } from "../hooks/useDiagnosticMessage";
-import { AlertTriangle, BookOpen, Files, KeyRound, Mail, RotateCcw, ShieldCheck, Trash2 } from "lucide-react";
+import { AlertTriangle, BookOpen, KeyRound, Mail, RotateCcw, ShieldCheck, Trash2 } from "lucide-react";
 import { useState, type ReactNode } from "react";
 import { StatusMessage } from "../components/StatusMessage";
 import {
@@ -62,7 +62,6 @@ export function FeatureDevelopmentPage({ availability, onFeatureChange, onReset,
   const usesReleaseDefaults = availability.authenticator === releaseFeatureDefaults.authenticator
     && availability.ki === releaseFeatureDefaults.ki
     && availability.passwords === releaseFeatureDefaults.passwords
-    && availability.documents === releaseFeatureDefaults.documents
     && availability.emailSave === releaseFeatureDefaults.emailSave;
 
   const resetApplication = async () => {
@@ -159,14 +158,6 @@ export function FeatureDevelopmentPage({ availability, onFeatureChange, onReset,
           icon={<KeyRound size={25} aria-hidden="true" />}
           onChange={() => onFeatureChange("passwords", !availability.passwords)}
           title="Passwörter"
-        />
-        <FeatureToggleCard
-          checked={availability.documents}
-          description="Dokumente aus OneDrive und SharePoint im Explorer-Stil verwalten."
-          descriptionId="documents-feature-description"
-          icon={<Files size={25} aria-hidden="true" />}
-          onChange={() => onFeatureChange("documents", !availability.documents)}
-          title="Dokumente"
         />
       </section>
 

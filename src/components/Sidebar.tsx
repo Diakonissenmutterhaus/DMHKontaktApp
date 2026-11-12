@@ -1,8 +1,8 @@
-import { BookOpen, CalendarDays, Files, House, KeyRound, LayoutGrid, Mail, ShieldCheck, Trash2, UserRound } from "lucide-react";
+import { BookOpen, CalendarDays, House, KeyRound, LayoutGrid, Mail, ShieldCheck, Trash2, UserRound } from "lucide-react";
 import { t } from "../i18n";
 import { useEffect, useState } from "react";
 
-export type Page = "welcome" | "ki" | "contacts" | "calendar" | "m365-login" | "email-save" | "documents" | "passwords" | "authenticator" | "services" | "import" | "contact-import" | "calendar-import" | "export" | "feature-development" | "m365" | "trash" | "settings" | "simple-import" | "backup" | "synchronizations" | "recovery";
+export type Page = "welcome" | "ki" | "contacts" | "calendar" | "m365-login" | "email-save" | "passwords" | "authenticator" | "services" | "import" | "contact-import" | "calendar-import" | "export" | "feature-development" | "m365" | "trash" | "settings" | "simple-import" | "backup" | "synchronizations" | "recovery";
 
 const items: Array<{ page: Page; label: string; icon: typeof UserRound; group: "main" | "tools" }> = [
   { page: "welcome", label: "Startseite", icon: House, group: "main" },
@@ -13,7 +13,6 @@ const items: Array<{ page: Page; label: string; icon: typeof UserRound; group: "
   { page: "email-save", label: "emails speichern", icon: Mail, group: "main" },
   { page: "passwords", label: "Passwörter", icon: KeyRound, group: "main" },
   { page: "authenticator", label: "2FA-Authenticator", icon: ShieldCheck, group: "tools" },
-  { page: "documents", label: "Dokumente", icon: Files, group: "tools" }
 ];
 
 const settingsPages = new Set<Page>(["settings", "feature-development", "backup"]);
@@ -26,12 +25,11 @@ interface SidebarProps {
   kiEnabled: boolean;
   contactsEnabled: boolean;
   authenticatorEnabled: boolean;
-  documentsEnabled: boolean;
   passwordsEnabled: boolean;
   emailSaveEnabled: boolean;
 }
 
-export function Sidebar({ activePage, onNavigate, compact = false, calendarEnabled, kiEnabled, contactsEnabled, authenticatorEnabled, documentsEnabled, passwordsEnabled, emailSaveEnabled }: SidebarProps) {
+export function Sidebar({ activePage, onNavigate, compact = false, calendarEnabled, kiEnabled, contactsEnabled, authenticatorEnabled, passwordsEnabled, emailSaveEnabled }: SidebarProps) {
   const [suppressHover, setSuppressHover] = useState(activePage === "email-save");
   useEffect(() => { setSuppressHover(activePage === "email-save"); }, [activePage]);
   const visibleItems = items.filter((item) => (
@@ -39,7 +37,6 @@ export function Sidebar({ activePage, onNavigate, compact = false, calendarEnabl
     && (item.page !== "ki" || kiEnabled)
     && (item.page !== "calendar" || calendarEnabled)
     && (item.page !== "authenticator" || authenticatorEnabled)
-    && (item.page !== "documents" || documentsEnabled)
     && (item.page !== "passwords" || passwordsEnabled)
     && (item.page !== "email-save" || emailSaveEnabled)
   ));

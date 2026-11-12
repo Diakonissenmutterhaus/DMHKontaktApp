@@ -35,7 +35,7 @@ die laufende Synchronisierung öffnet keine Anmeldefenster.
    Microsoft-Graph-Berechtigungen eintragen: `User.Read`,
    `Contacts.ReadWrite`, `Contacts.ReadWrite.Shared`, `Calendars.ReadWrite`,
    `Calendars.ReadWrite.Shared`, `Calendars.Read.Shared`,
-   `MailboxSettings.ReadWrite`, `Files.ReadWrite.All` und `Sites.Read.All`.
+   `MailboxSettings.ReadWrite`.
 7. Den erforderlichen Administratoreinwilligungen des DMH-Tenants zustimmen.
 8. Mandanten-ID und Anwendungs-ID notieren.
 

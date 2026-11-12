@@ -1,10 +1,9 @@
-export type AppFeature = "authenticator" | "passwords" | "documents" | "emailSave" | "ki";
+export type AppFeature = "authenticator" | "passwords" | "emailSave" | "ki";
 
 export interface AppFeatureAvailability {
   ki: boolean;
   authenticator: boolean;
   passwords: boolean;
-  documents: boolean;
   emailSave: boolean;
 }
 
@@ -19,7 +18,6 @@ export const releaseFeatureDefaults: AppFeatureAvailability = {
   ki: false,
   authenticator: false,
   passwords: false,
-  documents: false,
   emailSave: false
 };
 
@@ -37,7 +35,6 @@ function readOverrides(): Partial<AppFeatureAvailability> {
     if (typeof parsed.overrides.ki === "boolean") overrides.ki = parsed.overrides.ki;
     if (typeof parsed.overrides.authenticator === "boolean") overrides.authenticator = parsed.overrides.authenticator;
     if (typeof parsed.overrides.passwords === "boolean") overrides.passwords = parsed.overrides.passwords;
-    if (typeof parsed.overrides.documents === "boolean") overrides.documents = parsed.overrides.documents;
     if (typeof parsed.overrides.emailSave === "boolean") overrides.emailSave = parsed.overrides.emailSave;
     return overrides;
   } catch {

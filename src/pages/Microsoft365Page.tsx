@@ -358,7 +358,7 @@ function Microsoft365Content({ title, synchronizeAfterConnection }: Microsoft365
       <header className="page-header">
         <div>
           <h2>{title}</h2>
-          <p>Geschäftskonto für Kontakte, Kalender, OneDrive und SharePoint sicher verbinden.</p>
+          <p>Geschäftskonto für Kontakte und Kalender sicher verbinden.</p>
         </div>
       </header>
 
@@ -394,7 +394,7 @@ function Microsoft365Content({ title, synchronizeAfterConnection }: Microsoft365
           <div className="m365-privacy-note">
             <ShieldCheck size={21} />
             <p>
-              Die App verwendet Kontakte, Kalender und Dokumente nur im Rahmen Ihrer bestehenden
+              Die App verwendet Kontakte und Kalender nur im Rahmen Ihrer bestehenden
               Berechtigungen. Ihr Microsoft-Kennwort wird niemals gelesen oder gespeichert.
             </p>
           </div>

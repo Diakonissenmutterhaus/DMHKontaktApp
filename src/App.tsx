@@ -21,14 +21,13 @@ import { BackupPage } from "./pages/BackupPage";
 import { Microsoft365Page } from "./pages/Microsoft365Page";
 import { EmailSavePage } from "./pages/EmailSavePage";
 import { SynchronizationsPage } from "./pages/SynchronizationsPage";
-import { DocumentsPage } from "./pages/DocumentsPage";
 import { FeatureDevelopmentPage } from "./pages/FeatureDevelopmentPage";
 import { RecoveryPage } from "./pages/RecoveryPage";
 import { WelcomePage } from "./pages/WelcomePage";
 import { KiPage } from "./pages/KiPage";
 import { useKiRollout } from "./hooks/useKiRollout";
 import { startReportDelivery } from "./services/procedureReports";
-import { createAutomaticSafetyBackup, getMicrosoft365ConnectionStatus, getVaultStatus, syncOfflineDocuments } from "./services/db";
+import { createAutomaticSafetyBackup, getMicrosoft365ConnectionStatus, getVaultStatus } from "./services/db";
 import type { VaultStatus } from "./types/vault";
 import { captureBrowserStorage } from "./utils/backup";
 import {
@@ -113,7 +112,6 @@ export default function App() {
   const safetyBackupPromise = useRef<Promise<void> | null>(null);
   const backupDirty = useRef(true);
   const backupGeneration = useRef(0);
-  const documentSyncPromise = useRef<Promise<void> | null>(null);
   const calendarSyncPromise = useRef<Promise<"success" | "error" | "skipped"> | null>(null);
   const queuedCalendarSyncTriggers = useRef(new Set<AutomaticSyncTrigger>());
   const contactSyncPromise = useRef<Promise<"success" | "error" | "skipped"> | null>(null);
@@ -146,7 +144,6 @@ export default function App() {
     if (nextPage === "calendar" && hiddenDataSections.includes("calendar")) return;
     if (nextPage === "authenticator" && !featureAvailability.authenticator) return;
     if (nextPage === "passwords" && !featureAvailability.passwords) return;
-    if (nextPage === "documents" && !featureAvailability.documents) return;
     if (nextPage === "email-save" && !featureAvailability.emailSave) return;
     if (!edvPages.has(nextPage)) {
       if (edvUnlocked) void invokeWithDiagnostics("lock_edv_tools").catch(() => undefined);
@@ -212,16 +209,6 @@ export default function App() {
     } finally {
       if (safetyBackupPromise.current === promise) safetyBackupPromise.current = null;
     }
-  }, []);
-
-  const runDocumentSync = useCallback(async (): Promise<void> => {
-    if (!("__TAURI_INTERNALS__" in window)) return;
-    if (m365SafeImportTestMode) return;
-    if (documentSyncPromise.current) return documentSyncPromise.current;
-    const promise = syncOfflineDocuments().then(() => undefined);
-    documentSyncPromise.current = promise;
-    try { await promise; }
-    finally { if (documentSyncPromise.current === promise) documentSyncPromise.current = null; }
   }, []);
 
   const runCalendarSync = useCallback(async (trigger: AutomaticSyncTrigger): Promise<"success" | "error" | "skipped"> => {
@@ -392,19 +379,11 @@ export default function App() {
         // Backup failures must not interrupt normal contact/calendar work.
       });
     }, 5 * 60_000);
-    const documentSyncInterval = window.setInterval(() => {
-      void runDocumentSync().catch(() => {
-        // Offline changes remain queued and are retried when the connection returns.
-      });
-    }, 45_000);
     const startupBackupTimer = window.setTimeout(() => {
       void runSafetyBackup(true).catch(() => {
         // The next interval or the close handler will retry automatically.
       });
     }, 8_000);
-    void runDocumentSync().catch(() => {
-      // A missing connection is expected while the device is offline.
-    });
 
     let backupDebounceTimer: number | undefined;
     const markBackupDirty = () => {
@@ -436,7 +415,6 @@ export default function App() {
         void Promise.allSettled([
           runCalendarSync("calendar-poll"),
           runCalendarSync("poll"),
-          runDocumentSync(),
           runSafetyBackup(true)
         ]);
       } catch (error) {
@@ -448,7 +426,6 @@ export default function App() {
 
     return () => {
       window.clearInterval(interval);
-      window.clearInterval(documentSyncInterval);
       window.clearTimeout(startupBackupTimer);
       if (backupDebounceTimer !== undefined) window.clearTimeout(backupDebounceTimer);
       window.removeEventListener(calendarChangedEventName, markBackupDirty);
@@ -458,7 +435,7 @@ export default function App() {
       window.removeEventListener(dataSectionVisibilityChangedEventName, markBackupDirty);
       void unlisten.then((dispose) => dispose());
     };
-  }, [runCalendarSync, runDocumentSync, runSafetyBackup]);
+  }, [runCalendarSync, runSafetyBackup]);
 
   if (!vaultStatus) {
     return (
@@ -493,7 +470,6 @@ export default function App() {
           contactsEnabled={!hiddenDataSections.includes("contacts")}
           authenticatorEnabled={featureAvailability.authenticator}
           compact={compactSidebar}
-          documentsEnabled={featureAvailability.documents}
           emailSaveEnabled={featureAvailability.emailSave}
           onNavigate={navigate}
           passwordsEnabled={featureAvailability.passwords}
@@ -509,7 +485,6 @@ export default function App() {
           {page === "calendar" && !hiddenDataSections.includes("calendar") && (
             <CalendarPage advancedMode={advancedCalendar} onAdvancedModeChange={changeAdvancedCalendar} onNavigate={navigate} />
           )}
-          {page === "documents" && featureAvailability.documents && <DocumentsPage />}
           {page === "passwords" && featureAvailability.passwords && <PasswordsPage status={vaultStatus} onStatusChanged={setVaultStatus} />}
           {page === "authenticator" && featureAvailability.authenticator && <AuthenticatorPage />}
           {page === "feature-development" && edvUnlocked && (

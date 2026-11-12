@@ -43,26 +43,8 @@ import type {
   Microsoft365SyncSources,
   CalendarOutboxSyncResult
 } from "../types/m365";
-import type { DocumentConflictDecision, DocumentItem, DocumentMutationRequest, DocumentOfflineFolderResult, DocumentSource, DocumentSyncConflict, DocumentSyncSummary, DocumentTransferRequest, DocumentTransferResult, DocumentUploadResult, DocumentVersion, SystemFileIcon } from "../types/documents";
 import type { PhoneTransferStatus } from "../types/phoneTransfer";
-import type { AddNetworkPrinterRequest, PrinterDriver, PrinterInfo } from "../types/printer";
 import type { AuditLogFilter, AuditLogPage } from "../types/audit";
-
-export function listPrinters(): Promise<PrinterInfo[]> {
-  return invoke("list_printers");
-}
-
-export function listPrinterDrivers(): Promise<PrinterDriver[]> {
-  return invoke("list_printer_drivers");
-}
-
-export function addNetworkPrinter(request: AddNetworkPrinterRequest): Promise<void> {
-  return invoke("add_network_printer", { request });
-}
-
-export function installDmhKopierraumPrinter(): Promise<"installed" | "alreadyInstalled"> {
-  return invoke("install_dmh_kopierraum_printer");
-}
 
 export function startPhonePhotoTransfer(): Promise<PhoneTransferStatus> {
   return invoke("start_phone_photo_transfer");
@@ -518,94 +500,6 @@ export function flushMicrosoft365ContactOutbox(request: {
   sharedMailboxAddresses: string[];
 }): Promise<import("../types/m365").ContactOutboxSyncResult> {
   return invoke("flush_m365_contact_outbox", { request });
-}
-
-export function listDocumentSources(scope: "all" | "onedrive" | "sharepoint" = "all"): Promise<DocumentSource[]> {
-  return invoke("list_document_sources", { scope });
-}
-
-export function listDocumentItems(driveId: string, parentId?: string): Promise<DocumentItem[]> {
-  return invoke("list_document_items", { driveId, parentId });
-}
-
-export function createDocumentFolder(request: DocumentMutationRequest): Promise<DocumentItem> {
-  return invoke("create_document_folder", { request });
-}
-
-export function renameDocumentItem(request: DocumentMutationRequest): Promise<DocumentItem> {
-  return invoke("rename_document_item", { request });
-}
-
-export function deleteDocumentItem(driveId: string, itemId: string): Promise<void> {
-  return invoke("delete_document_item", { driveId, itemId });
-}
-
-export function moveDocumentItems(request: DocumentTransferRequest): Promise<DocumentTransferResult> {
-  return invoke("move_document_items", { request });
-}
-
-export function copyDocumentItems(request: DocumentTransferRequest): Promise<DocumentTransferResult> {
-  return invoke("copy_document_items", { request });
-}
-
-export function openDocumentInOffice(fileName: string, parentWebUrl: string, webUrl: string): Promise<"desktop" | "web" | "unsupported"> {
-  return invoke("open_document_in_office", { fileName, parentWebUrl, webUrl });
-}
-
-export function getDocumentFileIcons(fileNames: string[]): Promise<Record<string, SystemFileIcon>> {
-  return invoke("get_document_file_icons", { fileNames });
-}
-
-export function createDocumentTextFile(driveId: string, parentId: string | undefined, name: string, content = ""): Promise<DocumentItem> {
-  return invoke("create_document_text_file", { driveId, parentId, name, content });
-}
-
-export function createDocumentShareLink(driveId: string, itemId: string, allowEdit: boolean): Promise<string> {
-  return invoke("create_document_share_link", { driveId, itemId, allowEdit });
-}
-
-export function listDocumentVersions(driveId: string, itemId: string): Promise<DocumentVersion[]> {
-  return invoke("list_document_versions", { driveId, itemId });
-}
-
-export function restoreDocumentVersion(driveId: string, itemId: string, versionId: string): Promise<void> {
-  return invoke("restore_document_version", { driveId, itemId, versionId });
-}
-
-export function downloadDocumentItem(driveId: string, itemId: string, name: string, relativePath?: string[], eTag?: string, parentId?: string): Promise<string> {
-  return invoke("download_document_item", { driveId, itemId, name, relativePath, eTag, parentId });
-}
-
-export function makeDocumentFolderOffline(driveId: string, folderId: string, name: string, relativePath: string[]): Promise<DocumentOfflineFolderResult> {
-  return invoke("make_document_folder_offline", { driveId, folderId, name, relativePath });
-}
-
-export function uploadDocumentFile(driveId: string, parentId: string | undefined, filePath: string): Promise<DocumentItem> {
-  return invoke("upload_document_file", { driveId, parentId, filePath });
-}
-
-export function uploadDocumentPath(driveId: string, parentId: string | undefined, localPath: string): Promise<DocumentUploadResult> {
-  return invoke("upload_document_path", { driveId, parentId, localPath });
-}
-
-export function uploadDocumentRevision(driveId: string, itemId: string, filePath: string, expectedETag: string): Promise<DocumentItem> {
-  return invoke("upload_document_revision", { driveId, itemId, filePath, expectedETag });
-}
-
-export function syncOfflineDocuments(): Promise<DocumentSyncSummary> {
-  return invoke("sync_offline_documents");
-}
-
-export function listDocumentSyncConflicts(): Promise<DocumentSyncConflict[]> {
-  return invoke("list_document_sync_conflicts");
-}
-
-export function resolveDocumentSyncConflict(conflictIdValue: string, decision: DocumentConflictDecision): Promise<void> {
-  return invoke("resolve_document_sync_conflict", { conflictIdValue, decision });
-}
-
-export function getDocumentsLocalRoot(): Promise<string> {
-  return invoke("get_documents_local_root");
 }
 
 export function importOutlookStore(path: string): Promise<{ contacts: ContactInput[]; events: CalendarEvent[] }> {

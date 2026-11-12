@@ -25,7 +25,7 @@ const CALENDAR_COLOR_CATEGORY_MIGRATION_KEY_PREFIX: &str = "m365_calendar_color_
 const DPAPI_ENTROPY: &[u8] = b"de.dmh.agendakontakte.m365.v1";
 const GRAPH_PROFILE_URL: &str =
     "https://graph.microsoft.com/v1.0/me?$select=id,displayName,mail,userPrincipalName";
-pub(crate) const LOGIN_SCOPES: &str = "openid profile offline_access User.Read Contacts.ReadWrite Contacts.ReadWrite.Shared Calendars.ReadWrite Calendars.ReadWrite.Shared Calendars.Read.Shared MailboxSettings.ReadWrite Files.ReadWrite.All Sites.Read.All";
+pub(crate) const LOGIN_SCOPES: &str = "openid profile offline_access User.Read Contacts.ReadWrite Contacts.ReadWrite.Shared Calendars.ReadWrite Calendars.ReadWrite.Shared Calendars.Read.Shared MailboxSettings.ReadWrite";
 const INTERACTIVE_LOGIN_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 const GRAPH_MAX_ATTEMPTS: usize = 5;
 const GRAPH_REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
@@ -7796,7 +7796,7 @@ mod tests {
     fn form_values_are_encoded_without_losing_scopes() {
         assert_eq!(
             form_body(&[("scope", LOGIN_SCOPES)]),
-            "scope=openid+profile+offline_access+User.Read+Contacts.ReadWrite+Contacts.ReadWrite.Shared+Calendars.ReadWrite+Calendars.ReadWrite.Shared+Calendars.Read.Shared+MailboxSettings.ReadWrite+Files.ReadWrite.All+Sites.Read.All"
+            "scope=openid+profile+offline_access+User.Read+Contacts.ReadWrite+Contacts.ReadWrite.Shared+Calendars.ReadWrite+Calendars.ReadWrite.Shared+Calendars.Read.Shared+MailboxSettings.ReadWrite"
         );
     }
 

@@ -537,8 +537,7 @@ async function installTauriMock(page: Page, contacts: MockContact[], options: { 
           return { entries: auditEntries.filter((entry) => (!filter.action || entry.action === filter.action) && (!filter.source || entry.source === filter.source) && (!filter.search || filter.search.toLowerCase().split(/\s+/).every((word: string) => entry.summary.toLowerCase().includes(word)))), hasMore: false };
         }
         case "list_mail_accounts":
-        case "list_printers":
-        case "list_printer_drivers": return [];
+          return [];
         case "get_vault_status":
           return { protectionEnabled: false, unlocked: true, username: "", recoveryEmail: "", recoveryEmailHint: "", recoveryAvailable: false, entryCount: 0 };
         case "get_microsoft365_connection_status":
@@ -565,7 +564,6 @@ async function installTauriMock(page: Page, contacts: MockContact[], options: { 
           return ++callbackId;
         case "plugin:event|unlisten":
         case "plugin:updater|check":
-        case "sync_offline_documents":
         case "create_automatic_safety_backup":
           return null;
         default:
@@ -2055,4 +2053,39 @@ test("Arbeitsplatzdiagnose fica oculta dos usuários e só abre após desbloquea
   await expect.poll(()=>page.evaluate(()=>(window as any).__workstationReads)).toBeGreaterThan(0);
   await page.getByRole('button',{name:'Startseite',exact:true}).click();
   await expect(page.getByRole('region',{name:'Mein Arbeitsplatz'})).toHaveCount(0);
+});
+
+
+test("exclusões preservam a navegação com configuração antiga e não chamam módulos removidos", async ({ page }) => {
+  await installTauriMock(page, []);
+  await page.addInitScript(() => {
+    localStorage.setItem("dmh-backup-feature-overrides-v1", JSON.stringify({ version: 1, overrides: { documents: true } }));
+    const w = window as any;
+    const invoke = w.__TAURI_INTERNALS__.invoke;
+    w.__TAURI_EVENT_PLUGIN_INTERNALS__ = { unregisterListener() {} };
+    w.__REMOVED_FEATURE_CALLS__ = [];
+    w.__TAURI_INTERNALS__.invoke = async (command: string, args: any) => {
+      if (/^(sync_offline_documents|list_document_|get_documents_|get_document_file_icons|list_printers|list_printer_drivers|add_network_printer|install_dmh_kopierraum_printer)/.test(command)) {
+        w.__REMOVED_FEATURE_CALLS__.push(command);
+        throw new Error("Removed native command: " + command);
+      }
+      return invoke(command, args);
+    };
+  });
+  const errors: string[] = [];
+  page.on("pageerror", error => errors.push(error.message));
+  await page.clock.install();
+  await page.goto("/");
+  await expect(page.getByRole("navigation", { name: "Hauptmenü" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Dokumente", exact: true })).toHaveCount(0);
+  await page.getByRole("button", { name: "EDV Tools", exact: true }).click();
+  await page.getByLabel("EDV-Kennwort", { exact: true }).fill("test-edv");
+  await page.getByRole("button", { name: "EDV Tools öffnen" }).click();
+  const navigation = page.getByRole("navigation", { name: "Unterseiten der EDV Tools" });
+  await expect(navigation.getByRole("button", { name: "Drucker", exact: true })).toHaveCount(0);
+  await navigation.getByRole("button", { name: "Erweitert", exact: true }).click();
+  await expect(page.locator(".feature-toggle-card").filter({ hasText: "Dokumente" })).toHaveCount(0);
+  await page.clock.fastForward(120_000);
+  await expect.poll(() => page.evaluate(() => (window as any).__REMOVED_FEATURE_CALLS__)).toEqual([]);
+  expect(errors).toEqual([]);
 });

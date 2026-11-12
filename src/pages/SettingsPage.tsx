@@ -3,7 +3,6 @@ import { useEffect, useMemo, useState, type KeyboardEvent as ReactKeyboardEvent 
 import { AlertCircle, AlertTriangle, Bell, CalendarDays, CheckCircle2, ChevronDown, Cloud, ContactRound, Database, Download, Eye, EyeOff, HeartPulse, Mail, RefreshCw, Search, Trash2, X } from "lucide-react";
 import { AuditHistoryPanel } from "../components/AuditHistoryPanel";
 import { BulkRemovalPanel } from "../components/BulkRemovalPanel";
-import { PrinterSettings } from "../components/PrinterSettings";
 import { KiSettings } from "../components/KiSettings";
 import { StatusMessage } from "../components/StatusMessage";
 import { updateAvailableEvent } from "../components/UpdateNotifier";
@@ -55,9 +54,8 @@ interface SystemCheckItem {
 const settingsSearchItems: SettingsSearchItem[] = [
   { id: "bulk-removal", label: "Massenlöschung", description: "Massenlöschung → Kalender & Kontakte", keywords: "löschen entfernen masse mehrere auswahl kalender termine kontakte", page: "settings", section: "bulk-removal", adminOnly: true },
   { id: "mail", label: "E-Mail-Konten verwalten", description: "E-Mail & Konten → Konten", keywords: "e-mail mail konto konten outlook verwalten kennwort", page: "settings", section: "mail", targetId: "settings-mail-accounts" },
-  { id: "printer", label: "Drucker hinzufügen", description: "Drucker → Netzwerkdrucker", keywords: "drucker printer netzwerk freigabe ip hinzufügen", page: "settings", section: "printer" },
   { id: "backup", label: "Sicherung öffnen", description: "Sicherung → Öffnen", keywords: "sicherung backup daten wiederherstellen export", page: "backup", section: "backup" },
-  { id: "advanced", label: "Optionale Bereiche", description: "Erweitert → optionale Bereiche", keywords: "erweitert optional 2fa passwörter dokumente", page: "feature-development", section: "advanced" },
+  { id: "advanced", label: "Optionale Bereiche", description: "Erweitert → optionale Bereiche", keywords: "erweitert optional 2fa passwörter", page: "feature-development", section: "advanced" },
   { id: "update", label: "App-Aktualisierung", description: "Allgemein → Nach Updates suchen", keywords: "update aktualisierung neue version github", page: "settings", section: "general" },
   { id: "activities", label: "Aktivitäten", description: "Allgemein → Bedienung", keywords: "aktivitäten verlauf protokoll benachrichtigungen einschalten ausschalten", page: "settings", section: "general", targetId: "settings-activity-center" },
   { id: "audit-log", label: "Historie", description: "Historie → Änderungen nachvollziehen", keywords: "historie protokoll audit verlauf kontakte termine import löschen wiederherstellen", page: "settings", section: "history" },
@@ -571,7 +569,6 @@ export function SettingsPage({
       {section === "history" && <AuditHistoryPanel />}
       {section === "bulk-removal" && <BulkRemovalPanel />}
 
-      {section === "printer" && <PrinterSettings />}
       {section === "ki" && <KiSettings />}
 
       {revealedPassword && (

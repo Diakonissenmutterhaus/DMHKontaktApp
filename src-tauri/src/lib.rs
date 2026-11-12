@@ -25,10 +25,8 @@ use zeroize::Zeroize;
 mod bulk_removal;
 mod calendar_import;
 mod diagnostics;
-mod documents;
 mod email_archive;
 mod feature_rollout;
-mod file_icons;
 mod ki;
 mod ki_news;
 mod m365;
@@ -38,7 +36,6 @@ mod outlook_autocomplete;
 mod outlook_calendar_export;
 mod outlook_exchange;
 mod phone_transfer;
-mod printers;
 mod procedure_reports;
 mod recovery_history;
 mod thunderbird;
@@ -10702,35 +10699,9 @@ pub fn run() {
             m365::apply_m365_sync,
             m365::flush_m365_contact_outbox,
             m365::flush_m365_calendar_outbox,
-            documents::list_document_sources,
-            documents::list_document_items,
-            documents::create_document_folder,
-            documents::rename_document_item,
-            documents::delete_document_item,
-            documents::move_document_items,
-            documents::copy_document_items,
-            documents::open_document_in_office,
-            file_icons::get_document_file_icons,
-            documents::create_document_text_file,
-            documents::create_document_share_link,
-            documents::list_document_versions,
-            documents::restore_document_version,
-            documents::download_document_item,
-            documents::make_document_folder_offline,
-            documents::upload_document_file,
-            documents::upload_document_path,
-            documents::upload_document_revision,
-            documents::sync_offline_documents,
-            documents::list_document_sync_conflicts,
-            documents::resolve_document_sync_conflict,
-            documents::get_documents_local_root,
             phone_transfer::start_phone_photo_transfer,
             phone_transfer::get_phone_photo_transfer_status,
             phone_transfer::stop_phone_photo_transfer,
-            printers::list_printers,
-            printers::list_printer_drivers,
-            printers::add_network_printer,
-            printers::install_dmh_kopierraum_printer,
             import_outlook_store,
             preview_outlook_classic_contacts,
             import_selected_outlook_classic_contacts,

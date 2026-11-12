@@ -1,9 +1,11 @@
-//! Optional EDV reporting: per-PC write-only credentials, Windows-protected,
+//! Automatic EDV reporting: installation-specific write-only credentials, Windows-protected,
 //! with a durable local outbox. Reporting never determines procedure success.
 use crate::{diagnostics, now, open_db, protect_backup_bytes, unprotect_backup_bytes};
 use base64::Engine;
+use rand::RngCore;
 use rusqlite::{params, OptionalExtension};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::time::Duration;
 use tauri::AppHandle;
 use uuid::Uuid;
@@ -20,6 +22,8 @@ pub struct Config {
     endpoint: String,
     device_id: String,
     token: String,
+    #[serde(default)]
+    automatic: bool,
 }
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -35,7 +39,7 @@ pub struct Event {
     profile: String,
 }
 fn ensure(conn: &rusqlite::Connection) -> Result<(), String> {
-    conn.execute_batch("CREATE TABLE IF NOT EXISTS procedure_report_outbox (event_id TEXT PRIMARY KEY, payload TEXT NOT NULL, created_at TEXT NOT NULL, error TEXT); CREATE TABLE IF NOT EXISTS procedure_report_history (event_id TEXT PRIMARY KEY, payload TEXT NOT NULL, created_at TEXT NOT NULL);") .map_err(|e| e.to_string())
+    conn.execute_batch("CREATE TABLE IF NOT EXISTS procedure_report_deliveries (event_id TEXT NOT NULL, device_id TEXT NOT NULL, delivered_at TEXT NOT NULL, PRIMARY KEY(event_id,device_id)); CREATE TABLE IF NOT EXISTS procedure_report_outbox (event_id TEXT PRIMARY KEY, payload TEXT NOT NULL, created_at TEXT NOT NULL, error TEXT); CREATE TABLE IF NOT EXISTS procedure_report_history (event_id TEXT PRIMARY KEY, payload TEXT NOT NULL, created_at TEXT NOT NULL);") .map_err(|e| e.to_string())
 }
 fn credentials(app: &AppHandle) -> Result<Option<Config>, String> {
     let conn = open_db(app)?;
@@ -77,13 +81,101 @@ pub fn configure_procedure_reporting(app: AppHandle, config: Config) -> Result<(
     if !validate(&config) {
         return Err("Ungültige PC-Konfigurationsdatei.".into());
     }
+    save_credentials(&app, &config)
+}
+fn save_credentials(app: &AppHandle, config: &Config) -> Result<(), String> {
     let encrypted = protect_backup_bytes(&serde_json::to_vec(&config).map_err(|e| e.to_string())?)?;
-    open_db(&app)?.execute("INSERT INTO app_settings(key,value,updated_at) VALUES(?1,?2,?3) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at", params![KEY,base64::engine::general_purpose::STANDARD.encode(encrypted),now()]).map_err(|e| e.to_string())?;
+    open_db(app)?.execute("INSERT INTO app_settings(key,value,updated_at) VALUES(?1,?2,?3) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at", params![KEY,base64::engine::general_purpose::STANDARD.encode(encrypted),now()]).map_err(|e| e.to_string())?;
     Ok(())
+}
+fn automatic_credentials(app: &AppHandle) -> Result<Config, String> {
+    if let Some(config) = credentials(app)? {
+        return Ok(config);
+    }
+    let mut bytes = [0u8; 32];
+    rand::rngs::OsRng.fill_bytes(&mut bytes);
+    let config = Config {
+        schema_version: 1,
+        endpoint: "https://migration.dmh-aidlingen.de/api/edv?action=ingest".into(),
+        device_id: Uuid::new_v4().to_string(),
+        token: base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes),
+        automatic: true,
+    };
+    // Persist before any request so retries, restarts and revocations retain this identity.
+    save_credentials(app, &config)?;
+    Ok(config)
+}
+async fn enroll(client: &reqwest::Client, config: &Config) -> Result<(), String> {
+    let endpoint = config
+        .endpoint
+        .replace("action=ingest", "action=enroll-challenge");
+    let response = client.post(endpoint).json(&serde_json::json!({"deviceId":config.device_id,"credentialHash":format!("{:x}",Sha256::digest(config.token.as_bytes()))})).send().await.map_err(|_| "Automatische PC-Registrierung wird erneut versucht.")?;
+    if !response.status().is_success() {
+        return Err("Automatische PC-Registrierung wird erneut versucht.".into());
+    }
+    let value: serde_json::Value = response.json().await.map_err(|e| e.to_string())?;
+    if value["difficulty"] != 18 {
+        return Err("Ungültige Registrierungsantwort.".into());
+    }
+    let challenge = value["challenge"]
+        .as_str()
+        .filter(|v| v.len() <= 1024)
+        .ok_or("Ungültige Registrierungsantwort.")?
+        .to_owned();
+    let work = challenge.clone();
+    let nonce = tauri::async_runtime::spawn_blocking(move || solve_proof(&work))
+        .await
+        .map_err(|e| e.to_string())??;
+    let response=client.post(config.endpoint.replace("action=ingest","action=enroll")).json(&serde_json::json!({"deviceId":config.device_id,"token":config.token,"computer":std::env::var("COMPUTERNAME").unwrap_or_else(|_|"Windows-PC".into()),"windowsUser":std::env::var("USERNAME").unwrap_or_default(),"challenge":challenge,"nonce":nonce})).send().await.map_err(|_|"PC-Registrierung wird erneut versucht.")?;
+    if response.status() == reqwest::StatusCode::FORBIDDEN {
+        return Err("PC-Zugang wurde durch die EDV gesperrt.".into());
+    }
+    if !response.status().is_success() {
+        return Err("PC-Registrierung wird erneut versucht.".into());
+    }
+    let ack: serde_json::Value = response.json().await.map_err(|e| e.to_string())?;
+    if ack["registered"] != true || ack["deviceId"] != config.device_id {
+        return Err("PC-Registrierung nicht bestätigt.".into());
+    }
+    Ok(())
+}
+fn solve_proof(work: &str) -> Result<u64, &'static str> {
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    for nonce in 0u64..=10_000_000 {
+        let hash = Sha256::digest(format!("{work}:{nonce}").as_bytes());
+        if hash[0] == 0 && hash[1] == 0 && hash[2] < 64 {
+            return Ok(nonce);
+        }
+        if nonce % 4096 == 0 && std::time::Instant::now() > deadline {
+            break;
+        }
+    }
+    Err("PC-Registrierung wird beim nächsten Versand erneut versucht.")
+}
+fn backfill(conn: &rusqlite::Connection, device: &str) -> Result<(), String> {
+    ensure(conn)?;
+    conn.execute("INSERT OR IGNORE INTO procedure_report_outbox(event_id,payload,created_at) SELECT h.event_id,h.payload,h.created_at FROM procedure_report_history h WHERE NOT EXISTS (SELECT 1 FROM procedure_report_deliveries d WHERE d.event_id=h.event_id AND d.device_id=?1)",[device]).map_err(|e|e.to_string())?;
+    Ok(())
+}
+fn acknowledge(conn: &mut rusqlite::Connection, id: &str, device: &str) -> Result<(), String> {
+    let tx = conn.transaction().map_err(|e| e.to_string())?;
+    tx.execute(
+        "INSERT OR IGNORE INTO procedure_report_deliveries VALUES(?1,?2,?3)",
+        params![id, device, now()],
+    )
+    .map_err(|e| e.to_string())?;
+    tx.execute(
+        "DELETE FROM procedure_report_outbox WHERE event_id=?1",
+        [id],
+    )
+    .map_err(|e| e.to_string())?;
+    tx.execute("DELETE FROM procedure_report_deliveries WHERE event_id NOT IN (SELECT event_id FROM procedure_report_history UNION SELECT event_id FROM procedure_report_outbox)",[]).map_err(|e|e.to_string())?;
+    tx.commit().map_err(|e| e.to_string())
 }
 #[tauri::command]
 pub fn get_procedure_reporting_status(app: AppHandle) -> Result<serde_json::Value, String> {
-    let configured = credentials(&app)?.is_some();
+    let config = credentials(&app)?;
+    let configured = config.is_some();
     let conn = open_db(&app)?;
     ensure(&conn)?;
     let pending: i64 = conn
@@ -92,7 +184,16 @@ pub fn get_procedure_reporting_status(app: AppHandle) -> Result<serde_json::Valu
         })
         .map_err(|e| e.to_string())?;
     let error: Option<String> = conn.query_row("SELECT error FROM procedure_report_outbox WHERE error IS NOT NULL ORDER BY rowid DESC LIMIT 1", [], |row| row.get(0)).optional().map_err(|e| e.to_string())?;
-    Ok(serde_json::json!({"configured":configured,"pending":pending,"error":error}))
+    let last_delivery: Option<String> = conn
+        .query_row(
+            "SELECT MAX(delivered_at) FROM procedure_report_deliveries",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(|e| e.to_string())?;
+    Ok(
+        serde_json::json!({"configured":configured,"automatic":config.as_ref().is_none_or(|c|c.automatic),"pending":pending,"error":error,"lastDeliveryAt":last_delivery}),
+    )
 }
 #[tauri::command]
 pub fn record_procedure_report(app: AppHandle, mut event: Event) -> Result<(), String> {
@@ -109,10 +210,6 @@ pub fn record_procedure_report(app: AppHandle, mut event: Event) -> Result<(), S
     {
         return Err("Ungültiger Verfahrensbericht.".into());
     }
-    let configured = credentials(&app)?.is_some();
-    if event.procedure == "diagnostics" && !configured {
-        return Err("Kein PC-Zugang für den Diagnoseversand eingerichtet.".into());
-    }
     event.message = diagnostics::redact(&event.message);
     let mut payload = serde_json::to_value(&event).map_err(|e| e.to_string())?;
     payload["computer"] = std::env::var("COMPUTERNAME").unwrap_or_default().into();
@@ -120,10 +217,7 @@ pub fn record_procedure_report(app: AppHandle, mut event: Event) -> Result<(), S
     payload["appVersion"] = app.package_info().version.to_string().into();
     payload["occurredAt"] = now().into();
     let mut conn = open_db(&app)?;
-    persist_event(&mut conn, &event.event_id, &payload.to_string(), configured)?;
-    if !configured {
-        return Ok(());
-    }
+    persist_event(&mut conn, &event.event_id, &payload.to_string(), true)?;
     // The small local write is finished before returning. Network delivery is independent.
     tauri::async_runtime::spawn(async move {
         let _ = flush_procedure_reports(app).await;
@@ -135,9 +229,8 @@ pub async fn flush_procedure_reports(app: AppHandle) -> Result<(), String> {
     let Ok(_guard) = GATE.try_lock() else {
         return Ok(());
     };
-    let Some(config) = credentials(&app)? else {
-        return Ok(());
-    };
+    let config = automatic_credentials(&app)?;
+    backfill(&open_db(&app)?, &config.device_id)?;
     if !validate(&config) {
         return Err("Ungültige Berichtskonfiguration.".into());
     }
@@ -145,7 +238,9 @@ pub async fn flush_procedure_reports(app: AppHandle) -> Result<(), String> {
         let conn = open_db(&app)?;
         ensure(&conn)?;
         let mut stmt = conn
-            .prepare("SELECT event_id,payload FROM procedure_report_outbox ORDER BY rowid LIMIT 25")
+            .prepare(
+                "SELECT event_id,payload FROM procedure_report_outbox ORDER BY rowid LIMIT 100",
+            )
             .map_err(|e| e.to_string())?;
         let rows = stmt
             .query_map([], |row| {
@@ -160,7 +255,36 @@ pub async fn flush_procedure_reports(app: AppHandle) -> Result<(), String> {
         .redirect(reqwest::redirect::Policy::none())
         .build()
         .map_err(|e| e.to_string())?;
+    // Enroll only when necessary; credentials alone cannot read portal data.
+    if config.automatic {
+        let probe = client
+            .get(
+                config
+                    .endpoint
+                    .replace("action=ingest", "action=device-status"),
+            )
+            .bearer_auth(&config.token)
+            .header("X-DMH-Device", &config.device_id)
+            .send()
+            .await;
+        match probe {
+            Ok(response) if response.status() == reqwest::StatusCode::UNAUTHORIZED => {
+                if let Err(error) = enroll(&client, &config).await {
+                    open_db(&app)?
+                        .execute("UPDATE procedure_report_outbox SET error=?1", [&error])
+                        .map_err(|e| e.to_string())?;
+                    return Err(error);
+                }
+            }
+            Err(_) => return Ok(()),
+            _ => {}
+        }
+    }
+    let deadline = std::time::Instant::now() + Duration::from_secs(30);
     for (id, payload) in pending {
+        if std::time::Instant::now() > deadline {
+            break;
+        }
         let result = client
             .post(&config.endpoint)
             .bearer_auth(&config.token)
@@ -177,13 +301,9 @@ pub async fn flush_procedure_reports(app: AppHandle) -> Result<(), String> {
                 .is_some_and(|body| body["accepted"] == true && body["eventId"] == id),
             _ => false,
         };
-        let conn = open_db(&app)?;
+        let mut conn = open_db(&app)?;
         if accepted {
-            conn.execute(
-                "DELETE FROM procedure_report_outbox WHERE event_id=?1",
-                [&id],
-            )
-            .map_err(|e| e.to_string())?;
+            acknowledge(&mut conn, &id, &config.device_id)?;
         } else {
             conn.execute(
                 "UPDATE procedure_report_outbox SET error=?2 WHERE event_id=?1",
@@ -203,12 +323,25 @@ pub async fn flush_procedure_reports(app: AppHandle) -> Result<(), String> {
 mod tests {
     use super::*;
     #[test]
+    fn old_manual_configuration_remains_readable() {
+        let value = serde_json::json!({"schemaVersion":1,"endpoint":"https://migration.dmh-aidlingen.de/api/edv?action=ingest","deviceId":Uuid::new_v4().to_string(),"token":"a".repeat(43)});
+        let config: Config = serde_json::from_value(value).unwrap();
+        assert!(!config.automatic);
+        assert!(validate(&config));
+    }
+    #[test]
+    fn enrollment_work_matches_server_sha256_contract() {
+        let nonce = solve_proof("dmh-proof-test").unwrap();
+        assert_eq!(nonce, 282952);
+    }
+    #[test]
     fn rejects_arbitrary_endpoints_and_invalid_device_credentials() {
         let mut config = Config {
             schema_version: 1,
             endpoint: "https://dmh-backup.vercel.app/api/edv?action=ingest".into(),
             device_id: Uuid::new_v4().to_string(),
             token: "a".repeat(43),
+            automatic: false,
         };
         assert!(validate(&config));
         config.endpoint = "https://external.example/api".into();
@@ -284,6 +417,59 @@ mod durable_history_tests {
                 .get::<_, i64>(0))
                 .unwrap(),
             502
+        );
+    }
+    #[test]
+    fn backfill_preserves_original_payload_and_does_not_requeue_confirmed_events() {
+        let mut conn = rusqlite::Connection::open_in_memory().unwrap();
+        let old = r#"{"status":"error","occurredAt":"2026-11-01T10:00:00Z","message":"Office account unavailable","eventId":"old"}"#;
+        persist_event(&mut conn, "old", old, false).unwrap();
+        persist_event(&mut conn, "success", r#"{"status":"success"}"#, false).unwrap();
+        backfill(&conn, "pc").unwrap();
+        backfill(&conn, "pc").unwrap();
+        assert_eq!(
+            conn.query_row("SELECT count(*) FROM procedure_report_outbox", [], |r| r
+                .get::<_, i64>(0))
+                .unwrap(),
+            2
+        );
+        assert_eq!(
+            conn.query_row(
+                "SELECT payload FROM procedure_report_outbox WHERE event_id='old'",
+                [],
+                |r| r.get::<_, String>(0)
+            )
+            .unwrap(),
+            old
+        );
+        acknowledge(&mut conn, "old", "pc").unwrap();
+        backfill(&conn, "pc").unwrap();
+        assert_eq!(
+            conn.query_row("SELECT count(*) FROM procedure_report_outbox", [], |r| r
+                .get::<_, i64>(0))
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            conn.query_row("SELECT count(*) FROM procedure_report_history", [], |r| r
+                .get::<_, i64>(
+                0
+            ))
+            .unwrap(),
+            2
+        );
+    }
+    #[test]
+    fn failed_receipt_transaction_keeps_event_for_retry() {
+        let mut conn = rusqlite::Connection::open_in_memory().unwrap();
+        persist_event(&mut conn, "old", "{}", true).unwrap();
+        conn.execute_batch("CREATE TRIGGER fail_receipt BEFORE INSERT ON procedure_report_deliveries BEGIN SELECT RAISE(ABORT,'disk full'); END;").unwrap();
+        assert!(acknowledge(&mut conn, "old", "pc").is_err());
+        assert_eq!(
+            conn.query_row("SELECT count(*) FROM procedure_report_outbox", [], |r| r
+                .get::<_, i64>(0))
+                .unwrap(),
+            1
         );
     }
     #[test]

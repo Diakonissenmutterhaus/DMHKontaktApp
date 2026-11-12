@@ -1,9 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { randomUUID } from 'node:crypto';
+import { randomUUID, createHash } from 'node:crypto';
+import { challenge, validProof } from './device-enrollment.mjs';
 import ExcelJS from 'exceljs';
 import { createHandler } from '../api/edv.js';
-import { currentState, hashPassword, hasSession, redact, sessionCookie, summarize } from './protocol.mjs';
+import { currentState, digest, hashPassword, hasSession, redact, sessionCookie, summarize } from './protocol.mjs';
 const origin='https://dmh-backup.vercel.app';
 process.env.EDV_SESSION_SECRET='test-session-secret-not-for-production';
 process.env.EDV_USERNAME='IDV';
@@ -13,7 +14,7 @@ function fixture(){
   const rows=new Map();
   const handle=createHandler({read:async key=>rows.get(key)||null,write:async(key,value,overwrite=false)=>{if(rows.has(key)&&!overwrite)throw new Error('exists');rows.set(key,value);},scan:async prefix=>[...rows].filter(([key])=>key.startsWith(prefix)).map(([,v])=>v)});
   const admin=sessionCookie(process.env.EDV_SESSION_SECRET).split(';')[0];
-  const request=(action,body,cookie=admin,extra={})=>handle(new Request(`${origin}/api/edv?action=${action}`,{method:body?'POST':'GET',headers:{origin,cookie,...(body?{'content-type':'application/json'}:{}),...extra},...(body?{body:JSON.stringify(body)}:{})}));
+  const request=(action,body,cookie=admin,extra={})=>{const headers={origin,cookie,...(body?{'content-type':'application/json'}:{}),...extra};if(extra.origin===null)delete headers.origin;return handle(new Request(`${origin}/api/edv?action=${action}`,{method:body?'POST':'GET',headers,...(body?{body:JSON.stringify(body)}:{})}));};
   return {rows,request};
 }
 test('anonymous users and write-only devices cannot read reports or export Excel',async()=>{
@@ -59,4 +60,57 @@ test('diagnostic reports reach the private overview and Excel without gaining re
   assert.equal((await request('reports',null,'',headers)).status,401);
   const reports=await(await request('reports')).json();assert.equal(reports.reports[0].procedure,'diagnostics');
   const exported=await request('export');assert.equal(exported.status,200);const book=new ExcelJS.Workbook();await book.xlsx.load(Buffer.from(await exported.arrayBuffer()));assert(book.worksheets.some(sheet=>JSON.stringify(sheet.getSheetValues()).includes('PC-Diagnose')));
+});
+
+function solve(value) {
+  for(let nonce=0;nonce<=10000000;nonce++) {
+    const bytes=createHash('sha256').update(`${value}:${nonce}`).digest();
+    if(bytes[0]===0&&bytes[1]===0&&bytes[2]<64)return nonce;
+  }
+  throw new Error('work not solved');
+}
+test('automatic enrollment needs proof, survives retry, cannot overwrite or bypass revocation',async()=>{
+  const {request,rows}=fixture();
+  const token='a'.repeat(43),deviceId=randomUUID();
+  const input={deviceId,token,computer:'PC-Auto',windowsUser:'anna'};
+  const issued=await(await request('enroll-challenge',{deviceId,credentialHash:digest(token)},'',{origin:null})).json();
+  assert.equal(issued.difficulty,18);
+  input.challenge=issued.challenge;input.nonce=solve(issued.challenge);
+  assert.equal((await request('enroll',{...input,token:'b'.repeat(43)},'')).status,400);
+  assert.equal((await request('enroll',{...input,challenge:input.challenge+'x'},'')).status,400);
+  assert.equal((await request('enroll',input,'',{origin:'https://foreign.example'})).status,403);
+  for(let i=0;i<2;i++)assert.equal((await request('enroll',input,'',{origin:null})).status,200);
+  assert.equal(rows.size,1);
+  const headers={'x-dmh-device':deviceId,authorization:`Bearer ${token}`};
+  assert.equal((await request('device-status',null,'',headers)).status,200);
+  for(const action of ['reports','devices','export'])assert.equal((await request(action,null,'',headers)).status,401);
+  const historical={eventId:randomUUID(),attemptId:randomUUID(),sequence:1,procedure:'outlook_exchange',status:'error',occurredAt:'2026-11-10T10:00:00Z',message:'Office-Konto nicht ermittelt',computer:'PC-Auto',windowsUser:'anna'};
+  const successful={...historical,eventId:randomUUID(),attemptId:randomUUID(),status:'success',occurredAt:'2026-11-12T10:00:00Z',message:'Exchange eingerichtet'};
+  for(const event of [successful,historical,historical])assert.equal((await request('ingest',event,'',{...headers,origin:null})).status,200);
+  const current=await(await request('reports')).json();assert.equal(current.reports.length,1);assert.equal(current.reports[0].status,'success');
+  const history=await(await request('reports&view=history')).json();assert.equal(history.reports.length,2);
+  assert.equal(history.reports.find(row=>row.status==='error').occurredAt,historical.occurredAt.replace('Z','.000Z'));
+  assert.equal(history.reports.find(row=>row.status==='error').message,historical.message);
+  const listed=await(await request('devices')).json();
+  assert.equal(listed.devices[0].registration,'automatic');assert.equal(listed.devices[0].identityVerified,false);
+  assert(!JSON.stringify(listed).includes(digest(token)));
+  assert.equal((await request('revoke',{deviceId})).status,200);
+  assert.equal((await request('enroll',input,'')).status,403);
+  assert.equal((await request('device-status',null,'',headers)).status,401);
+  const other=challenge({deviceId,credentialHash:digest('b'.repeat(43))},process.env.EDV_SESSION_SECRET);
+  assert.equal((await request('enroll',{...input,token:'b'.repeat(43),challenge:other.challenge,nonce:solve(other.challenge)},'')).status,409);
+});
+test('enrollment challenges expire and bind proof to the installation',()=>{
+  const deviceId=randomUUID(),token='c'.repeat(43),key='test-key';
+  const issued=challenge({deviceId,credentialHash:digest(token)},key,1000000);
+  const input={deviceId,token,challenge:issued.challenge,nonce:solve(issued.challenge)};
+  assert(validProof(input,key,1000010));assert(!validProof(input,key,1300001));
+  assert(!validProof({...input,deviceId:randomUUID()},key,1000010));
+  assert(!validProof(input,'wrong-key',1000010));
+});
+test('delayed historical failures never replace a newer successful attempt',()=>{
+  const events=[
+    {deviceId:'pc',windowsUser:'anna',procedure:'outlook_exchange',attemptId:'new',sequence:1,status:'success',occurredAt:'2026-11-12T12:00:00Z',receivedAt:'2026-11-12T12:00:01Z'},
+    {deviceId:'pc',windowsUser:'anna',procedure:'outlook_exchange',attemptId:'old',sequence:1,status:'error',occurredAt:'2026-11-10T12:00:00Z',receivedAt:'2026-11-12T13:00:00Z'}];
+  assert.equal(currentState(summarize(events))[0].status,'success');
 });

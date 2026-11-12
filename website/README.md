@@ -35,3 +35,13 @@ O botão **Weitere Hilfe** abre um painel com o instalador do aplicativo, o agen
 O agente `downloads/DiakonissenMutterhaus_AidlingenLANneuesAD_Agent.exe` é servido diretamente pelo site. Antes desta publicação, a assinatura Authenticode foi validada como pertencente à `ZOHO Corporation Private Limited`; SHA-256: `C8352A32BCAB7862C53FD7E22904904B68748A2804454800CF4C618EFEF05599`.
 
 Os recortes de tela que destacam os botões são feitos em SVG diretamente no HTML, a partir das capturas originais. O texto abaixo do vídeo oferece instruções escritas, mas não substitui legendas sincronizadas. Para adicioná-las sem inventar falas, é necessária uma transcrição revisada do áudio. O bloco de ajuda pode receber um telefone/e-mail da EDV quando houver um contato oficial confirmado.
+
+## Automatischer Berichtsversand
+
+Aktuelle Windows-App-Versionen erzeugen beim ersten Versand eine eigene zufällige Installations-ID und einen Windows-geschützten, ausschließlich schreibenden Zugang. Keine gemeinsame Administrator-Zugangsdaten im Client. Anmeldung im Portal bleibt ausschließlich der EDV vorbehalten. Neue Registrierungen benötigen einen kurzlebigen, signierten Rechennachweis (SHA-256, 18 Bit), um automatisierte Masseneinträge zu erschweren. Diese Selbstregistrierung bestätigt keine Microsoft-Identität: Computer, Windows-Benutzer und Kontoadresse sind App-Meldungen.
+
+Beim Start nach Entsperren, bei neuer Internetverbindung und jede Minute erfolgt ein Versandversuch. Bereits vorhandene manuelle Zugänge funktionieren weiter. Die App übernimmt alle noch vorhandenen lokalen Verfahrensberichte mit unveränderten Ereignis-IDs und Zeitpunkten in die dauerhafte Ausgangsqueue. Server-Deduplizierung und lokale Empfangsbelege verhindern doppelte Berichte. Gesperrte Zugänge werden nicht durch eine neue Identität umgangen.
+
+Das bisherige lokale Verlaufsmaximum beträgt 500 Ereignisse. Bereits gelöschte Ereignisse oder Versuche vor Einführung der lokalen Aufzeichnung können nicht rekonstruiert werden. Ein fehlender Abschluss wird nicht als Erfolg behandelt. Nicht gesendete Queue-Einträge bleiben unabhängig von diesem Verlaufslimit erhalten. Vollständiges Zurücksetzen der App entfernt auch Queue, Zugang und Empfangsbelege.
+
+Rollout: Zuerst Portal/API bereitstellen, anschließend eine neue App-Version verteilen. Bereits installierte ältere Versionen erhalten diese neue Funktion erst durch das App-Update; ein Website-Deploy allein aktiviert sie nicht rückwirkend. Danach werden noch gespeicherte Versuche automatisch nachgesendet. Keine Datei pro PC erforderlich.

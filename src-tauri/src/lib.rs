@@ -6295,6 +6295,7 @@ fn clear_local_database(conn: &mut Connection) -> Result<(), String> {
             DELETE FROM vault_config;
             DROP TABLE IF EXISTS procedure_report_outbox;
             DROP TABLE IF EXISTS procedure_report_history;
+            DROP TABLE IF EXISTS procedure_report_deliveries;
             DELETE FROM app_settings;
             DELETE FROM sqlite_sequence
              WHERE name IN ('contacts', 'groups', 'import_history', 'mail_accounts', 'vault_entries');
@@ -11677,8 +11678,10 @@ mod tests {
             CREATE TABLE import_history (id INTEGER PRIMARY KEY AUTOINCREMENT);
             CREATE TABLE app_settings (key TEXT PRIMARY KEY);
             CREATE TABLE procedure_report_history (event_id TEXT PRIMARY KEY);
+            CREATE TABLE procedure_report_deliveries (event_id TEXT PRIMARY KEY);
             CREATE TABLE procedure_report_outbox (event_id TEXT PRIMARY KEY);
             INSERT INTO procedure_report_history VALUES ('event');
+            INSERT INTO procedure_report_deliveries VALUES ('event');
             INSERT INTO procedure_report_outbox VALUES ('event');
             CREATE TABLE mail_accounts (id INTEGER PRIMARY KEY AUTOINCREMENT);
             CREATE TABLE vault_entries (id INTEGER PRIMARY KEY AUTOINCREMENT);
@@ -11700,7 +11703,7 @@ mod tests {
         .expect("test schema and data");
 
         clear_local_database(&mut conn).expect("full local reset");
-        assert_eq!(conn.query_row("SELECT count(*) FROM sqlite_master WHERE name IN ('procedure_report_history','procedure_report_outbox')", [], |r|r.get::<_,i64>(0)).unwrap(),0);
+        assert_eq!(conn.query_row("SELECT count(*) FROM sqlite_master WHERE name IN ('procedure_report_history','procedure_report_outbox','procedure_report_deliveries')", [], |r|r.get::<_,i64>(0)).unwrap(),0);
 
         for table in [
             "contact_groups",

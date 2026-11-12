@@ -23,12 +23,9 @@ Die Anmeldung ist im Projekt dmh-migration eingerichtet. Zugangsdaten werden aus
 Sitzungen laufen nach acht Stunden ab; Cookies sind
 HttpOnly, Secure und SameSite=Strict. POST-Anfragen der Verwaltung prüfen den Ursprung.
 
-Im Portal unter **PC-Zugänge** pro PC eine Konfigurationsdatei herunterladen.
-In einer App-Version mit Berichtsfunktion: **EDV Tools → Erweitert →
-Verfahrensberichte → PC-Zugang importieren**. Die Datei enthält nur einen
-widerrufbaren Schreibzugang für diesen PC. Sie muss vertraulich verteilt werden.
-Windows DPAPI schützt den Zugang im Benutzerprofil. Er gehört nicht in Git,
-mobile Backups oder öffentliche Download-Verzeichnisse.
+Aktuelle App-Versionen registrieren sich automatisch beim Portal. Keine Konfigurationsdatei und keine Freischaltung pro PC erforderlich. Windows DPAPI schützt den individuellen Schreibzugang im Windows-Benutzerprofil. Der Zugang erlaubt keine Abfrage von Berichten oder administrativen Aktionen. Automatische Registrierungen erscheinen unter **PC-Zugänge**, wo sie gesperrt werden können. Angaben zu Computer und Benutzer sind App-Meldungen, keine bestätigte Microsoft-Identität. Die Selbstregistrierung verwendet einen kurzlebigen signierten SHA-256-Rechennachweis (18 Bit), um Masseneinträge zu erschweren. Bereits vorhandene manuelle Zugänge bleiben unterstützt; die manuelle Erstellung ist im Portal unter einer erweiterten Option verfügbar.
+
+Zuerst die neue Portal/API-Version bereitstellen, anschließend die neue App-Version verteilen. Alle PCs müssen diese App-Version einmal erhalten. Ein Website-Deploy allein ändert bereits installierte Programme nicht.
 
 Die Berichtsfunktion wird mit der offiziellen Version 0.1.38 eingeführt. Version 0.1.37 und ältere enthalten sie noch nicht.
 Das Webportal allein kann alten App-Versionen keine Berichtsfunktion nachrüsten.
@@ -41,11 +38,11 @@ Abbruch und Zeitüberschreitung. Erfolg bei M365 bedeutet bestätigte Anmeldung,
 nicht zwingend vollständige Kontakte-/Kalendersynchronisierung. Exchange-Erfolg
 wird erst nach nativer Abschlussbestätigung und Aktualisierung der Profilansicht gemeldet.
 
-Ohne konfigurierten PC-Zugang wird nur der lokale Verlauf gespeichert. Es findet kein Upload statt.
-Nach Einrichtung schreibt die App zuerst in eine SQLite-Outbox; Versand erfolgt
+Die App schreibt immer zuerst in eine SQLite-Outbox, auch vor Registrierung und ohne Internet; Versand erfolgt
 unabhängig vom M365-Login. Ein Bericht wird erst nach bestätigtem Empfang entfernt.
 Bei fehlender Verbindung wird ungefähr jede Minute und beim Online-Ereignis erneut
 versucht. Event-ID und Sequenz verhindern doppelte Ergebnisse nach Wiederholungen.
+Beim Start übernimmt die App auch den bestehenden lokalen Verlauf (bis zu 500 noch gespeicherte Ereignisse) mit Originalzeitpunkt, Versuch und Fehlermeldung. Bestätigte Empfangsbelege verhindern erneutes Einreihen. Bereits gelöschte Ereignisse lassen sich nicht wiederherstellen; ungesendete Queue-Einträge werden vom Verlaufslimit nicht entfernt. Die Standardübersicht bewertet den Zeitpunkt des Versuchs, sodass nachgelieferte alte Fehler keinen neueren Erfolg ersetzen.
 
 Das Portal zeigt standardmäßig den letzten Versuch je Windows-Benutzer, PC und
 Vorgang. „Alle Versuche“ bewahrt frühere Fehler. Excel enthält Übersicht,

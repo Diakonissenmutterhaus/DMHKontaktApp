@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import ExcelJS from 'exceljs';
+import { challenge, validProof } from '../server/device-enrollment.mjs';
 import { currentState, digest, equal, hasSession, logoutCookie, redact, secret, sessionCookie, summarize, uuid, validateEvent, verifyPassword } from '../server/protocol.mjs';
 import { read, scan, write } from '../server/storage.mjs';
 
@@ -22,7 +23,7 @@ return async function handle(request) {
     const url = new URL(request.url), action = url.searchParams.get('action') || 'reports';
     const key = process.env.EDV_SESSION_SECRET;
     if (!key || !process.env.EDV_USERNAME || !process.env.EDV_PASSWORD_HASH || !process.env.BLOB_READ_WRITE_TOKEN) return json({ error: 'EDV-Berichte sind noch nicht eingerichtet.' }, 503);
-    if (request.method === 'POST' && action !== 'ingest' && request.headers.get('origin') !== url.origin) return json({ error: 'Ungültiger Ursprung.' }, 403);
+    if (request.method === 'POST' && (!['ingest','enroll','enroll-challenge'].includes(action) || request.headers.has('origin')) && request.headers.get('origin') !== url.origin) return json({ error: 'Ungültiger Ursprung.' }, 403);
     if (request.method === 'POST' && action === 'login') {
       const input = await body(request);
       const passwordMatches = await verifyPassword(input.password, process.env.EDV_PASSWORD_HASH);
@@ -30,12 +31,30 @@ return async function handle(request) {
         || !equal(input.username, process.env.EDV_USERNAME) || !passwordMatches) return json({ error: 'Benutzername oder Passwort ungültig.' }, 401);
       return json({ authenticated: true }, 200, { 'Set-Cookie': sessionCookie(key) });
     }
-    if (request.method === 'POST' && action === 'ingest') {
+    // Enrollment grants write-only access to a new self-reported installation, never admin access.
+    if (request.method === 'POST' && action === 'enroll-challenge') return json(challenge(await body(request), key));
+    if (request.method === 'POST' && action === 'enroll') {
+      const input = await body(request);
+      if (!uuid(input.deviceId) || !/^[A-Za-z0-9_-]{43}$/.test(input.token || '') || !validProof(input, key)) return json({error:'Ungültiger Registrierungsnachweis.'},400);
+      const path = `devices/${input.deviceId}.json`;
+      const matches = device => device && equal(device.secretHash,digest(input.token));
+      let device = await read(path);
+      if (!device) {
+        if (typeof input.computer !== 'string' || !input.computer.trim() || input.computer.length > 100 || typeof input.windowsUser !== 'string' || input.windowsUser.length > 100) return json({error:'Ungültige PC-Angaben.'},400);
+        device = {deviceId:input.deviceId,name:input.computer,windowsUser:input.windowsUser,registration:'automatic',identityVerified:false,createdAt:new Date().toISOString(),revoked:false,secretHash:digest(input.token)};
+        try { await write(path,device); } catch (error) { device=await read(path); if(!device) throw error; }
+      }
+      if (!matches(device)) return json({error:'PC-Zugang kollidiert.'},409);
+      if (device.revoked) return json({error:'PC-Zugang gesperrt.'},403);
+      return json({registered:true,deviceId:input.deviceId});
+    }
+    if ((request.method === 'POST' && action === 'ingest') || (request.method === 'GET' && action === 'device-status')) {
       const deviceId = request.headers.get('x-dmh-device');
       if (!uuid(deviceId)) return json({ error: 'PC-Zugang erforderlich.' }, 401);
       const token = request.headers.get('authorization')?.replace(/^Bearer /, '') || '';
       const device = await read(`devices/${deviceId}.json`);
       if (!device || device.revoked || !equal(digest(token), device.secretHash)) return json({ error: 'PC-Zugang ungültig.' }, 401);
+      if (action === 'device-status') return json({registered:true,deviceId});
       const event = validateEvent(await body(request), deviceId);
       const path = `events/${deviceId}/${event.attemptId}/${String(event.sequence).padStart(5, '0')}.json`;
       const previous = await read(path);

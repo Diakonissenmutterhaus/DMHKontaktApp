@@ -42,11 +42,11 @@ export function summarize(events) {
     const previous = attempts.get(key);
     if (!previous || event.sequence > previous.sequence) attempts.set(key, event);
   }
-  return [...attempts.values()].sort((a, b) => b.receivedAt.localeCompare(a.receivedAt));
+  return [...attempts.values()].sort((a, b) => (b.occurredAt || b.receivedAt).localeCompare(a.occurredAt || a.receivedAt) || b.receivedAt.localeCompare(a.receivedAt));
 }
 export function currentState(attempts) {
   const groups = new Map();
-  // summarize() returns newest received attempt first. Historical failures must
+  // summarize() returns newest occurred attempt first, including delayed backfills. Historical failures must
   // not make an already corrected PC look broken in the default overview.
   for (const row of attempts) {
     const key = `${row.deviceId}/${row.windowsUser}/${row.procedure}`;

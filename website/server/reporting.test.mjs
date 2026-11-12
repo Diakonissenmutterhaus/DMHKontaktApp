@@ -53,6 +53,30 @@ test('current view replaces an old failure with the successful retry, preserving
   const attempts=summarize(events);assert.equal(attempts.length,3);const current=currentState(attempts);assert.equal(current.length,2);assert.equal(current.find(row=>row.windowsUser==='anna').status,'success');
 });
 
+test('attempt totals count distinct attempts before filtering, including backfills without email', async () => {
+  const { request, rows } = fixture();
+  const base = { deviceId: 'pc-a', windowsUser: 'anna', computer: 'PC-A', procedure: 'm365_login', accountEmail: '', message: '', step: 'Login', appVersion: '0.1.40' };
+  const events = [
+    { ...base, attemptId: 'first', sequence: 0, status: 'running', occurredAt: '2026-11-01T10:00:00Z' },
+    { ...base, attemptId: 'first', sequence: 1, status: 'error', occurredAt: '2026-11-01T10:01:00Z' },
+    { ...base, attemptId: 'second', sequence: 1, status: 'success', accountEmail: 'anna@example.test', occurredAt: '2026-11-02T10:00:00Z' },
+    { ...base, attemptId: 'third', sequence: 1, status: 'error', occurredAt: '2026-10-31T10:00:00Z' },
+    { ...base, attemptId: 'other-user', windowsUser: 'bert', sequence: 1, status: 'success', occurredAt: '2026-11-02T10:00:00Z' },
+    { ...base, attemptId: 'other-pc', deviceId: 'pc-b', sequence: 1, status: 'success', occurredAt: '2026-11-02T10:00:00Z' },
+    { ...base, attemptId: 'other-procedure', procedure: 'outlook_exchange', sequence: 1, status: 'success', occurredAt: '2026-11-02T10:00:00Z' }
+  ];
+  events.forEach((event, index) => rows.set(`events/${index}`, { ...event, receivedAt: '2026-11-03T10:00:00Z' }));
+  const result = await (await request('reports&status=success&sort=attemptCount&direction=desc')).json();
+  assert.equal(result.reports[0].attemptId, 'second');
+  assert.equal(result.reports[0].attemptCount, 3);
+  assert(result.reports.slice(1).every(row => row.attemptCount === 1));
+  const history = await (await request('reports&view=history&search=anna')).json();
+  assert.equal(history.reports.find(row => row.attemptId === 'first').attemptCount, 3);
+  const book = new ExcelJS.Workbook();
+  await book.xlsx.load(Buffer.from(await (await request('export&sort=attemptCount&direction=desc')).arrayBuffer()));
+  assert.equal(book.getWorksheet('Übersicht').getCell('M2').value, 3);
+});
+
 test('diagnostic reports reach the private overview and Excel without gaining read access',async()=>{
   const {request}=fixture();const config=await(await request('devices',{name:'PC-Diagnose'})).json();const headers={'x-dmh-device':config.deviceId,authorization:`Bearer ${config.token}`};
   const event={eventId:randomUUID(),attemptId:randomUUID(),sequence:1,procedure:'diagnostics',status:'success',occurredAt:new Date().toISOString(),message:'Outlook: Exchange',computer:'PC-Diagnose',windowsUser:'employee'};
@@ -113,4 +137,17 @@ test('delayed historical failures never replace a newer successful attempt',()=>
     {deviceId:'pc',windowsUser:'anna',procedure:'outlook_exchange',attemptId:'new',sequence:1,status:'success',occurredAt:'2026-11-12T12:00:00Z',receivedAt:'2026-11-12T12:00:01Z'},
     {deviceId:'pc',windowsUser:'anna',procedure:'outlook_exchange',attemptId:'old',sequence:1,status:'error',occurredAt:'2026-11-10T12:00:00Z',receivedAt:'2026-11-12T13:00:00Z'}];
   assert.equal(currentState(summarize(events))[0].status,'success');
+});
+
+test('login and sync errors without an email retain PC identity in the panel and Excel',async()=>{
+ const {request}=fixture();const config=await(await request('devices',{name:'PC-Without-Email'})).json();
+ const headers={'x-dmh-device':config.deviceId,authorization:`Bearer ${config.token}`};
+ for(const procedure of ['m365_login','m365_sync']){
+  const event={eventId:randomUUID(),attemptId:randomUUID(),sequence:1,procedure,status:'error',occurredAt:'2026-11-12T10:00:00Z',computer:'PC-Without-Email',windowsUser:'employee',message:procedure==='m365_sync'?'3 calendars unavailable':'Windows login failed'};
+  assert.equal((await request('ingest',event,'',headers)).status,200);
+ }
+ const rows=(await(await request('reports')).json()).reports;
+ assert.equal(rows.length,2);assert(rows.every(r=>r.accountEmail===''&&r.computer==='PC-Without-Email'&&r.windowsUser==='employee'&&r.status==='error'));
+ const book=new ExcelJS.Workbook();await book.xlsx.load(Buffer.from(await(await request('export')).arrayBuffer()));
+ const sheet=JSON.stringify(book.getWorksheet('Übersicht').getSheetValues());assert(sheet.includes('Windows login failed'));assert(sheet.includes('3 calendars unavailable'));assert(sheet.includes('PC-Without-Email'));
 });

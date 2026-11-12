@@ -18,6 +18,8 @@ interface OutlookExchangeProfileSetupProps {
 
 const pollIntervalMs = 4_000;
 const pollingLimitMs = 4 * 60_000;
+const setupTimeoutMessage = "Die automatische Einrichtung konnte nicht abgeschlossen werden. Bitte wenden Sie sich an die EDV. Ihr bisheriges Outlook-Profil bleibt erhalten.";
+const setupErrorMessage = (cause: unknown) => String(cause).includes("OUTLOOK_HELPER_TIMEOUT:") ? setupTimeoutMessage : String(cause);
 const stopBackgroundWatcher = () => Promise.resolve().then(() => invoke("stop_outlook_setup_background")).catch(() => undefined);
 
 export function OutlookExchangeProfileSetup({ email, disabled = false, compact = false, leadingAction }: OutlookExchangeProfileSetupProps) {
@@ -132,7 +134,7 @@ export function OutlookExchangeProfileSetup({ email, disabled = false, compact =
       await stopBackgroundWatcher();
       await finishProcedureReport(report.current, "error", String(cause), email);
       detectedOfficeEmail.current = null;
-      if (currentRequest(id)) setError(String(cause));
+      if (currentRequest(id)) setError(setupErrorMessage(cause));
     } finally {
       if (currentRequest(id)) setBusy(false);
     }
@@ -164,7 +166,7 @@ export function OutlookExchangeProfileSetup({ email, disabled = false, compact =
         await finishProcedureReport(report.current, "error", String(cause), email);
         if (!cancelled && currentRequest(id)) {
           setPolling(false);
-          setError(String(cause));
+          setError(setupErrorMessage(cause));
         }
       } finally {
         // Accepting completion ends the polling effect; its cleanup must not
@@ -189,7 +191,7 @@ export function OutlookExchangeProfileSetup({ email, disabled = false, compact =
     <section className={`outlook-exchange-setup${compact ? " outlook-exchange-setup-compact" : ""}`} aria-label="Outlook auf Exchange umstellen" aria-busy={configuring}>
       <M365Loading active={configuring || initialLoading} message={configuring ? "Wird eingerichtet. Bitte warten und die Anwendung nicht schließen." : "Outlook-Informationen werden geladen. Bitte warten …"} value={configuring ? progress.value : undefined} label={configuring ? progress.label : undefined} priority={10} />
       {!configuring && status && !error && !timedOut && <div className={`outlook-exchange-setup-status${complete ? " complete" : ""}`} role="status" aria-live="polite">{complete && <CheckCircle2 size={19} aria-hidden="true" />}<span>{status.message}</span></div>}
-      {!configuring && !initialLoading && timedOut && <p role="status">Die automatische Prüfung wurde nach vier Minuten angehalten. Sie können die Anmeldung fertigstellen und die Verbindung erneut prüfen.</p>}
+      {!configuring && !initialLoading && timedOut && <p role="status">{setupTimeoutMessage}</p>}
       {!configuring && !initialLoading && error && <p className="outlook-exchange-setup-error" role="alert">{error}</p>}
       {!configuring && (!complete || leadingAction) && <div className="button-row">
         {leadingAction}

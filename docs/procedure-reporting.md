@@ -64,3 +64,13 @@ Microsoft-Zugangsdaten, Postfachinhalte oder Dokumente.
 Live-Test gegen Browser, API und privaten Speicher. Er erstellt klar bezeichnete
 Testdaten und löscht ausschließlich diese eigenen Testeinträge wieder.
 Die privaten Testzugänge liegen außerhalb des Repositorys auf dem Verwaltungs-PC.
+
+## Lokale Ergänzung: Anmeldung und Synchronisierungsfehler
+
+Anmeldung wird erst nach Abschluss der nachfolgenden Einrichtung als Erfolg gemeldet. Fehler beim Windows-/Browser-/Code-Login, bei der Statusprüfung und bei der anschließenden Vorbereitung werden auch ohne ermittelte E-Mail-Adresse gespeichert. Computer und Windows-Benutzer ergänzt die native App unabhängig von Microsoft. Synchronisierungsfehler und bestätigte Wiederherstellung erscheinen als eigener Vorgang `m365_sync` im Portal und Excel. Hintergrundfehler werden nicht als technischer roter Hinweis im normalen M365-Card angezeigt; eine nicht abgeschlossene Benutzeraktion behält ihre kurze Handlungsanweisung.
+
+Die Quellenauswahl wird an die aktuelle Microsoft-Konto-ID gebunden. Der alte globale Initialisierungsmarker allein genügt nicht mehr; bei der Migration werden Quellen erneut ermittelt. Eine fehlgeschlagene Abfrage überschreibt die gespeicherte Auswahl nicht, Warteschlangen werden nicht gelöscht und eine pausierte Konfiguration bleibt pausiert.
+
+Die native Ausgangsqueue übernimmt zusätzlich den letzten in `synchronization_runtime_status_v1` gespeicherten Synchronisierungsfehler mit stabiler Ereignis-ID und Originalzeitpunkt. Fehlt eine lokale Fehleraufzeichnung vollständig, kann sie nicht rückwirkend rekonstruiert werden. WebView-Schreibfehler werden mit bereinigter Meldung und Originalzeitpunkt lokal für erneute native Übergabe aufbewahrt. Einzelne vom Server abgelehnte Datensätze bleiben erhalten, blockieren aber nicht alle nachfolgenden Berichte.
+
+Diese Änderungen benötigen bei Veröffentlichung zuerst die aktualisierte Portal-API und anschließend eine neue App-Version. Eine lokale Codekorrektur verändert die bereits veröffentlichte Version nicht.

@@ -5,7 +5,7 @@ import type { OutlookAccountConfiguration, OutlookOfficeAccountCheck } from '../
 import { parseSynchronizationRuntimeStatus, synchronizationRuntimeStatusKey, type Microsoft365SynchronizationRuntimeStatus } from '../utils/automaticCalendarSync';
 export interface PcHealth { checkedAt:string; appVersion:string; outlookInstalled:boolean; outlookRunning:boolean; freeBytes:number|null; drive:string; computer:string; windowsUser:string }
 export interface ReportStatus { configured:boolean;pending:number;error:string|null }
-export interface ProcedureEvent { eventId:string;attemptId:string;sequence:number;procedure:'m365_login'|'outlook_exchange'|'diagnostics';status:'running'|'success'|'error'|'cancelled'|'interrupted';occurredAt:string;message:string;profile:string;accountEmail:string;step:string }
+export interface ProcedureEvent { eventId:string;attemptId:string;sequence:number;procedure:'m365_login'|'outlook_exchange'|'m365_sync'|'diagnostics';status:'running'|'success'|'error'|'cancelled'|'interrupted';occurredAt:string;message:string;profile:string;accountEmail:string;step:string }
 export interface NewsItem { id:string;title:string;body:string;publishAt:string;expiresAt?:string|null }
 export interface NewsStatus { items:NewsItem[];lastCheckedAt:string|null;lastSuccessAt:string|null;error:string|null }
 export interface UpdateHealth { checkedAt:string;available:string|null;error:boolean }

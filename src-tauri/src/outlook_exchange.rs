@@ -78,6 +78,7 @@ const BOOTSTRAP: &str = include_str!("outlook_exchange_bootstrap.ps1");
 // m365_ is excluded from portable exports/restores: Outlook profiles belong to
 // this Windows account and cannot travel with the contact/calendar backup.
 const STATE_PREFIX: &str = "m365_outlook_exchange_setup_v1_";
+const HELPER_TIMEOUT: &str = "OUTLOOK_HELPER_TIMEOUT";
 
 fn setup_progress(app: &AppHandle, email: &str, value: u8, label: &str) {
     let _ = app.emit(
@@ -104,6 +105,8 @@ pub struct SetupStatus {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct SetupState {
+    #[serde(default)]
+    reused_profile: bool,
     account_id: String,
     email: String,
     previous_profile: Option<String>,
@@ -239,7 +242,14 @@ fn managed_name(name: &str, base: &str) -> bool {
 fn validate_state(state: &SetupState, id: &str, email: &str) -> Result<(), String> {
     if state.account_id != id
         || !state.email.eq_ignore_ascii_case(email)
-        || !managed_name(&state.exchange_profile, "Profile Exchange")
+        || !(managed_name(&state.exchange_profile, "Profile Exchange")
+            || (state.reused_profile
+                && !state.exchange_profile.is_empty()
+                && state.exchange_profile.chars().count() <= 64
+                && !state
+                    .exchange_profile
+                    .chars()
+                    .any(|c| c.is_control() || matches!(c, '"' | '\\' | '/'))))
         || state
             .imap_profile
             .as_ref()
@@ -358,10 +368,7 @@ async fn output_json<T: DeserializeOwned>(
     }
     let output = tokio::time::timeout(Duration::from_secs(seconds), child.wait_with_output())
         .await
-        .map_err(|_| {
-            "Outlook antwortet noch nicht. Bitte offene Anmeldefenster prüfen und erneut versuchen."
-                .to_string()
-        })?
+        .map_err(|_| format!("{HELPER_TIMEOUT}: {program}; Zeitlimit {seconds}s"))?
         .map_err(|_| "Outlook-Antwort konnte nicht gelesen werden.".to_string())?;
     if output.stdout.len() > 256 * 1024 {
         return Err("Outlook-Antwort ist ungültig.".into());
@@ -521,7 +528,10 @@ fn reserve_unused_profile_name(state: &mut SetupState, profiles: &[Profile]) -> 
 }
 
 fn enable_windows_sso(state: &mut SetupState, profiles: &[Profile]) -> Result<(), String> {
-    if state.windows_sso || !matches!(state.phase.as_str(), "reserved" | "created") {
+    if state.reused_profile
+        || state.windows_sso
+        || !matches!(state.phase.as_str(), "reserved" | "created")
+    {
         return Ok(());
     }
     if profiles
@@ -559,7 +569,17 @@ fn proves_connection(probe: &Probe, state: &SetupState) -> bool {
 }
 
 async fn probe() -> Result<Probe, String> {
-    powershell(serde_json::json!({"operation":"probe"})).await
+    pending_probe(powershell(serde_json::json!({"operation":"probe"})).await)
+}
+
+fn pending_probe(result: Result<Probe, String>) -> Result<Probe, String> {
+    match result {
+        // Outlook's COM server can be busy while initializing. Absence of a
+        // response is neither an authentication failure nor proof of success.
+        // The caller keeps polling within the bounded setup deadline.
+        Err(error) if error.starts_with(&format!("{HELPER_TIMEOUT}:")) => Ok(Probe::default()),
+        other => other,
+    }
 }
 
 async fn configured_exchange_default(
@@ -605,13 +625,61 @@ async fn configured_exchange_default(
         return Ok(None);
     }
     Ok(Some(SetupStatus {
-        stage: "complete",
+        // Registry metadata is a reuse candidate, not proof of online access.
+        stage: "ready",
         email: email.into(),
         previous_profile: None,
         exchange_profile: name.into(),
         imap_profile: None,
-        message: format!("Outlook verwendet „{name}“ als Exchange-Standardprofil."),
+        message: format!("Exchange-Profil „{name}“ ist vorhanden und kann überprüft werden."),
     }))
+}
+
+fn reusable_exchange_profile(
+    catalog: &serde_json::Value,
+    profiles: &[Profile],
+    email: &str,
+) -> Result<Option<String>, String> {
+    let mut candidates = Vec::new();
+    for profile in profiles {
+        let matches = catalog
+            .get("profiles")
+            .and_then(|v| v.as_array())
+            .is_some_and(|entries| {
+                entries.iter().any(|entry| {
+                    entry
+                        .get("name")
+                        .and_then(|v| v.as_str())
+                        .is_some_and(|name| name.eq_ignore_ascii_case(&profile.name))
+                        && entry
+                            .get("accounts")
+                            .and_then(|v| v.as_array())
+                            .is_some_and(|accounts| {
+                                accounts.iter().any(|account| {
+                                    account.get("accountType").and_then(|v| v.as_str())
+                                        == Some("Exchange")
+                                        && account
+                                            .get("email")
+                                            .and_then(|v| v.as_str())
+                                            .is_some_and(|address| {
+                                                address.eq_ignore_ascii_case(email)
+                                            })
+                                })
+                            })
+                })
+            });
+        if matches {
+            if profile.is_default {
+                return Ok(Some(profile.name.clone()));
+            }
+            candidates.push(profile.name.clone());
+        }
+    }
+    match candidates.as_slice() {
+        [] => Ok(None),
+        [name] => Ok(Some(name.clone())),
+        _ => Err("Mehrere passende Exchange-Profile gefunden. Bitte die EDV das Standardprofil auswählen lassen; es wurde kein Profil geändert.".into()),
+    }
 }
 
 async fn current_status(app: &AppHandle, id: &str, email: &str) -> Result<SetupStatus, String> {
@@ -850,7 +918,8 @@ pub async fn get_outlook_exchange_setup_status(
             read_state(&app, &id, &email)?.filter(|state| state.phase != "complete")
         {
             keep_setup_in_background(&state)?;
-            let _: serde_json::Value = powershell(serde_json::json!({"operation":"hide-setup-process","processId":state.launched_process_id,"startedAt":state.launched_started_at,"profile":state.exchange_profile,"authorized":state.automatic_close})).await?;
+            // The independent watcher manages visibility. A blocked COM call
+            // there must not prevent the connection probe from running.
         }
     }
     current_status(&app, &id, &email).await
@@ -959,8 +1028,27 @@ pub async fn prepare_outlook_exchange_profile(
         save_state(&app, state)?;
     }
     let profiles: ProfileList = helper(&path, &["exchange-list"]).await?;
-    if let Some(existing) = configured_exchange_default(&email, &profiles.profiles).await? {
-        return Ok(existing);
+    m365::check_exchange_mailbox_access(&app).await?;
+    if saved.is_none() {
+        let catalog = powershell(serde_json::json!({"operation":"profile-catalog"})).await?;
+        if let Some(name) = reusable_exchange_profile(&catalog, &profiles.profiles, &email)? {
+            saved = Some(SetupState {
+                reused_profile: true,
+                account_id: id.clone(),
+                email: email.clone(),
+                previous_profile: None,
+                exchange_profile: name,
+                imap_profile: None,
+                phase: "created".into(),
+                windows_sso: false,
+                warning: None,
+                launched_process_id: None,
+                launched_started_at: None,
+                confirmed_excel_email: Some(excel_email.clone()),
+                automatic_close: close_existing_outlook,
+            });
+            save_state(&app, saved.as_ref().unwrap())?;
+        }
     }
     if installed.running && close_existing_outlook {
         // A resumed Exchange login must finish before its Outlook is closed.
@@ -1050,6 +1138,7 @@ pub async fn prepare_outlook_exchange_profile(
             None
         };
         let state = SetupState {
+            reused_profile: false,
             account_id: id.clone(),
             email: email.clone(),
             previous_profile: previous,
@@ -1093,6 +1182,9 @@ pub async fn prepare_outlook_exchange_profile(
         .iter()
         .any(|profile| profile.name.eq_ignore_ascii_case(&state.exchange_profile))
     {
+        if state.reused_profile {
+            return Err("Das ausgewählte Exchange-Profil ist nicht mehr vorhanden. Bitte die EDV informieren.".into());
+        }
         setup_progress(&app, &email, 3, "Exchange-Profil wird vorbereitet …");
         let command = if state.windows_sso {
             "exchange-create-windows-sso"
@@ -1142,8 +1234,8 @@ pub async fn prepare_outlook_exchange_profile(
         .get("startedAt")
         .and_then(|value| value.as_str())
         .map(str::to_owned);
-    keep_setup_in_background(&state)?;
     save_state(&app, &state)?;
+    keep_setup_in_background(&state)?;
     let message = if state.windows_sso {
         "Outlook wurde mit der automatischen Windows-Kontoeinrichtung gestartet. Die E-Mail-Adresse wird aus Ihrem passenden Domaenenkonto uebernommen. Microsoft kann weiterhin eine Bestaetigung oder MFA verlangen."
     } else {
@@ -1278,8 +1370,14 @@ pub async fn complete_outlook_exchange_profile(app: AppHandle) -> Result<SetupSt
     )
     .await?;
     let verified: ProfileList = helper(&path, &["exchange-list"]).await?;
+    // Read persisted settings again through a fresh helper after Outlook exit.
+    // Do not rely solely on the write command's own response.
+    let persisted: serde_json::Value =
+        powershell(serde_json::json!({"operation":"profile-catalog"})).await?;
     if startup.get("ok").and_then(|value| value.as_bool()) != Some(true)
         || !startup_is_verified(&verified.profiles, &startup, &state.exchange_profile)
+        || !startup_is_verified(&verified.profiles, &persisted, &state.exchange_profile)
+        || inventory().await?.running
     {
         return Err(
             "Outlook hat das Exchange-Profil nicht als dauerhaften Standard bestätigt.".into(),
@@ -1301,6 +1399,62 @@ pub async fn complete_outlook_exchange_profile(app: AppHandle) -> Result<SetupSt
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reuse_requires_matching_exchange_account_and_unambiguous_profile() {
+        let catalog = serde_json::json!({"profiles":[
+            {"name":"Büro", "accounts":[{"email":"ANNA@example.test","accountType":"Exchange"}]},
+            {"name":"Second", "accounts":[{"email":"anna@example.test","accountType":"Exchange"}]},
+            {"name":"IMAP", "accounts":[{"email":"anna@example.test","accountType":"IMAP"}]}
+        ]});
+        let mut profiles = vec![
+            Profile {
+                name: "Büro".into(),
+                is_default: false,
+            },
+            Profile {
+                name: "IMAP".into(),
+                is_default: true,
+            },
+        ];
+        assert_eq!(
+            reusable_exchange_profile(&catalog, &profiles, "anna@example.test").unwrap(),
+            Some("Büro".into())
+        );
+        assert!(
+            reusable_exchange_profile(&catalog, &profiles, "other@example.test")
+                .unwrap()
+                .is_none()
+        );
+        profiles.push(Profile {
+            name: "Second".into(),
+            is_default: false,
+        });
+        assert!(reusable_exchange_profile(&catalog, &profiles, "anna@example.test").is_err());
+        profiles[0].is_default = true;
+        assert_eq!(
+            reusable_exchange_profile(&catalog, &profiles, "anna@example.test").unwrap(),
+            Some("Büro".into())
+        );
+        let mut reused = state();
+        reused.reused_profile = true;
+        reused.exchange_profile = "Büro".into();
+        assert!(validate_state(&reused, "one", "anna@example.test").is_ok());
+        enable_windows_sso(&mut reused, &profiles).unwrap();
+        assert_eq!(reused.exchange_profile, "Büro");
+        assert!(!reused.windows_sso);
+    }
+
+    #[test]
+    fn busy_com_probe_is_pending_not_failure_or_success() {
+        let probe = pending_probe(Err(format!(
+            "{HELPER_TIMEOUT}: powershell.exe; Zeitlimit 25s"
+        )))
+        .unwrap();
+        assert!(probe.active_profile.is_empty());
+        assert!(probe.accounts.is_empty());
+        assert!(pending_probe(Err("real helper failure".into())).is_err());
+    }
 
     #[cfg(windows)]
     #[test]
@@ -1382,6 +1536,7 @@ mod tests {
 
     fn state() -> SetupState {
         SetupState {
+            reused_profile: false,
             account_id: "one".into(),
             email: "anna@example.test".into(),
             previous_profile: Some("Outlook".into()),

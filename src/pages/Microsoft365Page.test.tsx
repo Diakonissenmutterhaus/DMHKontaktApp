@@ -15,9 +15,14 @@ const db = vi.hoisted(() => ({
 vi.mock("../services/db", () => db);
 vi.mock("../utils/microsoft365SyncConfig", () => ({ enableCompleteAutomaticMicrosoft365Sync: vi.fn(async () => defaultSyncConfig) }));
 
+const reports=vi.hoisted(()=>({beginProcedureReport:vi.fn(),finishProcedureReport:vi.fn(),reportMicrosoft365Failure:vi.fn()}));
+vi.mock("../services/procedureReports",()=>reports);
 const account = { id: "account-one", displayName: "Anna Test", email: "anna@example.test", userPrincipalName: "anna@example.test", connectedAt: "2026-10-13T12:00:00Z" };
 beforeEach(() => {
   vi.clearAllMocks();
+  reports.beginProcedureReport.mockResolvedValue({attemptId:"login-attempt",procedure:"m365_login",sequence:0,done:false});
+  reports.finishProcedureReport.mockResolvedValue(undefined);
+  reports.reportMicrosoft365Failure.mockResolvedValue(undefined);
   vi.mocked(enableCompleteAutomaticMicrosoft365Sync).mockResolvedValue(defaultSyncConfig);
   db.getMicrosoft365ConnectionStatus.mockResolvedValue({ configured: true, connected: false, account: null });
   db.getAppSetting.mockResolvedValue(null);
@@ -118,6 +123,39 @@ describe("Microsoft365Page Windows account login", () => {
     await userEvent.click(screen.getByRole("button", { name: "Mit Microsoft 365 verbinden" }));
     expect(await screen.findByText("Anna Test")).toBeVisible();
     expect(screen.queryByRole("alert")).toBeNull();
+  });
+  it("does not display a stale pre-login warning for a connected account", async () => {
+    db.getMicrosoft365ConnectionStatus.mockResolvedValue({ configured:true,connected:true,account });
+    db.getAppSetting.mockImplementation(async (key:string) => key === "synchronization_runtime_status_v1" ? JSON.stringify({lastError:"Microsoft 365 ist momentan nicht verbunden."}) : null);
+    render(<Microsoft365Page />);
+    expect(await screen.findByText("Anna Test")).toBeVisible();
+    await waitFor(() => expect(enableCompleteAutomaticMicrosoft365Sync).toHaveBeenCalled());
+    expect(screen.queryByText("Letzte Prüfung nicht erfolgreich")).toBeNull();
+    expect(screen.queryByText("Microsoft 365 ist momentan nicht verbunden.")).toBeNull();
+  });
+
+  it("keeps background technical failures out of the user card", async () => {
+    db.getMicrosoft365ConnectionStatus.mockResolvedValue({configured:true,connected:true,account});
+    db.getAppSetting.mockImplementation(async (key:string) => key === "synchronization_runtime_status_v1" ? JSON.stringify({lastError:"Exchange: Zugriff verweigert"}) : null);
+    render(<Microsoft365Page />);
+    expect(await screen.findByText("Anna Test")).toBeVisible();
+    expect(screen.queryByText("Exchange: Zugriff verweigert")).toBeNull();
+    expect(screen.queryByText("Letzte Prüfung nicht erfolgreich")).toBeNull();
+  });
+
+  it("reports login failures even before an email is known",async()=>{
+    db.connectMicrosoft365WithWindowsAccount.mockRejectedValueOnce(new Error("Windows broker unavailable"));
+    render(<Microsoft365Page />);
+    await userEvent.click(await screen.findByRole("button",{name:"Mit Microsoft 365 verbinden"}));
+    await waitFor(()=>expect(reports.finishProcedureReport).toHaveBeenCalledWith(expect.any(Object),"error",expect.stringContaining("Windows broker unavailable")));
+    expect(reports.finishProcedureReport.mock.calls.some(([,state])=>state==="success")).toBe(false);
+  });
+  it("reports a post-login setup failure as error rather than early success",async()=>{
+    vi.mocked(enableCompleteAutomaticMicrosoft365Sync).mockRejectedValueOnce(new Error("3 Kalender nicht erreichbar"));
+    render(<Microsoft365Page />);
+    await userEvent.click(await screen.findByRole("button",{name:"Mit Microsoft 365 verbinden"}));
+    await waitFor(()=>expect(reports.finishProcedureReport).toHaveBeenCalledWith(expect.any(Object),"error","3 Kalender nicht erreichbar",account.email));
+    expect(reports.finishProcedureReport.mock.calls.some(([,state])=>state==="success")).toBe(false);
   });
   it("checks an existing connection without starting a new interactive login", async () => {
     db.getMicrosoft365ConnectionStatus.mockResolvedValue({ configured: true, connected: true, account });

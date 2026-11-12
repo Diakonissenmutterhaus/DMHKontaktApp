@@ -48,6 +48,16 @@ afterEach(() => {
 });
 
 describe("Outlook Exchange profile setup", () => {
+  it("does not tell users to find authentication windows after a helper timeout", async () => {
+    db.prepareOutlookExchangeProfile.mockRejectedValueOnce("OUTLOOK_HELPER_TIMEOUT: powershell.exe; Zeitlimit 25s");
+    render(<OutlookExchangeProfileSetup email={email} />);
+    await clickButton("Zu Exchange wechseln");
+    expect(screen.getByRole("alert")).toHaveTextContent("Bitte wenden Sie sich an die EDV");
+    expect(screen.queryByText(/OUTLOOK_HELPER_TIMEOUT|Anmeldefenster/)).toBeNull();
+    expect(screen.queryByText(completed.message)).toBeNull();
+    expect(db.completeOutlookExchangeProfile).not.toHaveBeenCalled();
+  });
+
   it("keeps the same loading window until the final displayed default profile has been refreshed", async () => {
     const oldConfiguration = { email, profile: "Outlook", defaultProfile: "Outlook", source: "default", accounts: [] };
     let finishRefresh!: (value: typeof oldConfiguration) => void;
@@ -236,7 +246,7 @@ describe("Outlook Exchange profile setup", () => {
     render(<OutlookExchangeProfileSetup email={email} />);
     await clickButton("Zu Exchange wechseln");
     await act(async () => { await vi.advanceTimersByTimeAsync(4 * 60_000); });
-    expect(screen.getByText(/nach vier Minuten angehalten/)).toBeVisible();
+    expect(screen.getByText(/Bitte wenden Sie sich an die EDV/)).toBeVisible();
     expect(screen.queryByRole("dialog")).toBeNull();
     expect(screen.getByRole("button", { name: "Exchange-Verbindung prüfen" })).toBeEnabled();
     expect(screen.getByRole("button", { name: "Einrichtung fortsetzen" })).toBeEnabled();

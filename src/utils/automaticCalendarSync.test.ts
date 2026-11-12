@@ -7,14 +7,17 @@ const mocks = vi.hoisted(() => ({
   flushMicrosoft365ContactOutbox: vi.fn(),
   getAppSetting: vi.fn(),
   getMicrosoft365ConnectionStatus: vi.fn(),
+  listMicrosoft365SyncSources:vi.fn(),
   setAppSetting: vi.fn(),
+  reportSynchronizationFailure:vi.fn(), reportSynchronizationRecovery:vi.fn(),
   mergeImportedCalendarCategories: vi.fn(),
   mergeMicrosoft365CalendarCategories: vi.fn()
 }));
 vi.mock("../services/db", () => mocks);
+vi.mock("../services/procedureReports",()=>({reportSynchronizationFailure:mocks.reportSynchronizationFailure,reportSynchronizationRecovery:mocks.reportSynchronizationRecovery}));
 vi.mock("./calendar", () => ({ calendarCategoryRulesStorageKey: "agendakontakte.calendarCategoryRules.v1", mergeImportedCalendarCategories: mocks.mergeImportedCalendarCategories, mergeMicrosoft365CalendarCategories: mocks.mergeMicrosoft365CalendarCategories }));
 
-import { calendarStorageUpdatedEventName, describeMicrosoft365SyncFailure, runAutomaticCalendarSync, synchronizationConfigKey } from "./automaticCalendarSync";
+import { calendarStorageUpdatedEventName, describeMicrosoft365SyncFailure, parseSynchronizationRuntimeStatus, runAutomaticCalendarSync, synchronizationConfigKey } from "./automaticCalendarSync";
 
 const emptyOutbox = { processed: 0, created: 0, updated: 0, deleted: 0, pending: 0, errors: 0, errorMessages: [] };
 
@@ -46,8 +49,8 @@ describe("automatic Microsoft 365 calendar polling", () => {
           selectedCalendarSourceIds: ["me:calendar"],
           sourceDirections: { "me:calendar": "bidirectional" }
         })
-      : null);
-    mocks.getMicrosoft365ConnectionStatus.mockResolvedValue({ connected: true });
+      : key === "m365_complete_automatic_sync_initialized_v1" ? "true" : key === "m365_automatic_sync_account_v1" ? "current:current@example.test" : null);
+    mocks.getMicrosoft365ConnectionStatus.mockResolvedValue({ connected: true, account:{id:"current",email:"current@example.test"} });
     mocks.setAppSetting.mockResolvedValue(undefined);
     mocks.flushMicrosoft365CalendarOutbox.mockResolvedValue(emptyOutbox);
     mocks.flushMicrosoft365ContactOutbox.mockResolvedValue(emptyOutbox);
@@ -68,6 +71,35 @@ describe("automatic Microsoft 365 calendar polling", () => {
 
   afterEach(() => {
     delete (window as Window & { __TAURI_INTERNALS__?: object }).__TAURI_INTERNALS__;
+  });
+
+  it("waits silently before login and leaves local changes queued", async () => {
+    mocks.getMicrosoft365ConnectionStatus.mockResolvedValue({ connected: false });
+    for (const trigger of ["open", "poll", "calendar-poll", "change", "contact-change"] as const) {
+      expect(await runAutomaticCalendarSync(trigger)).toBeNull();
+    }
+    expect(mocks.applyMicrosoft365Sync).not.toHaveBeenCalled();
+    expect(mocks.flushMicrosoft365CalendarOutbox).not.toHaveBeenCalled();
+    expect(mocks.flushMicrosoft365ContactOutbox).not.toHaveBeenCalled();
+    expect(mocks.setAppSetting).not.toHaveBeenCalled();
+  });
+
+  it("discards the legacy pre-login notice without claiming a successful sync", () => {
+    const status = parseSynchronizationRuntimeStatus(JSON.stringify({lastError:"Microsoft 365 ist momentan nicht verbunden.",contactsLastCheckedAt:"2026-11-10T10:00:00Z"}));
+    expect(status.lastError).toBeNull();
+    expect(status.lastSuccessAt).toBeNull();
+    expect(status.contactsLastCheckedAt).toBe("2026-11-10T10:00:00Z");
+    expect(parseSynchronizationRuntimeStatus(JSON.stringify({lastError:"HTTP 403: Zugriff verweigert"})).lastError).toBe("HTTP 403: Zugriff verweigert");
+  });
+
+  it("replaces three legacy calendar IDs before attempting any synchronization",async()=>{
+    mocks.getAppSetting.mockImplementation(async(key:string)=>key===synchronizationConfigKey ? JSON.stringify({...defaultSyncConfig,enabled:true,contacts:false,calendars:true,selectedCalendarSourceIds:["old-1","old-2","old-3"]}) : key === "m365_complete_automatic_sync_initialized_v1" ? "true" : null);
+    mocks.listMicrosoft365SyncSources.mockResolvedValue({contacts:[],calendars:[{id:"me:current-calendar",name:"Calendar",kind:"calendar",editable:true,shared:false,resourcePath:"/me/calendars/current",mailbox:null}],sharedMailboxes:[],sharedAccessAvailable:false});
+    const result=await runAutomaticCalendarSync("calendar-poll");
+    expect(result?.state).toBe("success");
+    expect(mocks.flushMicrosoft365CalendarOutbox).toHaveBeenCalledWith(expect.objectContaining({selectedCalendarSourceIds:["me:current-calendar"]}));
+    expect(mocks.applyMicrosoft365Sync).toHaveBeenCalledWith(expect.objectContaining({selectedCalendarSourceIds:["me:current-calendar"]}));
+    expect(mocks.reportSynchronizationFailure).not.toHaveBeenCalled();
   });
 
   it("reads Exchange calendar changes without waiting for a failing contact outbox", async () => {
@@ -157,7 +189,7 @@ describe("automatic Microsoft 365 calendar polling", () => {
     mocks.getAppSetting.mockImplementation(async (key: string) => key === synchronizationConfigKey
       ? JSON.stringify({ ...defaultSyncConfig, enabled: true, contacts: false, calendars: true,
           selectedCalendarSourceIds: ["me:calendar"], sourceDirections: { "me:calendar": "export" } })
-      : null);
+      : key === "m365_complete_automatic_sync_initialized_v1" ? "true" : key === "m365_automatic_sync_account_v1" ? "current:current@example.test" : null);
     mocks.flushMicrosoft365CalendarOutbox.mockResolvedValue({ ...emptyOutbox, processed: 1, created: 1 });
     const status = await runAutomaticCalendarSync("calendar-poll");
     expect(status?.state).toBe("success");

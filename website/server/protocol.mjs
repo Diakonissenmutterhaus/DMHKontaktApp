@@ -26,7 +26,7 @@ export function redact(value) {
 }
 function text(value, limit) { return typeof value === 'string' ? value.replace(/[\u0000-\u001f]/g, ' ').slice(0, limit).trim() : ''; }
 export function validateEvent(input, deviceId) {
-  if (!input || !uuid(input.eventId) || !uuid(input.attemptId) || !['m365_login', 'outlook_exchange', 'diagnostics'].includes(input.procedure)
+  if (!input || !uuid(input.eventId) || !uuid(input.attemptId) || !['m365_login', 'outlook_exchange', 'm365_sync', 'diagnostics'].includes(input.procedure)
     || !['running', 'success', 'error', 'cancelled', 'interrupted'].includes(input.status)
     || !Number.isSafeInteger(input.sequence) || input.sequence < 0 || input.sequence > 10000
     || !Number.isFinite(Date.parse(input.occurredAt))) throw new Error('Ungültiger Bericht.');
@@ -35,6 +35,7 @@ export function validateEvent(input, deviceId) {
     computer: text(input.computer, 100), windowsUser: text(input.windowsUser, 150), accountEmail: text(input.accountEmail, 250),
     appVersion: text(input.appVersion, 30), step: text(input.step, 120), message: redact(input.message), profile: text(input.profile, 100) };
 }
+const attemptGroup = row => JSON.stringify([row.deviceId, row.windowsUser, row.procedure]);
 export function summarize(events) {
   const attempts = new Map();
   for (const event of events) {
@@ -42,14 +43,20 @@ export function summarize(events) {
     const previous = attempts.get(key);
     if (!previous || event.sequence > previous.sequence) attempts.set(key, event);
   }
-  return [...attempts.values()].sort((a, b) => (b.occurredAt || b.receivedAt).localeCompare(a.occurredAt || a.receivedAt) || b.receivedAt.localeCompare(a.receivedAt));
+  const counts = new Map();
+  for (const row of attempts.values()) {
+    const key = attemptGroup(row);
+    counts.set(key, (counts.get(key) || 0) + 1);
+  }
+  return [...attempts.values()].map(row => ({ ...row, attemptCount: counts.get(attemptGroup(row)) }))
+    .sort((a, b) => (b.occurredAt || b.receivedAt).localeCompare(a.occurredAt || a.receivedAt) || b.receivedAt.localeCompare(a.receivedAt));
 }
 export function currentState(attempts) {
   const groups = new Map();
   // summarize() returns newest occurred attempt first, including delayed backfills. Historical failures must
   // not make an already corrected PC look broken in the default overview.
   for (const row of attempts) {
-    const key = `${row.deviceId}/${row.windowsUser}/${row.procedure}`;
+    const key = attemptGroup(row);
     if (!groups.has(key)) groups.set(key, row);
   }
   return [...groups.values()];

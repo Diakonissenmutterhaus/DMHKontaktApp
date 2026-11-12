@@ -6990,6 +6990,29 @@ pub async fn test_m365_connection(app: AppHandle) -> Result<Microsoft365Connecti
     })
 }
 
+/// Read-only mailbox preflight before changing any Outlook profile.
+pub(crate) async fn check_exchange_mailbox_access(app: &AppHandle) -> Result<(), String> {
+    let mut token = refreshed_access_token(app).await?;
+    // A /me profile alone proves identity, not access to an Exchange mailbox.
+    let result = graph_json(
+        &token,
+        "https://graph.microsoft.com/v1.0/me/calendar?$select=id",
+    )
+    .await;
+    token.zeroize();
+    let calendar = result.map_err(|error| {
+        format!("Exchange-Vorprüfung fehlgeschlagen; Outlook wurde nicht geändert. {error}")
+    })?;
+    if calendar
+        .get("id")
+        .and_then(Value::as_str)
+        .is_none_or(str::is_empty)
+    {
+        return Err("Exchange-Vorprüfung: Der persönliche Kalender ist nicht verfügbar. Outlook wurde nicht geändert.".into());
+    }
+    Ok(())
+}
+
 /// Trusted local identity for Outlook setup; never accepts an address from the
 /// WebView. The explicit prepare/complete commands also verify Graph access.
 pub(crate) fn outlook_profile_identity(app: &AppHandle) -> Result<(String, String), String> {

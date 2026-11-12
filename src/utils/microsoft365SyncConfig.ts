@@ -1,7 +1,9 @@
-import { getAppSetting, listMicrosoft365SyncSources, setAppSetting } from "../services/db";
+import { getAppSetting, getMicrosoft365ConnectionStatus, listMicrosoft365SyncSources, setAppSetting } from "../services/db";
 import type { Microsoft365SyncSource, Microsoft365SyncSources } from "../types/m365";
 import { parseSyncConfig, type SyncConfig } from "../types/sync";
 import { synchronizationConfigKey } from "./automaticCalendarSync";
+
+export const automaticSyncAccountKey = "m365_automatic_sync_account_v1";
 
 export const completeAutomaticSyncInitializedKey = "m365_complete_automatic_sync_initialized_v1";
 
@@ -67,18 +69,30 @@ export function selectAllMicrosoft365Sources(config: SyncConfig, sources: Micros
 }
 
 export async function enableCompleteAutomaticMicrosoft365Sync(force = false): Promise<SyncConfig> {
-  const [rawConfig, initialized] = await Promise.all([
+  const [rawConfig, initialized, owner, connection] = await Promise.all([
     getAppSetting(synchronizationConfigKey),
-    getAppSetting(completeAutomaticSyncInitializedKey)
+    getAppSetting(completeAutomaticSyncInitializedKey),
+    getAppSetting(automaticSyncAccountKey),
+    getMicrosoft365ConnectionStatus()
   ]);
   const current = parseSyncConfig(rawConfig);
-  if (!force && initialized === "true") return current;
+  if (!connection.connected || !connection.account) throw new Error("Microsoft-365-Anmeldung muss erneut bestätigt werden.");
+  const accountKey = `${connection.account.id}:${connection.account.email || connection.account.userPrincipalName || ""}`.toLowerCase();
+  if (!force && initialized === "true" && owner === accountKey) return current;
 
   const sources = await listMicrosoft365SyncSources(current.sharedMailboxAddresses);
-  const next = selectAllMicrosoft365Sources(current, sources);
-  await Promise.all([
-    setAppSetting(synchronizationConfigKey, JSON.stringify(next)),
-    setAppSetting(completeAutomaticSyncInitializedKey, "true")
-  ]);
+  const complete = selectAllMicrosoft365Sources(current, sources);
+  const next = !force && initialized === "true" ? {
+    ...current,
+    sourceSelectionInitialized:true,
+    selectedCalendarSourceIds:complete.selectedCalendarSourceIds,
+    selectedContactSourceIds:complete.selectedContactSourceIds,
+    sourceDirections:complete.sourceDirections
+  } : complete;
+  // Publish the configuration before its initialization/ownership markers.
+  // A failed discovery never deletes an unavailable source or a queued change.
+  await setAppSetting(synchronizationConfigKey, JSON.stringify(next));
+  await setAppSetting(automaticSyncAccountKey, accountKey);
+  await setAppSetting(completeAutomaticSyncInitializedKey, "true");
   return next;
 }

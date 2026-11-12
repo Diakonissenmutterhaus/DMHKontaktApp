@@ -14,7 +14,7 @@ import { updateAvailableEvent } from './UpdateNotifier';
 import { synchronizationRuntimeStatusUpdatedEventName, m365DataUpdatedEventName } from '../utils/automaticCalendarSync';
 import './WorkstationPanel.css';
 const date=(v:string|null|undefined)=>v?new Date(v).toLocaleString('de-DE',{dateStyle:'short',timeStyle:'short'}):'Noch nicht geprüft';
-const procedures={m365_login:'Microsoft 365',outlook_exchange:'Exchange-Einrichtung',diagnostics:'PC-Diagnose'};
+const procedures={m365_login:'Microsoft 365',outlook_exchange:'Exchange-Einrichtung',m365_sync:'Microsoft-365-Synchronisierung',diagnostics:'PC-Diagnose'};
 const statuses={running:'Abschluss noch nicht bestätigt',success:'Erfolgreich',error:'Fehler',cancelled:'Abgebrochen',interrupted:'Unterbrochen'};
 async function saveJson(name:string,value:unknown){const content=JSON.stringify(value,null,2);if(isTauri()){const {save}=await import('@tauri-apps/plugin-dialog');const {writeTextFile}=await import('@tauri-apps/plugin-fs');const path=await save({defaultPath:name,filters:[{name:'JSON',extensions:['json']}]});if(path)await writeTextFile(path,content);}else{const url=URL.createObjectURL(new Blob([content],{type:'application/json'}));const a=document.createElement('a');a.href=url;a.download=name;a.click();window.setTimeout(()=>URL.revokeObjectURL(url),1000);}}
 export function WorkstationPanel({onNavigate,kiEnabled}:{onNavigate:(page:Page)=>void;kiEnabled:boolean}){

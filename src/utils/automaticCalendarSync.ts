@@ -11,6 +11,7 @@ import type { CalendarEvent } from "../types/calendar";
 import type { CalendarOutboxSyncResult, Microsoft365SyncHistoryEntry, Microsoft365SyncResult } from "../types/m365";
 import { parseSyncConfig, type SyncConfig } from "../types/sync";
 import { calendarCategoryRulesStorageKey, mergeImportedCalendarCategories, mergeMicrosoft365CalendarCategories } from "./calendar";
+import { reportSynchronizationFailure, reportSynchronizationRecovery } from "../services/procedureReports";
 import { notifyExchangeFailures, reportDiagnostic } from "./notificationPolicy";
 
 export const synchronizationConfigKey = "synchronization_config_v1";
@@ -53,7 +54,13 @@ export function parseSynchronizationRuntimeStatus(raw: string | null): Microsoft
   if (!raw) return emptyMicrosoft365SynchronizationRuntimeStatus;
   try {
     const parsed = JSON.parse(raw) as Partial<Microsoft365SynchronizationRuntimeStatus>;
-    return { ...emptyMicrosoft365SynchronizationRuntimeStatus, ...parsed };
+    return {
+      ...emptyMicrosoft365SynchronizationRuntimeStatus,
+      ...parsed,
+      // Older versions persisted an expected pre-login state as a sync failure.
+      // Discard only that legacy notice, without inventing a successful check.
+      lastError: parsed.lastError === "Microsoft 365 ist momentan nicht verbunden." ? null : parsed.lastError ?? null
+    };
   } catch {
     return emptyMicrosoft365SynchronizationRuntimeStatus;
   }
@@ -78,6 +85,7 @@ export function describeMicrosoft365SyncFailure(errors: number, messages: string
 
 export async function recordMicrosoft365SynchronizationError(error: unknown): Promise<void> {
   await reportDiagnostic({ origin: "Microsoft 365:automatic", level: "error", operation: "synchronize", message: error instanceof Error ? error.message : String(error) });
+  await reportSynchronizationFailure(error instanceof Error ? error.message : String(error));
   const previous = parseSynchronizationRuntimeStatus(await getAppSetting(synchronizationRuntimeStatusKey));
   await saveRuntimeStatus({
     ...previous,
@@ -95,6 +103,8 @@ export async function recordMicrosoft365SynchronizationSuccess(
   const previous = parseSynchronizationRuntimeStatus(await getAppSetting(synchronizationRuntimeStatusKey));
   const exchangeCount = result.created + result.updated + result.deleted;
   const successful = result.errors === 0;
+  if (successful) await reportSynchronizationRecovery("", Boolean(previous.lastError));
+  else await reportSynchronizationFailure(result.errorMessages.join(" · ") || `${result.errors} Synchronisierungsfehler`);
   await saveRuntimeStatus({
     ...previous,
     lastAttemptAt: result.finishedAt,
@@ -136,9 +146,20 @@ export async function runAutomaticCalendarSync(trigger: AutomaticSyncTrigger): P
   if (m365SafeImportTestMode && !(await getMicrosoft365ReadOnlyTestMode())) {
     return { state: "error", message: "Sicherer Kalender-Test wurde abgebrochen: Das Schreibverbot in der nativen App ist nicht aktiv." };
   }
-  const config = parseSyncConfig(await getAppSetting(synchronizationConfigKey));
+  let config = parseSyncConfig(await getAppSetting(synchronizationConfigKey));
   if (!config.enabled || config.paused || !config.providers.m365 || (!config.calendars && !config.contacts)) return null;
   if (trigger === "open" && !config.runOnOpen) return null;
+  const connection = await getMicrosoft365ConnectionStatus();
+  if (!connection.connected) {
+    if (connection.account) await reportSynchronizationFailure("Gespeichertes Microsoft-365-Konto benötigt erneute Anmeldung.", connection.account.email || connection.account.userPrincipalName || "");
+    return null;
+  }
+  // Reconcile legacy/account-specific selections before any outbound write.
+  // Imported lazily because the setup module shares these runtime-status helpers.
+  if (!m365SafeImportTestMode) {
+    const { enableCompleteAutomaticMicrosoft365Sync } = await import("./microsoft365SyncConfig");
+    config = await enableCompleteAutomaticMicrosoft365Sync(false);
+  }
   const fastCalendarPoll = m365SafeImportTestMode || trigger === "calendar-poll";
   const contactOnlyCycle = !m365SafeImportTestMode && (trigger === "poll" || trigger === "contact-change");
   const calendars = config.calendars && !contactOnlyCycle;
@@ -151,17 +172,6 @@ export async function runAutomaticCalendarSync(trigger: AutomaticSyncTrigger): P
   const selectedContactSourceIds = config.contacts && config.selectedContactSourceIds.length === 0
     ? ["me:default-contacts"]
     : config.selectedContactSourceIds;
-
-  const attemptedAt = new Date().toISOString();
-  const connection = await getMicrosoft365ConnectionStatus();
-  if (!connection.connected) {
-    await saveRuntimeStatus({
-      ...parseSynchronizationRuntimeStatus(await getAppSetting(synchronizationRuntimeStatusKey)),
-      lastAttemptAt: attemptedAt,
-      lastError: "Microsoft 365 ist momentan nicht verbunden."
-    });
-    return { state: "error", message: "Die Änderung wurde lokal gespeichert. Microsoft 365 ist momentan nicht verbunden." };
-  }
 
   // Local calendar changes use a durable SQLite outbox. They are sent first
   // and are only removed after Microsoft Graph confirms the write. This avoids

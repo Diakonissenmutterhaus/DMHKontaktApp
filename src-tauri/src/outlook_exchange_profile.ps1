@@ -122,13 +122,10 @@ function Start-OutlookProfile {
                 [void]$process.WaitForInputIdle($idleTimeout)
             } catch { }
             if ($Background) {
-                # Start hiding as soon as COM becomes available, including while
-                # the scoped SSO hint is still active. Do not wait for a visible
-                # Inbox to finish its entire startup sequence first.
-                for ($attempt = 0; $attempt -lt 6; $attempt++) {
-                    Hide-OutlookSetupExplorer -ExpectedId ([int]$identity.processId) -StartedAt ([string]$identity.startedAt) -Profile $Profile
-                    Start-Sleep -Milliseconds 250
-                }
+                # Do not call Outlook COM during launch: startup can block it
+                # indefinitely. Return the process identity so Rust can persist
+                # ownership and start the separate visibility watcher.
+                Start-Sleep -Milliseconds 1500
             } else { Start-Sleep -Milliseconds 1500 }
         } finally { $process.Dispose() }
         if ($Background) { return $identity }
@@ -626,14 +623,10 @@ try {
                 $executable = Find-ClassicOutlook
                 if ([string]::IsNullOrWhiteSpace($executable)) { throw 'CLASSIC_OUTLOOK_MISSING' }
                 $profile = [string]$request.profile
-                if ($profile -notmatch '^[A-Za-z0-9][A-Za-z0-9 _-]{0,63}$') { throw 'INVALID_PROFILE_NAME' }
+                if ([string]::IsNullOrWhiteSpace($profile) -or $profile.Length -gt 64 -or $profile -match '[\x00-\x1f"\\/]') { throw 'INVALID_PROFILE_NAME' }
                 # Start hidden; authentication/MFA dialogs remain interactive.
                 $identity = Start-OutlookProfile -Executable $executable -Profile $profile -Email ([string]$request.email) -WindowsSso ([bool]$request.windowsSso) -Background $true
-                # ROT and Explorer windows may appear after Start-Process returns.
-                for ($attempt = 0; $attempt -lt 12; $attempt++) {
-                    Hide-OutlookSetupExplorer -ExpectedId ([int]$identity.processId) -StartedAt ([string]$identity.startedAt) -Profile $profile
-                    Start-Sleep -Milliseconds 250
-                }
+                # Visibility is managed independently after ownership is saved.
                 $result = @{ launched = $true; processId = $identity.processId; startedAt = $identity.startedAt }
             }
         }

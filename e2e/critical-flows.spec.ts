@@ -67,6 +67,7 @@ async function installKiMock(page: Page, published: boolean) {
       if (command === "get_ki_config") return policy;
       if (command === "save_ki_config") { policy = { ...args.config, revision: "ki-r2" }; return policy; }
       if (command === "list_ki_acknowledgements") return w.__DMH_KI_RECEIPTS__;
+      if (command === "list_my_ki_acknowledgements") return w.__DMH_KI_RECEIPTS__.filter((receipt: any) => receipt.windowsOwner === "test-windows-user");
       if (command === "list_ki_access_requests") return w.__DMH_KI_ACCESS_REQUESTS__;
       if (command === "list_ki_news") return w.__DMH_KI_NEWS__.filter((entry: any) => args?.includeDrafts || entry.published);
       if (command === "save_ki_news") {
@@ -78,7 +79,7 @@ async function installKiMock(page: Page, published: boolean) {
       if (command === "save_ki_access_request") { const request = { ...args.input, id: "access-1", createdAt: new Date().toISOString(), status: "prepared" }; w.__DMH_KI_ACCESS_REQUESTS__.push(request); return request; }
       if (command === "plugin:opener|open_url") { w.__DMH_KI_MAIL_DRAFTS__.push(args.url); return null; }
       if (command === "submit_ki_acknowledgement") {
-        const receipt = { ...args.submission, id: `ki-${w.__DMH_KI_RECEIPTS__.length}`, policy, policySha256: "test-checksum", submittedAt: new Date().toISOString() };
+        const receipt = { ...args.submission, id: `ki-${w.__DMH_KI_RECEIPTS__.length}`, policy, windowsOwner: "test-windows-user", policySha256: "test-checksum", submittedAt: new Date().toISOString() };
         w.__DMH_KI_RECEIPTS__.push(receipt); return receipt;
       }
       return invoke(command, args);
@@ -188,12 +189,65 @@ test("KI bloqueia confirmação sem documento oficial publicado", async ({ page 
   await expect(page.getByText("Noch nicht veröffentlicht", { exact: true })).toBeVisible();
   await openKiForms(page);
   await expect(page.getByRole("button", { name: "Bestätigung ausfüllen" })).toBeDisabled();
-  await page.getByRole("button", { name: "KI-Übersicht" }).click();
+  await page.getByRole("button", { name: "Zurück zur KI-Übersicht" }).click();
   await openKiArea(page, "Schulungen");
+  await page.getByRole("complementary", { name: "Schulungsliste" }).getByRole("button", { name: /IT-Schulung/ }).click();
   await expect(page.getByRole("button", { name: "Schulung ansehen" })).toBeDisabled();
-  await page.getByRole("button", { name: "KI-Übersicht" }).click();
+  await page.screenshot({ path: testInfo.outputPath("ki-training-pending.png") });
+  await page.getByRole("button", { name: "Zurück zur KI-Übersicht" }).click();
   await expect(page.getByLabel("Vor- und Nachname", { exact: true })).toHaveCount(0);
   await page.screenshot({ path: testInfo.outputPath("ki-dokument-ausstehend.png"), fullPage: true });
+});
+
+test("KI Schulungen usa lista redimensionável e conteúdo à direita sem carregar o curso antes do clique", async ({ page }, testInfo) => {
+  await installKiMock(page, true);
+  await page.addInitScript(() => {
+    const w = window as any;
+    const invoke = w.__TAURI_INTERNALS__.invoke;
+    w.__TAURI_INTERNALS__.invoke = async (command: string, args: any) => command === "get_ki_config"
+      ? { revision: "training-r1", title: "KI-Leitlinie", version: "10.11.2026", body: "Richtlinie", published: true, trainingUrl: "https://training.example.test/lesson" }
+      : invoke(command, args);
+  });
+  let courseRequests = 0;
+  await page.route("https://training.example.test/lesson", async (route) => {
+    courseRequests++;
+    await route.fulfill({ contentType: "text/html; charset=utf-8", body: "<!doctype html><html lang='de'><head><meta charset='utf-8'><style>body{font:14px Segoe UI,sans-serif;padding:16px;color:#202124}h1{font-size:20px}</style></head><body><h1>IT-Schulung – Testinhalt</h1><p>Schulungsinhalt im rechten Lesebereich.</p></body></html>" });
+  });
+  await page.goto("/");
+  await page.getByRole("navigation", { name: "Hauptmenü" }).getByRole("button", { name: "KI", exact: true }).click();
+  await openKiArea(page, "Schulungen");
+  const list = page.getByRole("complementary", { name: "Schulungsliste" });
+  const reader = page.getByRole("region", { name: "Schulungsinhalt" });
+  await expect(reader.getByText("Schulung auswählen", { exact: true })).toBeVisible();
+  await list.getByRole("button", { name: /IT-Schulung/ }).click();
+  await expect(reader.getByRole("heading", { name: "IT-Schulung", exact: true })).toBeVisible();
+  await expect(page.locator("iframe")).toHaveCount(0);
+  expect(courseRequests).toBe(0);
+  const divider = page.getByRole("separator", { name: "Breite der Schulungsliste" });
+  const initialWidth = Number(await divider.getAttribute("aria-valuenow"));
+  await divider.focus();
+  await divider.press("ArrowRight");
+  await expect(divider).toHaveAttribute("aria-valuenow", String(initialWidth + 16));
+  const handle = (await divider.boundingBox())!;
+  await page.mouse.move(handle.x + handle.width / 2, handle.y + handle.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(handle.x + handle.width / 2 + 40, handle.y + handle.height / 2, { steps: 4 });
+  await page.mouse.up();
+  await expect.poll(async () => Number(await divider.getAttribute("aria-valuenow"))).toBeGreaterThan(initialWidth + 40);
+  await reader.getByRole("button", { name: "Schulung ansehen" }).click();
+  await expect(page.frameLocator('iframe[title="IT-Schulung – Inhalt"]').getByRole("heading", { name: "IT-Schulung – Testinhalt" })).toBeVisible();
+  expect(courseRequests).toBe(1);
+  await page.screenshot({ path: testInfo.outputPath("ki-training-reading-pane.png") });
+  await page.getByRole("button", { name: "Schulungsliste ausblenden" }).click();
+  await expect(list).toHaveCount(0);
+  await expect(reader.getByRole("heading", { name: "IT-Schulung", exact: true })).toBeVisible();
+  expect(courseRequests).toBe(1);
+  await page.getByRole("button", { name: "Schulungsliste einblenden" }).click();
+  await expect(list).toBeVisible();
+  await page.setViewportSize({ width: 760, height: 700 });
+  expect(await page.locator(".ki-training-panes").evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
+  await page.getByRole("button", { name: "Zu den Formularen", exact: true }).click();
+  await expect(page.getByRole("table", { name: "Verfügbare KI-Formulare" })).toBeVisible();
 });
 
 test("KI mostra o PDF original de 11 páginas e libera formulário após carregar", async ({ page }, testInfo) => {
@@ -316,7 +370,11 @@ test("KI confirma leitura e aula com assinatura desenhada, digitada ou importada
     await page.getByLabel("Datum der Schulung").fill("2026-01-01");
     await page.getByRole("checkbox", { name: "Schulung vollständig besucht" }).check();
     await page.getByRole("button", { name: "Weiter", exact: true }).click();
-    await page.getByRole("group", { name: "Art der Unterschrift" }).getByRole("button", { name: method === "draw" ? "Zeichnen" : method === "typed" ? "Name" : "Bild", exact: true }).click();
+    const signatureChoices = page.getByRole("group", { name: "Art der Unterschrift" });
+    await expect(signatureChoices.getByRole("button").first()).toHaveText("Name");
+    await expect(signatureChoices.getByRole("button", { name: "Name", exact: true })).toHaveAttribute("aria-pressed", "true");
+    expect(await page.evaluate(() => (window as any).__DMH_KI_RECEIPTS__.length)).toBe(["draw", "typed", "import"].indexOf(method));
+    if (method !== "typed") await signatureChoices.getByRole("button", { name: method === "draw" ? "Zeichnen" : "Bild", exact: true }).click();
     if (method === "draw") {
       const canvas = page.getByLabel("Unterschrift mit der Maus zeichnen");
       await canvas.scrollIntoViewIfNeeded();
@@ -359,6 +417,24 @@ test("KI confirma leitura e aula com assinatura desenhada, digitada ou importada
   expect(records.map((record: any) => record.signatureMethod)).toEqual(["draw", "typed", "import"]);
   expect(records[0].signaturePng).toBe(drawnSignature);
   expect(records.every((record: any) => record.signaturePng.startsWith("data:image/png;base64,") && record.revision === "ki-r1" && record.readConfirmed && record.trainingConfirmed)).toBe(true);
+  await page.getByRole("dialog", { name: "Bestätigung", exact: true }).getByRole("button", { name: "Schließen", exact: true }).click();
+  await page.evaluate(() => {
+    const w = window as any;
+    w.__DMH_KI_RECEIPTS__.push({ ...w.__DMH_KI_RECEIPTS__[0], id: "other-owner", fullName: "Andere Person", windowsOwner: "other-windows-user" });
+  });
+  await page.getByRole("navigation", { name: "Hauptmenü" }).getByRole("button", { name: "Startseite", exact: true }).click();
+  await page.getByRole("navigation", { name: "Hauptmenü" }).getByRole("button", { name: "KI", exact: true }).click();
+  await page.getByRole("button", { name: "Meine Nachweise", exact: true }).click();
+  const personal = page.getByRole("table", { name: "Meine unterschriebenen Dokumente" });
+  await expect(personal.getByRole("row")).toHaveCount(4);
+  await expect(personal.getByText("Andere Person")).toHaveCount(0);
+  await page.screenshot({ path: testInfo.outputPath("ki-meine-nachweise.png") });
+  await personal.getByRole("button", { name: "Öffnen", exact: true }).first().click();
+  await expect(page.getByRole("dialog", { name: "Unterschriebener Nachweis" })).toBeVisible();
+  await expect(page.getByAltText("Unterschrift von Anna Muster")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Nachweis exportieren (JSON)" })).toBeVisible();
+  await page.getByRole("button", { name: "Originaldokument", exact: true }).click();
+  await expect(page.getByRole("dialog")).toContainText("Testinhalt für die automatisierte Prüfung.");
 });
 
 async function installTauriMock(page: Page, contacts: MockContact[], options: { loadDelayMs?: number; calendarEvents?: CalendarEvent[]; auditEntries?: AuditLogEntry[]; emailSave?: boolean } = {}) {

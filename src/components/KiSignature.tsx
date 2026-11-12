@@ -61,7 +61,7 @@ export function KiSignature({ name, method, onMethodChange, value, onChange, dis
   };
   return <fieldset className="ki-signature" disabled={disabled || importing}>
     <legend>Unterschrift</legend>
-    <div className="ki-choice-buttons" role="group" aria-label="Art der Unterschrift">{([{ value: "draw", label: "Zeichnen" }, { value: "typed", label: "Name" }, { value: "import", label: "Bild" }] as const).map((option) => <button key={option.value} type="button" className={method === option.value ? "active" : ""} aria-pressed={method === option.value} onClick={() => { if (method !== option.value) { clear(); onMethodChange(option.value); } }}>{option.label}</button>)}</div>
+    <div className="ki-choice-buttons" role="group" aria-label="Art der Unterschrift">{([{ value: "typed", label: "Name" }, { value: "draw", label: "Zeichnen" }, { value: "import", label: "Bild" }] as const).map((option) => <button key={option.value} type="button" className={method === option.value ? "active" : ""} aria-pressed={method === option.value} onClick={() => { if (method !== option.value) { clear(); onMethodChange(option.value); } }}>{option.label}</button>)}</div>
     {method === "typed" ? <div className="ki-typed-signature" aria-label="Vorschau der Unterschrift" title="Einfache elektronische Unterschrift">{name || "Vor- und Nachname"}</div> : method === "draw" ? <>
       <canvas ref={canvas} width={900} height={220} aria-label="Unterschrift mit der Maus zeichnen" onPointerDown={(event) => {
         if (disabled || event.button !== 0) return;

@@ -10639,6 +10639,7 @@ pub fn run() {
             ki::save_ki_config,
             ki::submit_ki_acknowledgement,
             ki::list_ki_acknowledgements,
+            ki::list_my_ki_acknowledgements,
             ki::save_ki_access_request,
             ki::list_ki_access_requests,
             ki_news::list_ki_news,

@@ -1,4 +1,4 @@
-use crate::{diagnostics, now, open_db};
+use crate::{diagnostics, m365, now, open_db};
 use base64::{engine::general_purpose::STANDARD, Engine};
 use chrono::{Local, NaiveDate};
 use rusqlite::{params, OptionalExtension};
@@ -246,6 +246,8 @@ pub struct KiReceipt {
     submitted_at: String,
     policy_sha256: String,
     policy: KiConfig,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    windows_owner: String,
     #[serde(flatten)]
     submission: KiSubmission,
 }
@@ -382,6 +384,7 @@ fn persist_receipt(
         submitted_at: now(),
         policy_sha256: format!("{:x}", Sha256::digest(snapshot)),
         policy,
+        windows_owner: receipt_owner(),
         submission,
     };
     tx.execute(
@@ -401,6 +404,42 @@ fn persist_receipt(
 pub fn list_ki_acknowledgements(app: AppHandle) -> Result<Vec<KiReceipt>, String> {
     diagnostics::require_edv(&app)?;
     let conn = open_db(&app)?;
+    read_receipts(&conn)
+}
+
+fn receipt_owner() -> String {
+    format!(
+        "{:x}",
+        Sha256::digest(format!(
+            "ki-owner-v1:{}",
+            crate::audit_actor().trim().to_lowercase()
+        ))
+    )
+}
+
+fn belongs_to_user(receipt: &KiReceipt, owner: &str, aliases: &[String]) -> bool {
+    if !receipt.windows_owner.is_empty() {
+        return receipt.windows_owner == owner;
+    }
+    // Legacy receipts have no Windows binding. Only the native connected
+    // Microsoft identity can expose matching older records, never an email
+    // supplied by the frontend. EDV keeps access to the complete archive.
+    aliases
+        .iter()
+        .any(|alias| alias.eq_ignore_ascii_case(receipt.submission.email.trim()))
+}
+
+#[tauri::command]
+pub fn list_my_ki_acknowledgements(app: AppHandle) -> Result<Vec<KiReceipt>, String> {
+    let owner = receipt_owner();
+    let aliases = m365::excel_account_aliases(&app).unwrap_or_default();
+    Ok(read_receipts(&open_db(&app)?)?
+        .into_iter()
+        .filter(|receipt| belongs_to_user(receipt, &owner, &aliases))
+        .collect())
+}
+
+fn read_receipts(conn: &rusqlite::Connection) -> Result<Vec<KiReceipt>, String> {
     let mut stmt = conn.prepare("SELECT value FROM app_settings WHERE key LIKE 'ki_receipt_v1:%' ORDER BY updated_at DESC").map_err(|e| e.to_string())?;
     let values = stmt
         .query_map([], |row| row.get::<_, String>(0))
@@ -415,6 +454,39 @@ pub fn list_ki_acknowledgements(app: AppHandle) -> Result<Vec<KiReceipt>, String
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn personal_receipts_do_not_expose_other_owners_or_unmatched_legacy_records() {
+        let mut conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE app_settings(key TEXT PRIMARY KEY,value TEXT,updated_at TEXT);",
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO app_settings VALUES (?1,?2,'now')",
+            params![CONFIG_KEY, serde_json::to_string(&config()).unwrap()],
+        )
+        .unwrap();
+        let mut receipt = persist_receipt(&mut conn, input()).unwrap();
+        let owner = receipt_owner();
+        assert!(belongs_to_user(&receipt, &owner, &[]));
+        assert!(!belongs_to_user(
+            &receipt,
+            "other-windows-user",
+            &[receipt.submission.email.clone()]
+        ));
+        receipt.windows_owner.clear();
+        assert!(!belongs_to_user(&receipt, &owner, &[]));
+        assert!(!belongs_to_user(
+            &receipt,
+            &owner,
+            &["other@example.test".into()]
+        ));
+        assert!(belongs_to_user(
+            &receipt,
+            &owner,
+            &[receipt.submission.email.to_uppercase()]
+        ));
+    }
     #[test]
     fn access_request_is_validated_and_saved_as_prepared_without_claiming_delivery() {
         let conn = rusqlite::Connection::open_in_memory().unwrap();

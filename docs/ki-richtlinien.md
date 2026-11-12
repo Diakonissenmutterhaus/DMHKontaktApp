@@ -19,7 +19,9 @@ Version, Veröffentlichungsstatus und den Aktionen Lesen/Speichern/Details.
 Weitere Dokumentinformationen liegen hinter „Details“. Der PDF-Reader und die Bestätigung
 öffnen eigene klassische Dialogfenster. Das Formular trennt Person, Schulung
 und Unterschrift in kurze Schritte mit Zurück/Weiter. Die Signaturarten werden
-über Zeichnen/Name/Bild gewählt. Die verbindliche Abgabe ist erst im letzten
+über Name/Zeichnen/Bild gewählt; „Name“ steht zuerst und ist bei einem neuen
+Formular voreingestellt. „Weiter“ wechselt nur die Ansicht und löst keine
+Abgabe aus. Die verbindliche Abgabe ist erst im letzten
 Schritt und nur mit vollständigen Angaben möglich.
 Die EDV-Verwaltung trennt „Richtlinien & Schulung“, „Nachweise“, „Zugangsanträge“ und „Nachrichten“ über Reiter.
 Nachweise erscheinen als Liste, ihre Angaben und Unterschrift unter
@@ -61,6 +63,30 @@ allgemeinen Settings-Schreibbefehl geschützt. Die Listenansicht verlangt einen
 entsperrten EDV-Zugang.
 
 ## Inhalte und Bestätigungen
+
+**Meine Nachweise** ist auf der KI-Startseite, in der Formularübersicht und
+nach dem Unterschreiben erreichbar. Die kompakte Liste zeigt Dokument, Version,
+Signaturdatum und Unterzeichner. Über **Öffnen** stehen Unterschrift, Angaben,
+das archivierte Originaldokument und der vollständige JSON-Export bereit.
+Neue Nachweise erhalten serverseitig eine Bindung an das Windows-Benutzerkonto;
+die persönliche Liste erlaubt keine frei eingegebene Benutzerkennung.
+Ältere Nachweise ohne diese Bindung erscheinen nur, wenn ihre E-Mail zu einer
+Identität des nativ hinterlegten Microsoft-365-Kontos gehört. Ohne Zuordnung
+bleiben solche Altbestände in der geschützten EDV-Ansicht zugänglich.
+Die EDV-Gesamtliste bleibt geschützt. Es gibt weiterhin keinen zentralen Abruf
+von Nachweisen anderer PCs und keinen kryptografisch signierten PDF-Export:
+der Export enthält die elektronische Bestätigung, Signaturgrafik und Original-PDF.
+
+Der Bereich **Schulungen** verwendet eine zweigeteilte Outlook-Ansicht:
+links die unabhängig scrollbar gehaltene Liste, rechts den ausgewählten Inhalt.
+Die Listenbreite kann am Trenner mit Maus oder Pfeiltasten angepasst werden;
+die Liste lässt sich über die Symbolleiste ein-/ausblenden. Der vorhandene
+EDV-Schulungslink bleibt die Quelle der IT-Schulung. Ohne Link wird nur der
+Vorbereitungsstatus gezeigt; es werden keine weiteren Kurse erfunden.
+Externe Inhalte laden erst nach **Ansehen**: direkte MP4/WebM/OGV-Links im
+Videoplayer, sonst als eingebettete Seite mit Sandbox. **Im Browser öffnen**
+steht für Seiten bereit, die keine Einbettung erlauben oder eine eigene
+Anmeldung benötigen. Auswahl und Wiedergabe erzeugen keinen Teilnahmenachweis.
 
 Unter **EDV Tools → KI** können berechtigte EDV-Benutzer Titel, Dokumentversion
 und offiziellen Text eintragen. Ein optionaler HTTPS-Link aktiviert „Schulung

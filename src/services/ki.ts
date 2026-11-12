@@ -32,6 +32,7 @@ export const getKiConfig = () => invoke<KiConfig>("get_ki_config");
 export const saveKiConfig = (config: KiConfig) => invoke<KiConfig>("save_ki_config", { config });
 export const submitKiAcknowledgement = (submission: KiSubmission) => invoke<KiReceipt>("submit_ki_acknowledgement", { submission });
 export const listKiAcknowledgements = () => invoke<KiReceipt[]>("list_ki_acknowledgements");
+export const listMyKiAcknowledgements = () => invoke<KiReceipt[]>("list_my_ki_acknowledgements");
 export const getKiPdf = (sha256: string) => invoke<string>("get_ki_pdf", { sha256 });
 export const importKiPdf = (name: string, base64: string) => invoke<{ sha256: string; name: string }>("import_ki_pdf", { name, base64 });
 export interface KiAccessInput { fullName: string; email: string; department: string; tool: string; purpose: string }

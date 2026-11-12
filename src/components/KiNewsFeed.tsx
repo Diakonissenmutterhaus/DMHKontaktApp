@@ -25,7 +25,7 @@ export function KiNewsFeed({ onGuidelines }: { onGuidelines: () => void }) {
     {!loading && !error && !news.length && <p className="ki-news-empty">Noch keine Meldungen veröffentlicht.</p>}
     {!loading && news.map((article) => <article className="ki-news-entry" key={article.id}>
       <time dateTime={article.date}>{kiNewsDate(article.date)}</time>
-      <div><span className="ki-news-category">{article.category} · EDV</span><h4><button type="button" onClick={() => setSelected(article)}>{article.title}<ChevronRight size={16} aria-hidden="true" /></button></h4><p>{article.summary}</p></div>
+      <div><div className="ki-news-entry-heading"><h4><button type="button" onClick={() => setSelected(article)}>{article.title}<ChevronRight size={14} aria-hidden="true" /></button></h4><span className="ki-news-category">{article.category} · EDV</span></div><p>{article.summary}</p></div>
     </article>)}
     {selected && <KiWindow title={selected.title} onClose={() => setSelected(null)} footer={<>{selected.category === "Richtlinie" && <button type="button" onClick={() => { setSelected(null); onGuidelines(); }}>Richtlinien öffnen</button>}{selected.sourceUrl && <button type="button" onClick={() => void openUrl(selected.sourceUrl).catch(() => setError("Die Quelle konnte nicht geöffnet werden."))}><ExternalLink size={15} />Quelle öffnen</button>}</>}>
       <p className="ki-news-meta">{kiNewsDate(selected.date)} · {selected.category} · EDV</p><div className="ki-news-body">{selected.body}</div>{error && <p className="ki-error" role="alert">{error}</p>}

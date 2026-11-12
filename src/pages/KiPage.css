@@ -23,7 +23,21 @@
 .ki-editor-navigation { display: flex; justify-content: flex-end; }
 .ki-breadcrumb { display: flex; align-items: center; gap: 8px; font-size: .86rem; padding-bottom: 8px; border-bottom: 1px solid var(--border); }
 .ki-breadcrumb > .ki-command-refresh { margin-left: auto; }
-.ki-form-options { display: grid; gap: 12px; }
+.ki-form-list-scroll { overflow-x: auto; }
+.ki-form-list { width: 100%; min-width: 640px; border-collapse: collapse; font-size: .8rem; }
+.ki-form-list th { padding: 7px 12px; background: var(--surface-alt); border-bottom: 1px solid var(--border); border-right: 1px solid var(--border); color: var(--accent); font-weight: 500; text-align: left; }
+.ki-form-list th:last-child { border-right: 0; }
+.ki-form-list th:first-child { width: 42%; }
+.ki-form-list td { padding: 8px 12px; border-bottom: 1px solid var(--border); vertical-align: middle; }
+.ki-form-list tbody tr:last-child td { border-bottom: 0; }
+.ki-form-list tbody tr:hover { background: var(--surface-alt); }
+.ki-form-list td:not(:first-child) { white-space: nowrap; }
+.ki-form-name { display: flex; align-items: center; gap: 10px; }
+.ki-form-name > svg { flex: none; color: var(--primary); }
+.ki-form-name > span { display: grid; gap: 3px; }
+.ki-form-name strong { font-weight: 600; }
+.ki-form-name small { font-size: .74rem; color: var(--muted); }
+.ki-form-actions { display: flex; justify-content: flex-start; gap: 6px; }
 .ki-request-delivery { border: 1px solid var(--warning-border); color: var(--warning-text); background: var(--warning-surface); padding: 10px; font-size: .82rem; }
 .ki-action-card { display: flex; align-items: center; flex-wrap: wrap; gap: 14px; padding: 18px; background: var(--surface); border: 1px solid var(--border); border-radius: 4px; }
 .ki-card-icon { color: var(--primary); flex: none; }

@@ -144,8 +144,10 @@ test("KI abre com três botões e separa confirmação e pedido de acesso pago",
   await expect(page.getByLabel("Vor- und Nachname", { exact: true })).toHaveCount(0);
   await page.screenshot({ path: testInfo.outputPath("ki-start.png") });
   await openKiArea(page, "Formulare");
-  await expect(page.getByRole("region", { name: "Kenntnisnahme", exact: true })).toBeVisible();
-  await expect(page.getByRole("region", { name: "Kostenpflichtiger KI-Zugang", exact: true })).toBeVisible();
+  const forms = page.getByRole("table", { name: "Verfügbare KI-Formulare" });
+  await expect(forms.getByRole("row")).toHaveCount(3);
+  await expect(forms.getByRole("row", { name: /Kenntnisnahme & Teilnahme/ })).toContainText("Bestätigung");
+  await expect(forms.getByRole("row", { name: /KI-Zugang beantragen/ })).toContainText("Zugangsantrag");
   await page.screenshot({ path: testInfo.outputPath("ki-formulare.png") });
   await page.getByRole("button", { name: "Kostenpflichtigen KI-Zugang beantragen", exact: true }).click();
   await expect(page.getByRole("button", { name: "Antrag vorbereiten", exact: true })).toBeDisabled();
@@ -213,10 +215,11 @@ test("KI mostra o PDF original de 11 páginas e libera formulário após carrega
   await page.getByRole("button", { name: "Original-PDF lesen", exact: true }).click();
   await expect(page.getByText("Seite 1 von 11", { exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "Bestätigung ausfüllen" })).toHaveCount(0);
-  await expect(page.getByRole("status", { name: "PDF wird geladen …" })).toHaveCount(0);
+  await expect(page.getByText("PDF wird geladen …", { exact: true })).toHaveCount(0);
   await page.screenshot({ path: testInfo.outputPath("ki-original-pdf.png"), fullPage: true });
   await page.getByRole("button", { name: "Nächste PDF-Seite", exact: true }).click();
   await expect(page.getByText("Seite 2 von 11", { exact: true })).toBeVisible();
+  await expect(page.getByText("PDF wird geladen …", { exact: true })).toHaveCount(0);
   await page.getByRole("dialog").getByRole("button", { name: "Schließen", exact: true }).click();
   await openKiForms(page);
   await page.getByRole("button", { name: "Bestätigung ausfüllen" }).click();
@@ -902,10 +905,15 @@ test("mini calendário permite navegar por meses, semanas, ano e teclado sem per
 });
 
 test("barra lateral permanece fixa ao rolar o conteúdo com e sem faixa Admin", async ({ page }, testInfo) => {
-  await installTauriMock(page, []);
+  await installKiMock(page, true);
   await page.goto("/");
-  await expect(page.getByRole("navigation", { name: "Hauptmenü" })).toBeVisible();
-  await page.addStyleTag({ content: '.app-shell > main.content::after { content: ""; display: block; height: 2500px; }' });
+  await page.evaluate(() => {
+    const w = window as any;
+    const article = w.__DMH_KI_NEWS__[0];
+    w.__DMH_KI_NEWS__ = Array.from({ length: 50 }, (_, index) => ({ ...article, id: `scroll-${index}`, title: `EDV-Mitteilung ${index + 1}` }));
+  });
+  await page.getByRole("navigation", { name: "Hauptmenü" }).getByRole("button", { name: "KI", exact: true }).click();
+  await expect(page.locator(".ki-news-entry")).toHaveCount(50);
   for (const admin of [false, true]) {
     for (const height of [900, 600]) {
       await page.setViewportSize({ width: 1440, height });

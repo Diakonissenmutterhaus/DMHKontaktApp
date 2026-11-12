@@ -1,10 +1,10 @@
 .ki-page { display: grid; gap: 12px; min-width: 0; }
 .ki-page .page-header { margin-bottom: 0; }
 .ki-introduction { max-width: 850px; margin: 0 0 8px; font-size: .95rem; line-height: 1.65; color: var(--accent); }
-.ki-home-actions { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; max-width: 1080px; }
-.ki-page .ki-home-actions > button { display: grid; grid-template-columns: 20px minmax(0,1fr) 16px; gap: 12px; min-height: 64px; padding: 14px 18px; border: 1px solid var(--border); border-left: 3px solid var(--primary); border-radius: 3px; background: var(--surface); color: var(--text); text-align: left; font-size: .9rem; font-weight: 600; }
-.ki-page .ki-home-actions > button > svg { color: var(--primary); }
-.ki-page .ki-home-actions > button:hover { background: var(--surface-alt); border-color: var(--primary); }
+.ki-home-actions { display: grid; grid-template-columns: repeat(3, minmax(0, 220px)); gap: 12px; }
+.ki-page .ki-home-actions > button { display: inline-flex; justify-content: center; min-height: 56px; padding: 14px 22px; border: 1px solid var(--primary); border-radius: 10px; background: var(--primary); color: var(--on-primary); text-align: center; font-size: 1rem; font-weight: 800; }
+.ki-page .ki-home-actions > button:hover { background: var(--primary-dark); border-color: var(--primary-dark); }
+.ki-page .ki-home-actions > button:focus-visible { outline: 2px solid var(--primary); outline-offset: 3px; }
 .ki-news-feed { margin-top: 10px; border: 1px solid var(--border); border-radius: 3px; background: var(--surface); }
 .ki-news-feed > header { display: flex; justify-content: space-between; align-items: center; padding: 16px 20px; border-bottom: 1px solid var(--border); }
 .ki-news-feed h3 { font-size: 1rem; margin: 3px 0 0; }

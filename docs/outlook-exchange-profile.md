@@ -1,5 +1,24 @@
 # Outlook Classic auf Exchange umstellen
 
+## PowerShell-Start und Diagnose
+
+Das eingebettete Outlook-Skript wird zusammen mit der Anfrage als JSON über
+die private Standardeingabe übertragen. In der Prozesskommandozeile steht nur
+ein kurzer Bootstrap. Das verhindert Windows-Fehler 206, wenn das Skript die
+Kommandozeilengrenze von 32.767 Zeichen überschreitet (beta.80 enthielt bereits
+mehr als 35.000 Zeichen). Anfragefelder werden separat als JSON-Parameter
+übergeben und nicht als PowerShell-Code ausgeführt. Es wird keine temporäre
+Skriptdatei benötigt. Startfehler nennen jetzt Programm und Betriebssystemcode,
+statt den ursprünglichen Windows-Fehler vollständig zu verwerfen.
+
+Der Windows-Test `powershell_pipe_handles_large_real_script_and_keeps_request_as_data`
+startet einen echten PowerShell-Prozess mit dem vollständigen, zusätzlich auf
+über 100 KB vergrößerten Skript. Er prüft nur den nebenwirkungsfreien
+Transportzweig einschließlich Unicode und als Text behandelten Codezeichen.
+Outlook wird dabei weder gestartet noch geschlossen; Profile werden nicht geändert.
+
+## Einrichtung
+
 Auf der Seite **M365 Anmeldung** erscheint direkt unter dem verbundenen Konto
 im Panel **Automatische Synchronisierung** rechts die Aktion **Zu Exchange wechseln**;
 links bleibt die manuelle Synchronisierung erreichbar.

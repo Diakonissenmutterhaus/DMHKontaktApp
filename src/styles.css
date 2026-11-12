@@ -98,6 +98,55 @@ button:disabled {
   min-height: 100vh;
 }
 
+/* Constrain desktop panes to the actual window, including the Admin banner.
+   Only the content (or an overflowing navigation pane) owns its scrollbar. */
+@media screen {
+  .app-channel-root {
+    display: flex;
+    flex-direction: column;
+    height: 100dvh;
+    overflow: hidden;
+  }
+
+  .app-channel-root > .admin-test-banner { flex: none; }
+
+  .app-channel-root > .app-shell {
+    flex: 1;
+    min-height: 0;
+    grid-template-rows: minmax(0, 1fr);
+    overflow: hidden;
+  }
+
+  .app-channel-root > .app-shell > .sidebar,
+  .app-channel-root > .app-shell > .settings-subtabs {
+    position: relative;
+    top: auto;
+    min-height: 0;
+    height: 100%;
+    overflow-y: auto;
+    overscroll-behavior-y: contain;
+  }
+
+  .app-channel-root > .app-shell > .content {
+    min-height: 0;
+    overscroll-behavior-y: contain;
+  }
+
+  .app-channel-root .sidebar > .brand,
+  .app-channel-root .sidebar > .nav-list,
+  .app-channel-root .sidebar > .sidebar-bottom { flex-shrink: 0; }
+}
+
+/* Narrow windows retain the existing navigation above the page. The EDV
+   workspace continues to use independent columns at these widths. */
+@media screen and (max-width: 1100px) {
+  .app-channel-root > .app-shell { overflow-y: auto; }
+  .app-channel-root > .app-shell > .sidebar { position: static; height: auto; overflow: visible; }
+  .app-channel-root > .settings-app-shell { overflow: hidden; }
+  .app-channel-root > .settings-app-shell > .sidebar,
+  .app-channel-root > .settings-app-shell > .settings-subtabs { position: relative; height: 100%; overflow-y: auto; }
+}
+
 .admin-test-banner {
   align-items: center;
   background: #8f1d18;
@@ -122,14 +171,6 @@ button:disabled {
   font-family: Consolas, monospace;
   font-size: 0.76rem;
   padding: 0.18rem 0.5rem;
-}
-
-.admin-test-root .app-shell {
-  min-height: calc(100vh - 40px);
-}
-
-.admin-test-root .sidebar {
-  height: calc(100vh - 40px);
 }
 
 .sidebar {

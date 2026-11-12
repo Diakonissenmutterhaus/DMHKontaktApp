@@ -16,6 +16,7 @@ use tokio::io::AsyncWriteExt;
 
 static SETUP_GATE: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 const SCRIPT: &str = include_str!("outlook_exchange_profile.ps1");
+const BOOTSTRAP: &str = include_str!("outlook_exchange_bootstrap.ps1");
 // m365_ is excluded from portable exports/restores: Outlook profiles belong to
 // this Windows account and cannot travel with the contact/calendar backup.
 const STATE_PREFIX: &str = "m365_outlook_exchange_setup_v1_";
@@ -271,9 +272,18 @@ async fn output_json<T: DeserializeOwned>(
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .kill_on_drop(true);
-    let mut child = command
-        .spawn()
-        .map_err(|_| "Outlook-Hilfsprogramm konnte nicht gestartet werden.".to_string())?;
+    let program = Path::new(command.as_std().get_program())
+        .file_name()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .into_owned();
+    let mut child = command.spawn().map_err(|error| {
+        let code = error
+            .raw_os_error()
+            .map(|code| format!(" (Windows-Code {code})"))
+            .unwrap_or_default();
+        format!("Outlook-Hilfsprogramm konnte nicht gestartet werden: {program}{code}. {error}")
+    })?;
     if let Some(input) = input {
         let mut pipe = child
             .stdin
@@ -315,6 +325,13 @@ async fn output_json<T: DeserializeOwned>(
 }
 
 async fn powershell<T: DeserializeOwned>(input: serde_json::Value) -> Result<T, String> {
+    powershell_script(SCRIPT, input).await
+}
+
+async fn powershell_script<T: DeserializeOwned>(
+    script: &str,
+    input: serde_json::Value,
+) -> Result<T, String> {
     let mut command = tokio::process::Command::from(hidden_command("powershell.exe"));
     command.args([
         "-NoProfile",
@@ -323,9 +340,15 @@ async fn powershell<T: DeserializeOwned>(input: serde_json::Value) -> Result<T, 
         "-ExecutionPolicy",
         "Bypass",
         "-Command",
-        SCRIPT,
+        BOOTSTRAP,
     ]);
-    output_json(command, Some(input), 25).await
+    // The Outlook script exceeds Windows' command-line limit. Keep only this
+    // short bootstrap in argv and send the script and JSON over the stdin pipe.
+    let envelope = serde_json::json!({
+        "script": script,
+        "request": serde_json::to_string(&input).map_err(|_| "Outlook-Anfrage ist ungültig.")?
+    });
+    output_json(command, Some(envelope), 25).await
 }
 
 async fn inventory() -> Result<Inventory, String> {
@@ -1208,6 +1231,27 @@ pub async fn complete_outlook_exchange_profile(app: AppHandle) -> Result<SetupSt
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(windows)]
+    #[test]
+    fn powershell_pipe_handles_large_real_script_and_keeps_request_as_data() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        // Run only the harmless transport-check branch: no Outlook launch,
+        // profile changes, registry writes or authentication.
+        let script = format!("{SCRIPT}\n#{}", "x".repeat(70_000));
+        let echo = "Grüße · configuração · '; throw 'must remain data'; #";
+        let result: serde_json::Value = runtime
+            .block_on(powershell_script(
+                &script,
+                serde_json::json!({"operation":"transport-check", "echo":echo}),
+            ))
+            .unwrap();
+        assert_eq!(result["ok"], true);
+        assert_eq!(result["echo"], echo);
+    }
 
     #[test]
     fn automatic_office_account_requires_unambiguous_matching_metadata() {

@@ -1,6 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import { LoaderCircle } from "lucide-react";
+import { Clock3, LoaderCircle, Settings2 } from "lucide-react";
 import "./M365Loading.css";
 
 interface Job { message: string; value?: number; label?: string; priority?: number }
@@ -23,7 +23,24 @@ function LoadingWindow({ message, value, label }: Job) {
   }, []);
   return createPortal(<dialog ref={panel} className="m365-loading-window" aria-modal="true" aria-labelledby={id} aria-describedby={`${id}-duration`} aria-busy="true" tabIndex={-1} onCancel={(event) => event.preventDefault()} onKeyDown={(event) => {
     if (event.key === "Tab" || event.key === "Escape") { event.preventDefault(); event.stopPropagation(); }
-  }}><div className="m365-loading-heading"><LoaderCircle className="spin" size={22} aria-hidden="true" /><p id={id} role="status">{message}</p></div><small id={`${id}-duration`}>Die automatische Einrichtung kann 1–3 Minuten dauern.</small><progress aria-label="Fortschritt" max={6} value={value} aria-valuetext={label} />{label && <small>{label}</small>}</dialog>, document.body);
+  }}>
+    <header className="m365-loading-titlebar">
+      <Settings2 size={16} aria-hidden="true" />
+      <strong>Microsoft 365</strong>
+      <LoaderCircle className="spin" size={15} aria-hidden="true" />
+    </header>
+    <div className="m365-loading-content">
+      <p id={id} role="status">{message}</p>
+      <div className={`m365-loading-progress${value === undefined ? " is-indeterminate" : ""}`}>
+        <progress aria-label="Fortschritt" max={6} value={value} aria-valuetext={label} />
+      </div>
+      {label && <small className="m365-loading-stage">{label}</small>}
+    </div>
+    <footer className="m365-loading-footer">
+      <Clock3 size={15} aria-hidden="true" />
+      <small id={`${id}-duration`}>Die automatische Einrichtung kann <strong>1–3 Minuten</strong> dauern.</small>
+    </footer>
+  </dialog>, document.body);
 }
 
 export function M365LoadingScope({ children }: { children: ReactNode }) {

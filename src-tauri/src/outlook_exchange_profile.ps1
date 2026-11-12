@@ -1,6 +1,7 @@
 # Embedded by the native app. Input is JSON on a private stdin pipe, never code.
 # No credentials, registry profile edits, or forced process exits. Graceful Quit
 # is allowed only for the exact process launched by this setup, without edits.
+param([string]$RequestJson)
 $ErrorActionPreference = 'Stop'
 [Console]::InputEncoding = [System.Text.UTF8Encoding]::new($false)
 [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
@@ -565,9 +566,11 @@ function Read-ExchangeConnection {
 }
 
 try {
-    $request = [Console]::In.ReadToEnd() | ConvertFrom-Json
+    $requestText = if ($PSBoundParameters.ContainsKey('RequestJson')) { $RequestJson } else { [Console]::In.ReadToEnd() }
+    $request = $requestText | ConvertFrom-Json
     $running = @(Get-Process -Name 'OUTLOOK' -ErrorAction SilentlyContinue).Count -gt 0
     switch ([string]$request.operation) {
+        'transport-check' { $result = @{ ok = $true; echo = $request.echo } }
         'office-accounts' { $result = Read-OfficeAccounts }
         'close-for-migration' { $result = Close-OutlookForMigration -Authorized ([bool]$request.authorized) -ExpectedProfile ([string]$request.profile) }
         'hide-setup-process' {

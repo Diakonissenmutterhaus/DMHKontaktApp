@@ -6,8 +6,8 @@ Dokument bleiben Kenntnisnahme und Unterschrift gesperrt. Die bereitgestellte
 enthalten und wird ohne bestehende EDV-Konfiguration automatisch verwendet.
 Gespeicherte EDV-Konfigurationen werden durch ein App-Update nicht überschrieben.
 
-Die Startseite zeigt eine kurze Einführung und drei kompakte, helle
-Schaltflächen mit bordeauxfarbenen Akzenten: Richtlinien, Schulungen und Formulare.
+Die Startseite zeigt eine kurze Einführung und drei kompakte, bordeauxfarbene
+Schaltflächen mit weißer, fetter Beschriftung: Richtlinien, Schulungen und Formulare.
 Darunter stehen datierte EDV-Mitteilungen im Bereich „Aktuelles zur KI“.
 Die Inhalte der drei Bereiche erscheinen erst
 nach Auswahl des jeweiligen Bereichs. Unter Formulare liegen zwei getrennte

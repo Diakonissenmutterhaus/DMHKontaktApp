@@ -901,6 +901,47 @@ test("mini calendário permite navegar por meses, semanas, ano e teclado sem per
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
 });
 
+test("barra lateral permanece fixa ao rolar o conteúdo com e sem faixa Admin", async ({ page }, testInfo) => {
+  await installTauriMock(page, []);
+  await page.goto("/");
+  await expect(page.getByRole("navigation", { name: "Hauptmenü" })).toBeVisible();
+  await page.addStyleTag({ content: '.app-shell > main.content::after { content: ""; display: block; height: 2500px; }' });
+  for (const admin of [false, true]) {
+    for (const height of [900, 600]) {
+      await page.setViewportSize({ width: 1440, height });
+      await page.evaluate((admin) => {
+        const root = document.querySelector(".app-channel-root")!;
+        root.classList.toggle("admin-test-root", admin);
+        root.querySelector(".admin-test-banner")?.remove();
+        if (admin) {
+          const banner = document.createElement("div");
+          banner.className = "admin-test-banner";
+          banner.textContent = "ADMIN TEST · ISOLIERTE TESTDATEN · KEINE OFFIZIELLE VERSION";
+          banner.style.minHeight = "56px";
+          root.prepend(banner);
+        }
+        document.querySelector("main.content")!.scrollTop = 0;
+      }, admin);
+      const sidebar = page.locator("aside.sidebar");
+      const before = await sidebar.boundingBox();
+      const logoBefore = await sidebar.locator(".brand").boundingBox();
+      await page.locator("main.content").hover({ position: { x: 300, y: 300 } });
+      await page.mouse.wheel(0, 1600);
+      await expect.poll(() => page.locator("main.content").evaluate((element) => element.scrollTop)).toBeGreaterThan(500);
+      await expect.poll(async () => {
+        const after = await sidebar.boundingBox();
+        const logoAfter = await sidebar.locator(".brand").boundingBox();
+        return Math.max(Math.abs(after!.y - before!.y), Math.abs(after!.height - before!.height), Math.abs(logoAfter!.y - logoBefore!.y));
+      }).toBeLessThan(1);
+      expect(before!.y).toBe(admin ? 56 : 0);
+      expect(Math.abs(before!.y + before!.height - height)).toBeLessThan(1);
+      expect(await page.evaluate(() => document.scrollingElement!.scrollTop)).toBe(0);
+      expect(await page.evaluate(() => document.scrollingElement!.scrollHeight <= innerHeight)).toBe(true);
+    }
+  }
+  await page.screenshot({ path: testInfo.outputPath("sidebar-fixed-after-scroll.png") });
+});
+
 test("M365 mostra janela antes de consultar o PC e mantém progresso durante toda migração", async ({ page }, testInfo) => {
   await installTauriMock(page, []);
   await page.addInitScript(() => {

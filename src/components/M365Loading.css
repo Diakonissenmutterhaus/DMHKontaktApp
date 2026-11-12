@@ -5,24 +5,43 @@
   left: 50%;
   transform: translate(-50%, -50%);
   margin: 0;
-  width: min(460px, calc(100vw - 32px));
+  width: min(480px, calc(100vw - 32px));
   max-width: calc(100vw - 32px);
   height: fit-content;
   max-height: calc(100dvh - 32px);
   overflow: auto;
-  padding: 18px;
+  padding: 0;
   border: 1px solid var(--border);
+  border-top: 3px solid var(--primary);
   border-radius: 4px;
   background: var(--surface);
   color: var(--text);
   outline: none;
-  gap: 12px;
-  box-shadow: 0 10px 32px #0002;
+  box-shadow: 0 12px 40px #0003;
 }
-.m365-loading-window[open] { display: grid; }
+.m365-loading-window[open] { display: block; }
 .m365-loading-window::backdrop { background: #20212466; }
-.m365-loading-heading { display: flex; align-items: center; gap: 12px; }
-.m365-loading-heading svg { color: var(--primary); flex: none; }
-.m365-loading-window p { margin: 0; line-height: 1.5; font-size: .9rem; overflow-wrap: anywhere; }
-.m365-loading-window progress { display: block; width: 100%; height: 10px; accent-color: var(--primary); }
-.m365-loading-window small { color: var(--muted); font-size: .8rem; }
+.m365-loading-titlebar { display: flex; align-items: center; gap: 9px; padding: 11px 18px; border-bottom: 1px solid var(--border); background: var(--surface-alt); }
+.m365-loading-titlebar > strong { font-size: .8rem; font-weight: 600; }
+.m365-loading-titlebar > svg { color: var(--primary); flex: none; }
+.m365-loading-titlebar > .spin { margin-left: auto; }
+.m365-loading-content { display: grid; gap: 14px; padding: 20px 22px; }
+.m365-loading-window p { margin: 0; line-height: 1.6; font-size: .9rem; font-weight: 600; overflow-wrap: anywhere; }
+.m365-loading-progress { position: relative; overflow: hidden; border: 1px solid var(--border); border-radius: 2px; background: var(--surface-alt); }
+.m365-loading-window progress { display: block; appearance: none; border: 0; width: 100%; height: 8px; accent-color: var(--primary); background: var(--surface-alt); }
+.m365-loading-window progress::-webkit-progress-bar { background: var(--surface-alt); }
+.m365-loading-window progress::-webkit-progress-value { background: var(--primary); transition: width .2s ease; }
+.m365-loading-window progress::-moz-progress-bar { background: var(--primary); }
+.m365-loading-progress.is-indeterminate progress { opacity: 0; }
+.m365-loading-progress.is-indeterminate::after { content: ""; position: absolute; inset: 0 auto 0 0; width: 30%; background: var(--primary); animation: m365-loading-marquee 1.8s ease-in-out infinite; }
+.m365-loading-stage { color: var(--accent); font-size: .76rem; line-height: 1.5; overflow-wrap: anywhere; }
+.m365-loading-footer { display: flex; align-items: center; gap: 9px; padding: 11px 18px; border-top: 1px solid var(--border); background: var(--surface-alt); color: var(--muted); }
+.m365-loading-footer > svg { flex: none; }
+.m365-loading-footer small { font-size: .75rem; line-height: 1.5; }
+.m365-loading-footer strong { font-weight: 600; color: var(--text); white-space: nowrap; }
+@keyframes m365-loading-marquee { from { transform: translateX(-100%); } to { transform: translateX(335%); } }
+@media (prefers-reduced-motion: reduce) {
+  .m365-loading-progress.is-indeterminate::after { animation: none; left: 35%; }
+  .m365-loading-window .spin { animation: none; }
+  .m365-loading-window progress::-webkit-progress-value { transition: none; }
+}

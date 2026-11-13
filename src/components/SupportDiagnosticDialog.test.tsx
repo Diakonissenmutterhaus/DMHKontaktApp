@@ -1,6 +1,7 @@
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { SupportDiagnosticDialog } from "./SupportDiagnosticDialog";
+import mainCapability from "../../src-tauri/capabilities/default.json";
 const mocks = vi.hoisted(() => ({ state: null as unknown, writeText: vi.fn(), save: vi.fn(), writeTextFile: vi.fn() }));
 vi.mock("../services/supportDiagnostics", () => ({ getSupportDiagnostic: () => mocks.state, supportDiagnosticEvent: "dmh:support-diagnostic" }));
 vi.mock("@tauri-apps/plugin-clipboard-manager", () => ({ writeText: mocks.writeText }));
@@ -12,6 +13,12 @@ beforeEach(() => {
   HTMLDialogElement.prototype.close = function () { this.open = false; };
 });
 afterEach(cleanup);
+it("authorizes the native save dialog, text-file export and clipboard commands", () => {
+  expect(mainCapability.windows).toContain("main");
+  expect(mainCapability.permissions).toEqual(expect.arrayContaining([
+    "dialog:default", "fs:allow-write-text-file", "clipboard-manager:allow-write-text"
+  ]));
+});
 const report = { request: { attemptId: "test-id", procedure: "outlook_exchange", stage: "outlook_open", message: "original failure" }, loading: false, report: { code: "DMH-OUTLOOK-CLOSE-BLOCKED", fileName: "DMH.log", text: "exact safe diagnostic", localPath: "C:\\Local\\DMH.log", saveError: null } };
 function publish(value: unknown) { act(() => { mocks.state = value; window.dispatchEvent(new Event("dmh:support-diagnostic")); }); }
 it("opens on failure, copies the full log and saves only the chosen file", async () => {

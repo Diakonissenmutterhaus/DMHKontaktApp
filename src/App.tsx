@@ -1,4 +1,5 @@
 import { WorkstationPanel } from "./components/WorkstationPanel";
+import { SupportDiagnosticDialog } from "./components/SupportDiagnosticDialog";
 import { useDiagnosticMessage } from "./hooks/useDiagnosticMessage";
 import { LoaderCircle, RefreshCw } from "lucide-react";
 import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
@@ -523,6 +524,7 @@ export default function App() {
           {page === "synchronizations" && <SynchronizationsPage onNavigate={navigate} />}
         </main>
         <UpdateNotifier />
+        {import.meta.env.VITE_DMH_SUPPORT_DIAGNOSTICS === "true" && <SupportDiagnosticDialog />}
         {edvUnlocked && activityCenterEnabled ? <ActivityCenter /> : null}
       </div>
       {pendingEdvNavigation && <EdvAccessDialog onCancel={() => setPendingEdvNavigation(null)} onUnlocked={unlockEdvTools} />}

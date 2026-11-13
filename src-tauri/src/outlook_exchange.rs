@@ -374,6 +374,12 @@ async fn output_json<T: DeserializeOwned>(
         return Err("Outlook-Antwort ist ungültig.".into());
     }
     if !output.status.success() {
+        if crate::support_diagnostic::enabled() {
+            let detail = serde_json::from_slice::<serde_json::Value>(&output.stdout).ok();
+            crate::support_diagnostic::trace("outlook.helper.exit", serde_json::json!({
+                "program": program, "exitCode": output.status.code(), "diagnostic": detail.as_ref().and_then(|value| value.get("diagnostic"))
+            }));
+        }
         let error = serde_json::from_slice::<serde_json::Value>(&output.stdout)
             .ok()
             .and_then(|value| {
@@ -390,7 +396,17 @@ async fn output_json<T: DeserializeOwned>(
 }
 
 async fn powershell<T: DeserializeOwned>(input: serde_json::Value) -> Result<T, String> {
-    powershell_script(SCRIPT, input).await
+    if !crate::support_diagnostic::enabled() { return powershell_script(SCRIPT, input).await; }
+    let operation = input.get("operation").and_then(|value| value.as_str()).unwrap_or("unknown").to_string();
+    let started = std::time::Instant::now();
+    let result: Result<serde_json::Value, String> = powershell_script(SCRIPT, input).await;
+    if operation != "watch-setup-process" && operation != "hide-setup-process" {
+        crate::support_diagnostic::trace(&format!("outlook.ps.{operation}"), serde_json::json!({
+            "elapsedMs": started.elapsed().as_millis(),
+            "result": result.as_ref().ok(), "error": result.as_ref().err()
+        }));
+    }
+    serde_json::from_value(result?).map_err(|_| "Outlook-Antwort ist ungültig.".into())
 }
 
 async fn powershell_script<T: DeserializeOwned>(
@@ -478,7 +494,14 @@ fn helper_path(app: &AppHandle, executable: &str) -> Result<PathBuf, String> {
 async fn helper<T: DeserializeOwned>(path: &Path, args: &[&str]) -> Result<T, String> {
     let mut command = tokio::process::Command::from(hidden_command(&path.to_string_lossy()));
     command.args(args);
-    output_json(command, None, 60).await
+    if !crate::support_diagnostic::enabled() { return output_json(command, None, 60).await; }
+    let started = std::time::Instant::now();
+    let result: Result<serde_json::Value, String> = output_json(command, None, 60).await;
+    crate::support_diagnostic::trace("outlook.native", serde_json::json!({
+        "path": path, "operation": args.first(), "elapsedMs": started.elapsed().as_millis(),
+        "result": result.as_ref().ok(), "error": result.as_ref().err()
+    }));
+    serde_json::from_value(result?).map_err(|_| "Outlook-Antwort ist ungültig.".into())
 }
 
 fn unique_name(base: &str, profiles: &[Profile]) -> Result<String, String> {
@@ -927,11 +950,51 @@ pub async fn get_outlook_exchange_setup_status(
 
 #[tauri::command]
 pub async fn get_outlook_office_account_check(app: AppHandle) -> Result<serde_json::Value, String> {
-    let (_, email) = m365::outlook_profile_identity(&app)?;
+    resolved_office_account_check(&app).await
+}
+
+fn office_identity_metadata_missing(office: &serde_json::Value) -> bool {
+    office
+        .get("readSucceeded")
+        .and_then(|value| value.as_bool())
+        == Some(true)
+        && office
+            .get("accounts")
+            .and_then(|value| value.as_array())
+            .is_some_and(Vec::is_empty)
+        && office
+            .get("suggestedEmail")
+            .and_then(|value| value.as_str())
+            == Some("")
+        && office
+            .get("sources")
+            .and_then(|value| value.as_array())
+            .is_some_and(|sources| {
+                !sources.is_empty()
+                    && sources.iter().all(|source| {
+                        matches!(
+                            source.get("state").and_then(|value| value.as_str()),
+                            Some("read" | "missing")
+                        ) && source.get("identityCount").and_then(|value| value.as_u64()) == Some(0)
+                    })
+            })
+}
+
+async fn resolved_office_account_check(app: &AppHandle) -> Result<serde_json::Value, String> {
+    let identity = m365::outlook_profile_identity(app)?;
     let mut office: serde_json::Value =
         powershell(serde_json::json!({"operation":"office-accounts"})).await?;
-    office["dmhEmail"] = serde_json::json!(email);
-    office["dmhEmails"] = serde_json::json!(m365::excel_account_aliases(&app)?);
+    if office_identity_metadata_missing(&office) {
+        let email = m365::verified_windows_account_email(app).await?;
+        office["fallback"] = serde_json::json!({"source":"windows_work_account", "email":email});
+    }
+    if identity != m365::outlook_profile_identity(app)? {
+        return Err(
+            "Das Microsoft-365-Konto wurde inzwischen geändert. Bitte erneut versuchen.".into(),
+        );
+    }
+    office["dmhEmail"] = serde_json::json!(identity.1);
+    office["dmhEmails"] = serde_json::json!(m365::excel_account_aliases(app)?);
     Ok(office)
 }
 
@@ -949,6 +1012,21 @@ fn automatic_office_email(
     );
     if office.get("readSucceeded").and_then(|v| v.as_bool()) != Some(true) {
         return Err(unknown.clone());
+    }
+    // Only native code attaches this evidence, after live Graph verification and
+    // a unique matching Windows work account. Never infer it from the DMH label.
+    if office_identity_metadata_missing(office)
+        && office["fallback"]["source"].as_str() == Some("windows_work_account")
+    {
+        if let Some(email) = office["fallback"]["email"].as_str().filter(|email| {
+            !email.is_empty()
+                && aliases
+                    .iter()
+                    .any(|alias| alias.eq_ignore_ascii_case(email))
+        }) {
+            return Ok(email.to_owned());
+        }
+        return Err(unknown);
     }
     let accounts = office
         .get("accounts")
@@ -1009,8 +1087,7 @@ pub async fn prepare_outlook_exchange_profile(
         .map_err(|_| "Die Outlook-Einrichtung läuft bereits.")?;
     let _process_guard = process_lock(&app)?;
     if automatic_account_check == Some(true) {
-        let office: serde_json::Value =
-            powershell(serde_json::json!({"operation":"office-accounts"})).await?;
+        let office = resolved_office_account_check(&app).await?;
         let aliases = m365::excel_account_aliases(&app)?;
         let detected = automatic_office_email(&office, &aliases)?;
         if !detected.eq_ignore_ascii_case(&excel_email) {
@@ -1526,6 +1603,52 @@ mod tests {
         assert_eq!(detail["accountCount"], 0);
         assert_eq!(detail["sources"], office["sources"]);
         assert!(!error.contains("anmelden"));
+    }
+
+    #[test]
+    fn empty_legacy_office_metadata_requires_verified_windows_fallback() {
+        // Reproduces the affected PC's diagnostic without personal identifiers.
+        let empty = serde_json::json!({"readSucceeded":true,"accounts":[],"suggestedEmail":"",
+        "sources":[
+            {"version":"16.0","view":"Registry64","state":"read","identityCount":0},
+            {"version":"16.0","view":"Registry32","state":"read","identityCount":0},
+            {"version":"15.0","view":"Registry64","state":"missing","identityCount":0},
+            {"version":"15.0","view":"Registry32","state":"missing","identityCount":0}
+        ]});
+        let aliases = vec!["anna@example.test".into()];
+        assert!(office_identity_metadata_missing(&empty));
+        assert!(automatic_office_email(&empty, &aliases).is_err());
+        let mut verified = empty.clone();
+        verified["fallback"] =
+            serde_json::json!({"source":"windows_work_account","email":"anna@example.test"});
+        assert_eq!(
+            automatic_office_email(&verified, &aliases).unwrap(),
+            "anna@example.test"
+        );
+        let mut wrong = verified.clone();
+        wrong["fallback"]["email"] = serde_json::json!("admin@example.test");
+        assert!(automatic_office_email(&wrong, &aliases).is_err());
+        for (key, value) in [
+            ("readSucceeded", serde_json::json!(false)),
+            ("suggestedEmail", serde_json::json!("admin@example.test")),
+            (
+                "accounts",
+                serde_json::json!([{"email":"admin@example.test"}]),
+            ),
+            (
+                "sources",
+                serde_json::json!([{"state":"unreadable","identityCount":0}]),
+            ),
+            (
+                "sources",
+                serde_json::json!([{"state":"read","identityCount":1}]),
+            ),
+        ] {
+            let mut conflict = verified.clone();
+            conflict[key] = value;
+            assert!(!office_identity_metadata_missing(&conflict));
+            assert!(automatic_office_email(&conflict, &aliases).is_err());
+        }
     }
 
     #[cfg(windows)]

@@ -9,9 +9,11 @@ using Microsoft.Identity.Client.Broker;
 internal static class Program
 {
     internal sealed record Request(string ClientId, string TenantId, string[] Scopes,
-        string? HomeAccountId, long WindowHandle, string? LoginHint = null, bool AllowInteractive = false);
+        string? HomeAccountId, long WindowHandle, string? LoginHint = null, bool AllowInteractive = false,
+        string? Operation = null, string[]? AccountAliases = null);
     internal sealed record Response(string Status, string? AccessToken = null,
-        string? HomeAccountId = null, long ExpiresIn = 0, string? ErrorCode = null);
+        string? HomeAccountId = null, long ExpiresIn = 0, string? ErrorCode = null, string? VerifiedEmail = null,
+        int? WorkAccountCount = null, int? MatchingAccountCount = null);
     static readonly JsonSerializerOptions JsonOptions = new() { PropertyNamingPolicy = JsonNamingPolicy.CamelCase, PropertyNameCaseInsensitive = true };
 
     // Never choose the first account from a list. Renewal is pinned to the
@@ -36,12 +38,33 @@ internal static class Program
         && (string.IsNullOrEmpty(pinned) || account.HomeAccountId.Identifier == pinned)
         && (hints is not { Length: > 0 } || hints.Contains(account.Username, StringComparer.OrdinalIgnoreCase));
 
-    static async Task<Response> Acquire(Request request)
+    // Metadata-only fallback for Office installations that do not publish legacy
+    // identity registry entries. This is NOT proof of the active Excel account.
+    // Never use OperatingSystemAccount here: a local Windows login is not M365.
+    internal static Response VerifyWorkAccount(IAccount[] accounts, Request request)
     {
-        if (!OperatingSystem.IsWindows()) return new("unavailable");
-        if (!Guid.TryParse(request.ClientId, out _) || !Guid.TryParse(request.TenantId, out _) || request.Scopes.Length == 0)
-            return new("unavailable", ErrorCode: "configuration");
-        var app = PublicClientApplicationBuilder.Create(request.ClientId)
+        const string consumerTenant = "9188040d-6c67-4c5b-b112-36a304b66dad";
+        var work = accounts.Where(account => !string.Equals(account.HomeAccountId.TenantId,
+            consumerTenant, StringComparison.OrdinalIgnoreCase))
+            .DistinctBy(account => account.HomeAccountId.Identifier).ToArray();
+        var aliases = OfficeIdentity.Normalize(request.AccountAliases ?? []);
+        // Windows can also hold management/support accounts. Resolve the identity
+        // already verified by DMH instead of requiring all other accounts absent.
+        // Two identities matching the same aliases remain ambiguous unless pinned.
+        var matching = work.Where(account => aliases.Length > 0
+            && string.Equals(account.HomeAccountId.TenantId, request.TenantId, StringComparison.OrdinalIgnoreCase)
+            && IdentityMatches(account, request.HomeAccountId, aliases)).ToArray();
+        if (matching.Length != 1) return new("interaction_required", ErrorCode:
+            work.Length == 0 ? "windows_work_account_missing"
+            : matching.Length > 1 ? "windows_work_account_ambiguous" : "windows_work_account_mismatch",
+            WorkAccountCount: work.Length, MatchingAccountCount: matching.Length);
+        var account = matching[0];
+        return new("account_verified", HomeAccountId: account.HomeAccountId.Identifier, VerifiedEmail: account.Username,
+            WorkAccountCount: work.Length, MatchingAccountCount: matching.Length);
+    }
+
+    static IPublicClientApplication CreateApplication(Request request) =>
+        PublicClientApplicationBuilder.Create(request.ClientId)
             .WithDefaultRedirectUri()
             .WithAuthority(AzureCloudInstance.AzurePublic, request.TenantId)
             .WithBroker(new BrokerOptions(BrokerOptions.OperatingSystems.Windows) {
@@ -49,6 +72,17 @@ internal static class Program
             })
             .WithParentActivityOrWindow(() => new IntPtr(request.WindowHandle))
             .Build();
+
+    static async Task<Response> VerifyWindowsAccount(Request request)
+    {
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+        var accounts = (await CreateApplication(request).GetAccountsAsync().WaitAsync(timeout.Token)).ToArray();
+        return VerifyWorkAccount(accounts, request);
+    }
+
+    static async Task<Response> Acquire(Request request)
+    {
+        var app = CreateApplication(request);
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(45));
         var selection = string.IsNullOrEmpty(request.HomeAccountId)
             ? OfficeIdentity.Select(OfficeIdentity.Read(), request.LoginHint)
@@ -91,7 +125,14 @@ internal static class Program
             var line = await Console.In.ReadLineAsync();
             if (line is null || line.Length > 16000) throw new InvalidDataException();
             var request = JsonSerializer.Deserialize<Request>(line, JsonOptions) ?? throw new InvalidDataException();
-            response = await Acquire(request);
+            if (!OperatingSystem.IsWindows()) response = new("unavailable");
+            else if (!Guid.TryParse(request.ClientId, out _) || !Guid.TryParse(request.TenantId, out _) || request.Scopes is not { Length: > 0 })
+                response = new("unavailable", ErrorCode: "configuration");
+            else response = request.Operation switch {
+                null => await Acquire(request),
+                "verify_windows_account" => await VerifyWindowsAccount(request),
+                _ => new("unavailable", ErrorCode: "operation")
+            };
         }
         catch (MsalUiRequiredException error) { response = new("interaction_required", ErrorCode: SafeError(error)); }
         catch (MsalException error) { response = new(error.ErrorCode == MsalError.AuthenticationCanceledError ? "cancelled" : "unavailable", ErrorCode: SafeError(error)); }

@@ -13,6 +13,8 @@ export interface OutlookOfficeAccountCheck {
   accounts: Array<{ email: string; displayName: string }>;
   suggestedEmail: string;
   readSucceeded: boolean;
+  // Verified natively against Graph and a unique Windows work account; not an Excel identity claim.
+  fallback?: { source: "windows_work_account"; email: string };
   sources?: Array<{ version: string; view: string; state: string; identityCount: number }>;
 }
 

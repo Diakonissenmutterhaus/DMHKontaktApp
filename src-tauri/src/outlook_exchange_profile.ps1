@@ -240,14 +240,14 @@ function Close-OutlookSetupProcess {
         $session = $app.Session
         if ([string]$session.CurrentProfileName -ine $Profile) { return @{ closed = $false; reason = 'not_owned' } }
         $inspectors = $app.Inspectors
-        if ($inspectors.Count -gt 0) { return @{ closed = $false; reason = 'user_work' } }
+        if ($inspectors.Count -gt 0) { return @{ closed = $false; reason = 'user_work'; evidence = 'inspectors'; inspectorCount = $inspectors.Count; processId = $ExpectedId; profile = $Profile } }
         $explorers = $app.Explorers
         for ($i = 1; $i -le $explorers.Count; $i++) {
             $explorer = $null; $inline = $null
             try {
                 $explorer = $explorers.Item($i)
                 $inline = $explorer.ActiveInlineResponse
-                if ($null -ne $inline) { return @{ closed = $false; reason = 'user_work' } }
+                if ($null -ne $inline) { return @{ closed = $false; reason = 'user_work'; evidence = 'inline_response'; processId = $ExpectedId; profile = $Profile } }
             } finally {
                 Release-OutlookSetupObject $inline
                 Release-OutlookSetupObject $explorer
@@ -257,7 +257,7 @@ function Close-OutlookSetupProcess {
         # close an Outlook the user already had open or restarted themselves.
         if ($null -eq (Get-OwnedOutlookSetupProcess -ExpectedId $ExpectedId -StartedAt $StartedAt)) { return @{ closed = $false; reason = 'not_owned' } }
         $app.Quit()
-    } catch { return @{ closed = $false; reason = 'not_ready' } }
+    } catch { return @{ closed = $false; reason = 'not_ready'; hresult = $_.Exception.HResult; exceptionType = $_.Exception.GetType().FullName; scriptLine = $_.InvocationInfo.ScriptLineNumber; processId = $ExpectedId } }
     finally {
         foreach ($object in @($explorers, $inspectors, $session, $app)) { Release-OutlookSetupObject $object }
         $process.Dispose()
@@ -273,7 +273,7 @@ function Close-OutlookForMigration {
     if (-not $Authorized) { return @{ closed = $false; reason = 'not_authorized' } }
     $processes = @(Get-Process -Name OUTLOOK -ErrorAction SilentlyContinue)
     if ($processes.Count -eq 0) { return @{ closed = $true } }
-    if ($processes.Count -ne 1) { return @{ closed = $false; reason = 'not_owned' } }
+    if ($processes.Count -ne 1) { return @{ closed = $false; reason = 'not_owned'; processCount = $processes.Count; processIds = @($processes | ForEach-Object { $_.Id }) } }
     $app = $null; $session = $null
     try {
         $process = $processes[0]
@@ -284,7 +284,7 @@ function Close-OutlookForMigration {
         $profile = [string]$session.CurrentProfileName
         if (-not $profile) { return @{ closed = $false; reason = 'not_ready' } }
         if ($ExpectedProfile -and $profile -ine $ExpectedProfile) { return @{ closed = $false; reason = 'not_owned' } }
-    } catch { return @{ closed = $false; reason = 'not_ready' } }
+    } catch { return @{ closed = $false; reason = 'not_ready'; hresult = $_.Exception.HResult; exceptionType = $_.Exception.GetType().FullName; scriptLine = $_.InvocationInfo.ScriptLineNumber; processId = $expectedId } }
     finally {
         foreach ($object in @($session, $app)) { Release-OutlookSetupObject $object }
         foreach ($candidate in $processes) { $candidate.Dispose() }
@@ -666,6 +666,8 @@ try {
     }
     [Console]::Write(($result | ConvertTo-Json -Depth 6 -Compress))
 } catch {
-    [Console]::Write('{"error":"Outlook Classic konnte nicht angesprochen werden. Bitte Outlook-Dialoge schließen und erneut versuchen."}')
+    [Console]::Write((@{ error = 'Outlook Classic konnte nicht angesprochen werden. Bitte Outlook-Dialoge schließen und erneut versuchen.'; diagnostic = @{
+        operation = [string]$request.operation; hresult = $_.Exception.HResult; exceptionType = $_.Exception.GetType().FullName; scriptLine = $_.InvocationInfo.ScriptLineNumber
+    } } | ConvertTo-Json -Depth 3 -Compress))
     exit 1
 }

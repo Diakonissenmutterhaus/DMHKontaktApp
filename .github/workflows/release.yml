@@ -167,6 +167,8 @@ jobs:
 
       - name: Frontend bauen
         id: build_frontend
+        env:
+          VITE_DMH_SUPPORT_DIAGNOSTICS: "true"
         run: npm run build
 
       - name: Frontend-Komponententests
@@ -184,6 +186,7 @@ jobs:
       - name: Rust-Tests
         id: rust_tests
         env:
+          DMH_SUPPORT_DIAGNOSTICS: "1"
           M365_CLIENT_ID: ${{ vars.M365_CLIENT_ID }}
           M365_TENANT_ID: ${{ vars.M365_TENANT_ID }}
           RUST_BACKTRACE: "1"
@@ -351,6 +354,9 @@ jobs:
           VITE_FEATURE_SERVICES_DEFAULT: "false"
           VITE_SOURCE_COMMIT: ${{ needs.verify.outputs.source_sha }}
           DMH_RELEASE_CHANNEL: stable
+          # Fehlerdiagnose bleibt lokal; Benutzer können die .log-Datei kopieren/speichern.
+          DMH_SUPPORT_DIAGNOSTICS: "1"
+          VITE_DMH_SUPPORT_DIAGNOSTICS: "true"
           M365_CLIENT_ID: ${{ vars.M365_CLIENT_ID }}
           M365_TENANT_ID: ${{ vars.M365_TENANT_ID }}
         with:

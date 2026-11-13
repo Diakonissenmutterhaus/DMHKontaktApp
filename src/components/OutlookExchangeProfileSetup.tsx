@@ -102,6 +102,9 @@ export function OutlookExchangeProfileSetup({ email, disabled = false, compact =
       if (!currentRequest(id)) return null;
       await finishProcedureReport(report.current, "success", "Exchange verbunden und Standardprofil bestätigt.", email, accepted.exchangeProfile);
     }
+    if (["outlook_open", "unavailable"].includes(accepted.stage)) {
+      await finishProcedureReport(report.current, "error", accepted.message, email, accepted.exchangeProfile, accepted.stage);
+    }
     setStatus(accepted);
     if (!["awaiting_login", "awaiting_close", "connected"].includes(accepted.stage)) await stopBackgroundWatcher();
     if (accepted.stage !== "awaiting_login" && accepted.stage !== "awaiting_close") setPolling(false);
@@ -126,13 +129,15 @@ export function OutlookExchangeProfileSetup({ email, disabled = false, compact =
         if (!currentRequest(id)) return;
         if (check.dmhEmail.toLowerCase() !== email.toLowerCase()) throw new Error("Das Microsoft-365-Konto wurde geändert. Bitte die Seite erneut öffnen.");
         const aliases = check.dmhEmails.map((alias) => alias.toLowerCase());
-        if (!check.readSucceeded || !check.accounts.length) throw new Error("OFFICE_ACCOUNT_NOT_DETECTED: " + JSON.stringify({
+        const windowsEmail = check.fallback?.source === "windows_work_account" && !check.accounts.length
+          && !check.suggestedEmail && aliases.includes(check.fallback.email.toLowerCase()) ? check.fallback.email : "";
+        if (!check.readSucceeded || (!check.accounts.length && !windowsEmail)) throw new Error("OFFICE_ACCOUNT_NOT_DETECTED: " + JSON.stringify({
           readSucceeded: check.readSucceeded, accountCount: check.accounts.length, sources: check.sources ?? [],
         }));
         if (check.accounts.some((account) => !aliases.includes(account.email.toLowerCase())) || (check.suggestedEmail && !aliases.includes(check.suggestedEmail.toLowerCase()))) {
           throw new Error("Die Office-Konten stimmen nicht eindeutig mit dem DMH-Konto überein. In DMH und Excel muss dasselbe Geschäftskonto angemeldet sein. Bitte die Konten prüfen und erneut versuchen. Es wurde kein Outlook-Profil geändert.");
         }
-        detectedOfficeEmail.current = check.suggestedEmail || check.accounts[0].email;
+        detectedOfficeEmail.current = windowsEmail || check.suggestedEmail || check.accounts[0].email;
       }
       const next = await (action === "prepare" ? prepareOutlookExchangeProfile(detectedOfficeEmail.current) : getOutlookExchangeSetupStatus(true));
       const accepted = await acceptStatus(next, id);

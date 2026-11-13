@@ -38,6 +38,7 @@ mod outlook_exchange;
 mod phone_transfer;
 mod procedure_reports;
 mod recovery_history;
+mod support_diagnostic;
 mod thunderbird;
 mod updates;
 mod vault;
@@ -10624,6 +10625,7 @@ pub fn run() {
             diagnostics::unlock_edv_tools,
             diagnostics::lock_edv_tools,
             diagnostics::record_ui_diagnostic,
+            support_diagnostic::collect_support_diagnostic,
             get_backup_data,
             get_sync_backup_data,
             create_automatic_safety_backup,

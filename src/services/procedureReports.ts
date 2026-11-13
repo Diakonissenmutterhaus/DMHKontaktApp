@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { captureSupportDiagnostic } from "./supportDiagnostics";
 type Report = { attemptId: string; procedure: "m365_login" | "outlook_exchange" | "m365_sync" | "diagnostics"; sequence: number; done: boolean };
 // Report delivery must never mask or replace the original procedure result.
 const pendingKey = "dmh.procedure-report-retry.v1";
@@ -31,9 +32,12 @@ export async function beginProcedureReport(procedure: Report["procedure"], accou
   await send({ eventId: crypto.randomUUID(), attemptId: report.attemptId, sequence: 0, procedure, status: "running", accountEmail, step: "Start", message: "", profile: "" });
   return report;
 }
-export async function finishProcedureReport(report: Report | null, status: "success" | "error" | "cancelled" | "interrupted", message = "", accountEmail = "", profile = "") {
+export async function finishProcedureReport(report: Report | null, status: "success" | "error" | "cancelled" | "interrupted", message = "", accountEmail = "", profile = "", stage = status === "interrupted" ? "timeout" : "error") {
   if (!report || report.done) return;
   report.done = true;
+  if ((status === "error" || status === "interrupted") && (report.procedure === "m365_login" || report.procedure === "outlook_exchange")) {
+    captureSupportDiagnostic({ attemptId: report.attemptId, procedure: report.procedure, stage, message });
+  }
   await send({ eventId: crypto.randomUUID(), attemptId: report.attemptId, sequence: ++report.sequence, procedure: report.procedure, status, accountEmail, step: status === "success" ? "Abschluss bestätigt" : "Abschluss nicht bestätigt", message: sanitizeReportMessage(message), profile });
 }
 export function startReportDelivery() {

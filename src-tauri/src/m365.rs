@@ -965,6 +965,12 @@ fn record_broker_result(
     error: Option<&str>,
     operation: &str,
 ) {
+    crate::support_diagnostic::trace("m365.wam", serde_json::json!({
+        "operation": operation,
+        "status": response.map(|value| value.status.as_str()),
+        "errorCode": response.and_then(|value| value.error_code.as_deref()).or(error),
+        "verifiedEmail": response.and_then(|value| value.verified_email.as_deref())
+    }));
     let _ = crate::diagnostics::record(
         app,
         crate::diagnostics::DiagnosticMessage {
@@ -6729,6 +6735,68 @@ pub(crate) fn excel_account_aliases(app: &AppHandle) -> Result<Vec<String>, Stri
         .into_iter()
         .filter(|email| valid_excel_email(email))
         .collect())
+}
+
+/// Fallback identity evidence when Office's legacy metadata is genuinely empty.
+/// Graph verifies the DMH session; WAM must expose exactly one matching work
+/// account. Neither this nor cached Office metadata proves Excel's active user.
+pub(crate) async fn verified_windows_account_email(app: &AppHandle) -> Result<String, String> {
+    let original = outlook_profile_identity(app)?;
+    let verified = test_m365_connection(app.clone())
+        .await?
+        .account
+        .ok_or("Microsoft 365 konnte nicht bestätigt werden.")?;
+    if original != outlook_profile_identity(app)?
+        || verified.id != original.0
+        || !excel_account_matches(&verified, &original.1)
+    {
+        return Err(
+            "Das Microsoft-365-Konto wurde inzwischen geändert. Bitte erneut versuchen.".into(),
+        );
+    }
+    let aliases = [verified.email, verified.user_principal_name]
+        .into_iter()
+        .filter(|email| valid_excel_email(email))
+        .collect::<Vec<_>>();
+    let token = read_token(app)?;
+    let pinned = token
+        .broker
+        .as_ref()
+        .map(|broker| broker.home_account_id.as_str());
+    let response = crate::m365_wam::verify_windows_account(
+        app,
+        client_id().ok_or("Microsoft-365-Konfiguration fehlt.")?,
+        tenant_id(),
+        pinned,
+        &aliases,
+    )
+    .await?;
+    if response.status != "account_verified"
+        || response.verified_email.as_deref().is_none_or(|email| {
+            !aliases
+                .iter()
+                .any(|alias| alias.eq_ignore_ascii_case(email))
+        })
+        || response
+            .home_account_id
+            .as_deref()
+            .is_none_or(|id| id.is_empty() || pinned.is_some_and(|expected| expected != id))
+    {
+        record_broker_result(app, Some(&response), None, "office_identity_fallback");
+        return Err(format!(
+            "OFFICE_ACCOUNT_NOT_DETECTED: {}",
+            response
+                .error_code
+                .as_deref()
+                .unwrap_or("windows_work_account_unverified")
+        ));
+    }
+    if original != outlook_profile_identity(app)? {
+        return Err(
+            "Das Microsoft-365-Konto wurde inzwischen geändert. Bitte erneut versuchen.".into(),
+        );
+    }
+    Ok(original.1)
 }
 
 #[tauri::command]

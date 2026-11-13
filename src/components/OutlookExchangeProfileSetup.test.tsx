@@ -51,6 +51,17 @@ afterEach(() => {
 });
 
 describe("Outlook Exchange profile setup", () => {
+  it("records a blocked Outlook as an error and captures diagnostics in the test build", async () => {
+    vi.stubEnv("VITE_DMH_SUPPORT_DIAGNOSTICS", "true");
+    try {
+      db.prepareOutlookExchangeProfile.mockResolvedValueOnce({ ...waiting, stage: "outlook_open", message: "Outlook konnte noch nicht geschlossen werden." });
+      render(<OutlookExchangeProfileSetup email={email} />);
+      await clickButton("Zu Exchange wechseln");
+      expect(native.invoke).toHaveBeenCalledWith("collect_support_diagnostic", { request: expect.objectContaining({ procedure: "outlook_exchange", stage: "outlook_open", message: "Outlook konnte noch nicht geschlossen werden." }) });
+      expect(native.invoke).toHaveBeenCalledWith("record_procedure_report", { event: expect.objectContaining({ status: "error", procedure: "outlook_exchange" }) });
+      expect(db.completeOutlookExchangeProfile).not.toHaveBeenCalled();
+    } finally { vi.unstubAllEnvs(); }
+  });
   it("does not tell users to find authentication windows after a helper timeout", async () => {
     db.prepareOutlookExchangeProfile.mockRejectedValueOnce("OUTLOOK_HELPER_TIMEOUT: powershell.exe; Zeitlimit 25s");
     render(<OutlookExchangeProfileSetup email={email} />);
@@ -168,6 +179,34 @@ describe("Outlook Exchange profile setup", () => {
     expect(failure.message).toContain("OFFICE_ACCOUNT_NOT_DETECTED:");
     expect(failure.message).toContain('"view":"Registry32"');
     expect(failure.message).toContain('"state":"missing"');
+  });
+
+  it("continues for empty Office metadata only with the native Windows account verification", async () => {
+    db.getOutlookOfficeAccountCheck.mockResolvedValue({ dmhEmail: email, dmhEmails: [email],
+      readSucceeded: true, accounts: [], suggestedEmail: "",
+      fallback: { source: "windows_work_account", email },
+    });
+    render(<OutlookExchangeProfileSetup email={email} />);
+    await clickButton("Zu Exchange wechseln");
+    expect(db.prepareOutlookExchangeProfile).toHaveBeenCalledWith(email);
+    expect(screen.getByRole("dialog", { name: progressMessage })).toBeVisible();
+    expect(screen.queryByRole("dialog", { name: "Excel-Konto prüfen" })).toBeNull();
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it.each([
+    { readSucceeded: false, accounts: [], suggestedEmail: "" },
+    { readSucceeded: true, accounts: [{ email: "other@example.test" }], suggestedEmail: "" },
+    { readSucceeded: true, accounts: [], suggestedEmail: "other@example.test" },
+    { readSucceeded: true, accounts: [], suggestedEmail: "", fallback: { source: "windows_work_account", email: "other@example.test" } },
+  ])("does not let Windows fallback hide an Office conflict or failed read: %j", async (metadata) => {
+    db.getOutlookOfficeAccountCheck.mockResolvedValue({ dmhEmail: email, dmhEmails: [email],
+      fallback: { source: "windows_work_account", email }, ...metadata,
+    });
+    render(<OutlookExchangeProfileSetup email={email} />);
+    await clickButton("Zu Exchange wechseln");
+    expect(db.prepareOutlookExchangeProfile).not.toHaveBeenCalled();
+    expect(screen.getByRole("alert")).toBeVisible();
   });
 
   it("keeps native recheck diagnostics in the EDV report without showing technical details", async () => {

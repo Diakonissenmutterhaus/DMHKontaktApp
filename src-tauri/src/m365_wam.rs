@@ -25,6 +25,8 @@ pub(crate) struct BrokerResponse {
     pub expires_in: u64,
     #[serde(default)]
     pub error_code: Option<String>,
+    #[serde(default)]
+    pub verified_email: Option<String>,
 }
 
 impl Drop for BrokerResponse {
@@ -56,6 +58,46 @@ pub(crate) async fn acquire(
     login_hint: Option<&str>,
     allow_interactive: bool,
 ) -> Result<BrokerResponse, String> {
+    call_helper(
+        app,
+        client_id,
+        tenant_id,
+        pinned_id,
+        login_hint,
+        allow_interactive,
+        None,
+    )
+    .await
+}
+
+pub(crate) async fn verify_windows_account(
+    app: &AppHandle,
+    client_id: &str,
+    tenant_id: &str,
+    pinned_id: Option<&str>,
+    aliases: &[String],
+) -> Result<BrokerResponse, String> {
+    call_helper(
+        app,
+        client_id,
+        tenant_id,
+        pinned_id,
+        None,
+        false,
+        Some(aliases),
+    )
+    .await
+}
+
+async fn call_helper(
+    app: &AppHandle,
+    client_id: &str,
+    tenant_id: &str,
+    pinned_id: Option<&str>,
+    login_hint: Option<&str>,
+    allow_interactive: bool,
+    verification_aliases: Option<&[String]>,
+) -> Result<BrokerResponse, String> {
     #[cfg(not(windows))]
     {
         let _ = (
@@ -65,6 +107,7 @@ pub(crate) async fn acquire(
             pinned_id,
             login_hint,
             allow_interactive,
+            verification_aliases,
         );
         return Err("platform_unavailable".into());
     }
@@ -96,6 +139,8 @@ pub(crate) async fn acquire(
             "scopes": LOGIN_SCOPES.split_whitespace().filter(|scope| !matches!(*scope, "openid" | "profile" | "offline_access")).collect::<Vec<_>>(),
             "homeAccountId": pinned_id, "windowHandle": hwnd,
             "loginHint": login_hint, "allowInteractive": allow_interactive,
+            "operation": verification_aliases.map(|_| "verify_windows_account"),
+            "accountAliases": verification_aliases,
         });
         run_helper(&helper, &request).await
     }

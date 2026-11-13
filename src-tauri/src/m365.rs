@@ -989,7 +989,14 @@ fn record_broker_result(
 }
 
 fn silent_connection_error(code: Option<&str>) -> String {
-    let code = code.filter(|value| value.len() <= 160 && value.chars().all(|c| c.is_ascii_alphanumeric() || "_./-".contains(c))).unwrap_or("broker_unavailable");
+    let code = code
+        .filter(|value| {
+            value.len() <= 160
+                && value
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || "_./-".contains(c))
+        })
+        .unwrap_or("broker_unavailable");
     format!("Die automatische Windows-Anmeldung konnte nicht abgeschlossen werden. Bitte die EDV kontaktieren. [WAM: {code}]")
 }
 

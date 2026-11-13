@@ -1,0 +1,37 @@
+.app-update-window {
+  position: fixed;
+  inset: 0;
+  margin: auto;
+  width: min(480px, calc(100vw - 32px));
+  height: fit-content;
+  max-height: calc(100dvh - 32px);
+  overflow: auto;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: 0 16px 48px #0003;
+  outline: none;
+}
+.app-update-window::backdrop { background: #20212466; }
+.app-update-window header { display: flex; align-items: center; gap: 9px; padding: 12px 18px; background: var(--primary); color: var(--on-primary); }
+.app-update-window header strong { font-size: .9rem; }
+.app-update-window header span { margin-left: auto; font-size: .75rem; }
+.app-update-content { display: grid; gap: 18px; padding: 24px; }
+.app-update-content p { display: flex; align-items: center; gap: 10px; margin: 0; font-size: .9rem; font-weight: 600; }
+.app-update-content svg { flex-shrink: 0; color: var(--primary); }
+.app-update-content small { font-size: .8rem; line-height: 1.5; color: var(--muted); }
+.app-update-meter { position: relative; overflow: hidden; border-radius: 2px; background: var(--surface-alt); }
+.app-update-meter progress { display: block; appearance: none; border: 0; width: 100%; height: 8px; accent-color: var(--primary); background: var(--surface-alt); }
+.app-update-meter progress::-webkit-progress-bar { background: var(--surface-alt); }
+.app-update-meter progress::-webkit-progress-value { background: var(--primary); transition: width .15s ease; }
+.app-update-meter progress::-moz-progress-bar { background: var(--primary); }
+.app-update-meter.indeterminate progress { opacity: 0; }
+.app-update-meter.indeterminate::after { content: ""; position: absolute; inset: 0 auto 0 0; width: 30%; background: var(--primary); animation: app-update-marquee 1.6s ease-in-out infinite; }
+@keyframes app-update-marquee { from { transform: translateX(-100%); } to { transform: translateX(335%); } }
+@media (prefers-reduced-motion: reduce) {
+  .app-update-meter.indeterminate::after { animation: none; left: 35%; }
+  .app-update-window .spin { animation: none; }
+  .app-update-meter progress::-webkit-progress-value { transition: none; }
+}

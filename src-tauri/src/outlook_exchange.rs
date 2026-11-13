@@ -939,15 +939,22 @@ fn automatic_office_email(
     office: &serde_json::Value,
     aliases: &[String],
 ) -> Result<String, String> {
-    let unknown = "Das Office-Konto konnte nicht automatisch ermittelt werden. Bitte in Excel unter Datei → Konto anmelden und erneut versuchen.";
+    let unknown = format!(
+        "OFFICE_ACCOUNT_NOT_DETECTED: {}",
+        serde_json::json!({
+            "readSucceeded": office.get("readSucceeded"),
+            "accountCount": office.get("accounts").and_then(|value| value.as_array()).map(|items| items.len()).unwrap_or(0),
+            "sources": office.get("sources"),
+        })
+    );
     if office.get("readSucceeded").and_then(|v| v.as_bool()) != Some(true) {
-        return Err(unknown.into());
+        return Err(unknown.clone());
     }
     let accounts = office
         .get("accounts")
         .and_then(|v| v.as_array())
         .filter(|a| !a.is_empty())
-        .ok_or(unknown)?;
+        .ok_or_else(|| unknown.clone())?;
     let matches = |email: &str| {
         !email.is_empty()
             && aliases
@@ -968,7 +975,9 @@ fn automatic_office_email(
         return Err("Das bevorzugte Office-Konto unterscheidet sich vom DMH-Konto. Bitte in DMH und Excel dasselbe Geschäftskonto verbinden.".into());
     }
     Ok(if suggested.is_empty() {
-        accounts[0]["email"].as_str().ok_or(unknown)?
+        accounts[0]["email"]
+            .as_str()
+            .ok_or_else(|| unknown.clone())?
     } else {
         suggested
     }
@@ -1501,6 +1510,47 @@ mod tests {
         assert_eq!(
             automatic_office_email(&aliases_only, &aliases).unwrap(),
             "anna@example.test"
+        );
+    }
+
+    #[test]
+    fn missing_office_metadata_is_not_reported_as_excel_signed_out() {
+        let office = serde_json::json!({
+            "readSucceeded": true, "accounts": [],
+            "sources": [{"version":"16.0", "view":"Registry32", "state":"missing", "identityCount":0}]
+        });
+        let error = automatic_office_email(&office, &["anna@example.test".into()]).unwrap_err();
+        let detail: serde_json::Value =
+            serde_json::from_str(error.strip_prefix("OFFICE_ACCOUNT_NOT_DETECTED: ").unwrap())
+                .unwrap();
+        assert_eq!(detail["accountCount"], 0);
+        assert_eq!(detail["sources"], office["sources"]);
+        assert!(!error.contains("anmelden"));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn office_identity_reader_covers_local_users_and_registry_views() {
+        let script = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../scripts/test-office-account-detection.ps1");
+        // Executes the real reader against synthetic keys only. No Office
+        // launch, authentication, registry writes or user-account changes.
+        let output = hidden_command("powershell.exe")
+            .args([
+                "-NoProfile",
+                "-NonInteractive",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+            ])
+            .arg(script)
+            .output()
+            .expect("Office identity regression checks could not start");
+        assert!(
+            output.status.success(),
+            "{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
         );
     }
 

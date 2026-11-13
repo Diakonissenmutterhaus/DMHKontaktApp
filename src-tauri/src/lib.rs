@@ -39,6 +39,7 @@ mod phone_transfer;
 mod procedure_reports;
 mod recovery_history;
 mod thunderbird;
+mod updates;
 mod vault;
 mod workstation_health;
 
@@ -10635,6 +10636,8 @@ pub fn run() {
             write_export_file,
             reset_local_app_data,
             restart_app,
+            updates::get_app_update_policy,
+            updates::install_app_update,
             delete_all_contacts,
             add_contact_to_group,
             move_contact_to_group,

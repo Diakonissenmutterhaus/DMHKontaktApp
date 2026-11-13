@@ -2120,10 +2120,6 @@ textarea {
   color: var(--danger-text);
 }
 
-.update-notifier.installed .update-notifier-icon {
-  color: var(--success-text);
-}
-
 .update-notifier-copy {
   min-width: 0;
 }
@@ -2148,30 +2144,6 @@ textarea {
 
 .update-notifier-actions button {
   min-height: 42px;
-}
-
-.update-progress {
-  background: var(--page);
-  border-radius: 999px;
-  grid-column: 1 / -1;
-  height: 10px;
-  overflow: hidden;
-}
-
-.update-progress span {
-  background: var(--primary);
-  display: block;
-  height: 100%;
-  transition: width 160ms ease;
-}
-
-.update-progress.installing span {
-  animation: update-installing-pulse 900ms ease-in-out infinite alternate;
-}
-
-@keyframes update-installing-pulse {
-  from { opacity: 0.5; }
-  to { opacity: 1; }
 }
 
 .form-panel,

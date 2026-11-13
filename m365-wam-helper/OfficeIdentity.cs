@@ -35,22 +35,28 @@ internal static class OfficeIdentity
         .Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
 
     [SupportedOSPlatform("windows")]
-    static IKey? OpenWindowsVersion(string version) =>
-        Registry.CurrentUser.OpenSubKey($@"Software\Microsoft\Office\{version}\Common\Identity")
+    static IKey? OpenWindowsVersion(string version, RegistryView view)
+    {
+        using var user = RegistryKey.OpenBaseKey(RegistryHive.CurrentUser, view);
+        return user.OpenSubKey($@"Software\Microsoft\Office\{version}\Common\Identity")
             is { } root ? new WindowsKey(root) : null;
+    }
 
     internal static Snapshot Read() => OperatingSystem.IsWindows()
         ? Read(OpenWindowsVersion)
         : new(false, []);
 
-    internal static Snapshot Read(Func<string, IKey?> openVersion)
+    internal static Snapshot Read(Func<string, IKey?> openVersion) => Read((version, _) => openVersion(version));
+
+    internal static Snapshot Read(Func<string, RegistryView, IKey?> openVersion)
     {
         var complete = true;
         var identities = new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase);
         var preferred = new List<string?>();
         foreach (var version in new[] { "16.0", "15.0" }) {
+          foreach (var view in new[] { RegistryView.Registry64, RegistryView.Registry32 }) {
             try {
-                using var root = openVersion(version);
+                using var root = openVersion(version, view);
                 if (root is null) continue; // A genuinely missing Office version is not a read failure.
                 preferred.Add(root.ReadString("ADUserName"));
                 using var entries = root.Open("Identities");
@@ -73,6 +79,7 @@ internal static class OfficeIdentity
             } catch (Exception error) when (error is System.Security.SecurityException or UnauthorizedAccessException or IOException) {
                 complete = false;
             }
+          }
         }
         var result = identities.Select(pair => new Identity(pair.Key, pair.Value.ToArray())).ToList();
         foreach (var email in Normalize(preferred)) {

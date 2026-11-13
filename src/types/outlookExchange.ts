@@ -13,6 +13,7 @@ export interface OutlookOfficeAccountCheck {
   accounts: Array<{ email: string; displayName: string }>;
   suggestedEmail: string;
   readSucceeded: boolean;
+  sources?: Array<{ version: string; view: string; state: string; identityCount: number }>;
 }
 
 export interface OutlookAccountConfiguration {

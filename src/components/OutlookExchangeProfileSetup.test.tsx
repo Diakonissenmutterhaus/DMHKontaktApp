@@ -13,6 +13,8 @@ const db = vi.hoisted(() => ({
   getOutlookAccountConfiguration: vi.fn()
 }));
 vi.mock("../services/db", () => db);
+const native = vi.hoisted(() => ({ invoke: vi.fn() }));
+vi.mock("@tauri-apps/api/core", () => native);
 const progressEvents = vi.hoisted(() => ({ receive: undefined as undefined | ((event: { payload: { email: string; value: number; label: string } }) => void) }));
 vi.mock("@tauri-apps/api/event", () => ({ listen: async (_name: string, receive: typeof progressEvents.receive) => { progressEvents.receive = receive; return () => { progressEvents.receive = undefined; }; } }));
 
@@ -36,6 +38,7 @@ async function clickButton(name: string | RegExp) {
 beforeEach(() => {
   vi.useFakeTimers();
   vi.resetAllMocks();
+  native.invoke.mockResolvedValue(undefined);
   db.prepareOutlookExchangeProfile.mockResolvedValue(waiting);
   db.getOutlookExchangeSetupStatus.mockResolvedValue(waiting);
   db.completeOutlookExchangeProfile.mockResolvedValue(completed);
@@ -148,6 +151,45 @@ describe("Outlook Exchange profile setup", () => {
     expect(screen.queryByRole("dialog")).toBeNull();
     expect(view.container).not.toHaveAttribute("inert");
     expect(screen.getByText(completed.message)).toBeVisible();
+  });
+
+  it("does not tell an already signed-in Excel user to log in when metadata is missing", async () => {
+    db.getOutlookOfficeAccountCheck.mockResolvedValue({ dmhEmail: email, dmhEmails: [email],
+      readSucceeded: true, accounts: [], suggestedEmail: "",
+      sources: [{ version: "16.0", view: "Registry32", state: "missing", identityCount: 0 }],
+    });
+    render(<OutlookExchangeProfileSetup email={email} />);
+    await clickButton("Zu Exchange wechseln");
+    expect(screen.getByRole("alert")).toHaveTextContent("nicht eindeutig zugeordnet");
+    expect(screen.getByRole("alert")).not.toHaveTextContent(/anmelden|Registry32|OFFICE_ACCOUNT_NOT_DETECTED/);
+    expect(db.prepareOutlookExchangeProfile).not.toHaveBeenCalled();
+    const failure = native.invoke.mock.calls.find(([command, args]) => command === "record_procedure_report" && args.event.status === "error")?.[1].event;
+    expect(failure).toMatchObject({ procedure: "outlook_exchange", accountEmail: email, status: "error" });
+    expect(failure.message).toContain("OFFICE_ACCOUNT_NOT_DETECTED:");
+    expect(failure.message).toContain('"view":"Registry32"');
+    expect(failure.message).toContain('"state":"missing"');
+  });
+
+  it("keeps native recheck diagnostics in the EDV report without showing technical details", async () => {
+    db.prepareOutlookExchangeProfile.mockRejectedValueOnce('OFFICE_ACCOUNT_NOT_DETECTED: {"readSucceeded":false,"accountCount":1}');
+    render(<OutlookExchangeProfileSetup email={email} />);
+    await clickButton("Zu Exchange wechseln");
+    expect(screen.getByRole("alert")).toHaveTextContent("nicht eindeutig zugeordnet");
+    expect(screen.getByRole("alert")).not.toHaveTextContent(/OFFICE_ACCOUNT_NOT_DETECTED|readSucceeded|anmelden/);
+    expect(db.completeOutlookExchangeProfile).not.toHaveBeenCalled();
+    const failure = native.invoke.mock.calls.find(([command, args]) => command === "record_procedure_report" && args.event.status === "error")?.[1].event;
+    expect(failure?.message).toContain('"readSucceeded":false');
+  });
+
+  it("accepts matching Office metadata without an AD account or preferred Windows email", async () => {
+    db.getOutlookOfficeAccountCheck.mockResolvedValue({ dmhEmail: email, dmhEmails: [email],
+      readSucceeded: true, accounts: [{ email, displayName: "Anna" }], suggestedEmail: "",
+      sources: [{ version: "16.0", view: "Registry32", state: "read", identityCount: 1 }],
+    });
+    render(<OutlookExchangeProfileSetup email={email} />);
+    await clickButton("Zu Exchange wechseln");
+    expect(db.prepareOutlookExchangeProfile).toHaveBeenCalledWith(email);
+    expect(screen.queryByRole("alert")).toBeNull();
   });
   it("waits for Outlook to close before reporting durable activation and keeps polling", async () => {
     const closing: OutlookExchangeSetupStatus = { ...waiting, stage: "awaiting_close", message: "Exchange ist verbunden. Bitte Outlook vollständig schließen." };

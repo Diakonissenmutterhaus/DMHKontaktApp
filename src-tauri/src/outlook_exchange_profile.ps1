@@ -60,34 +60,66 @@ function Get-WindowsPrimarySmtp {
     } catch { return '' }
 }
 
+function Open-OfficeIdentityRoot {
+    param([string]$Version, [string]$View)
+    # HKCU belongs to the signed-in application user, including local accounts.
+    # Explicit views avoid inheriting the architecture of powershell.exe.
+    $base = [Microsoft.Win32.RegistryKey]::OpenBaseKey(
+        [Microsoft.Win32.RegistryHive]::CurrentUser,
+        [Microsoft.Win32.RegistryView]::$View
+    )
+    try { return $base.OpenSubKey("Software\Microsoft\Office\$Version\Common\Identity") }
+    finally { $base.Dispose() }
+}
+
 function Read-OfficeAccounts {
-    # Identity metadata only. Cached identities are not proof of the active
-    # Excel account. Never read tokens, cookies, credentials or license files.
-    $accounts = @(); $preferred = ''; $readSucceeded = $true
+    # Metadata only: no Office tokens, cookies, credentials or license files.
+    # A missing registry entry does not mean Excel is signed out.
+    $accounts = @(); $preferred = @(); $readSucceeded = $true; $sources = @()
     foreach ($version in @('16.0', '15.0')) {
-        $root = "HKCU:\Software\Microsoft\Office\$version\Common\Identity"
-        if (-not (Test-Path -LiteralPath $root)) { continue }
-        try {
-            $key = Get-Item -LiteralPath $root -ErrorAction Stop
-            try { $candidate = [string]$key.GetValue('ADUserName'); if (-not $preferred -and $candidate -match '^[^\s@]+@[^\s@]+$') { $preferred = $candidate.Trim() } } finally { $key.Dispose() }
-            $identities = "$root\Identities"
-            if (-not (Test-Path -LiteralPath $identities)) { continue }
-            foreach ($entry in @(Get-ChildItem -LiteralPath $identities -ErrorAction Stop | Select-Object -First 64)) {
-                $key = Get-Item -LiteralPath $entry.PSPath -ErrorAction Stop
-                try {
-                    $name = [string]$key.GetValue('FriendlyName')
-                    foreach ($field in @('EmailAddress', 'PreferredUsername', 'SigninName')) {
-                        $email = ([string]$key.GetValue($field)).Trim()
-                        if ($email.Length -gt 254 -or $email -notmatch '^[^\s@]+@[^\s@]+$') { continue }
-                        if (@($accounts | Where-Object { $_.email -ieq $email }).Count -eq 0) { $accounts += @{ email = $email; displayName = $name } }
-                    }
-                } finally { $key.Dispose() }
+        foreach ($view in @('Registry64', 'Registry32')) {
+            $root = $null; $identities = $null
+            $source = @{ version = $version; view = $view; state = 'missing'; identityCount = 0 }
+            try {
+                $root = Open-OfficeIdentityRoot -Version $version -View $view
+                if ($null -eq $root) { continue }
+                $source.state = 'read'
+                $candidate = ([string]$root.GetValue('ADUserName')).Trim()
+                if ($candidate.Length -le 254 -and $candidate -match '^[^\s@]+@[^\s@]+$') { $preferred += $candidate }
+                $identities = $root.OpenSubKey('Identities')
+                if ($null -eq $identities) { continue }
+                $names = @($identities.GetSubKeyNames())
+                $source.identityCount = $names.Count
+                if ($names.Count -gt 64) { throw 'identity_limit' }
+                foreach ($name in $names) {
+                    $entry = $identities.OpenSubKey($name)
+                    if ($null -eq $entry) { throw 'identity_disappeared' }
+                    try {
+                        $displayName = [string]$entry.GetValue('FriendlyName')
+                        foreach ($field in @('EmailAddress', 'PreferredUsername', 'SigninName')) {
+                            $email = ([string]$entry.GetValue($field)).Trim()
+                            if ($email.Length -gt 254 -or $email -notmatch '^[^\s@]+@[^\s@]+$') { continue }
+                            if (@($accounts | Where-Object { $_.email -ieq $email }).Count -eq 0) {
+                                $accounts += @{ email = $email; displayName = $displayName }
+                            }
+                        }
+                    } finally { $entry.Dispose() }
+                }
+            } catch {
+                $readSucceeded = $false
+                $source.state = 'unreadable'
+            } finally {
+                if ($null -ne $identities) { $identities.Dispose() }
+                if ($null -ne $root) { $root.Dispose() }
+                $sources += $source
             }
-        } catch { $readSucceeded = $false }
+        }
     }
-    if ($preferred -and @($accounts | Where-Object { $_.email -ieq $preferred }).Count -eq 0) { $accounts += @{ email = $preferred; displayName = '' } }
-    if (-not $preferred -and $accounts.Count -eq 1) { $preferred = $accounts[0].email }
-    return @{ accounts = @($accounts); suggestedEmail = $preferred; readSucceeded = $readSucceeded }
+    foreach ($email in @($preferred | Select-Object -Unique)) {
+        if (@($accounts | Where-Object { $_.email -ieq $email }).Count -eq 0) { $accounts += @{ email = $email; displayName = '' } }
+    }
+    $suggested = if ($preferred.Count) { $preferred[0] } elseif ($accounts.Count -eq 1) { $accounts[0].email } else { '' }
+    return @{ accounts = @($accounts); suggestedEmail = $suggested; readSucceeded = $readSucceeded; sources = @($sources) }
 }
 
 function Open-OutlookStartupPreferences {

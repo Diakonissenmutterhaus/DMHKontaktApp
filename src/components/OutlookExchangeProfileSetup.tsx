@@ -19,7 +19,12 @@ interface OutlookExchangeProfileSetupProps {
 const pollIntervalMs = 4_000;
 const pollingLimitMs = 4 * 60_000;
 const setupTimeoutMessage = "Die automatische Einrichtung konnte nicht abgeschlossen werden. Bitte wenden Sie sich an die EDV. Ihr bisheriges Outlook-Profil bleibt erhalten.";
-const setupErrorMessage = (cause: unknown) => String(cause).includes("OUTLOOK_HELPER_TIMEOUT:") ? setupTimeoutMessage : String(cause);
+const setupErrorMessage = (cause: unknown) => {
+  const message = String(cause);
+  if (message.includes("OUTLOOK_HELPER_TIMEOUT:")) return setupTimeoutMessage;
+  if (message.includes("OFFICE_ACCOUNT_NOT_DETECTED:")) return "Das Office-Konto konnte auf diesem PC nicht eindeutig zugeordnet werden. Bitte die EDV kontaktieren. Ihr bisheriges Outlook-Profil bleibt erhalten.";
+  return message;
+};
 const stopBackgroundWatcher = () => Promise.resolve().then(() => invoke("stop_outlook_setup_background")).catch(() => undefined);
 
 export function OutlookExchangeProfileSetup({ email, disabled = false, compact = false, leadingAction }: OutlookExchangeProfileSetupProps) {
@@ -121,7 +126,9 @@ export function OutlookExchangeProfileSetup({ email, disabled = false, compact =
         if (!currentRequest(id)) return;
         if (check.dmhEmail.toLowerCase() !== email.toLowerCase()) throw new Error("Das Microsoft-365-Konto wurde geändert. Bitte die Seite erneut öffnen.");
         const aliases = check.dmhEmails.map((alias) => alias.toLowerCase());
-        if (!check.readSucceeded || !check.accounts.length) throw new Error("Das Office-Konto konnte nicht automatisch ermittelt werden. Bitte in Excel unter Datei → Konto anmelden und erneut versuchen. Es wurde kein Outlook-Profil geändert.");
+        if (!check.readSucceeded || !check.accounts.length) throw new Error("OFFICE_ACCOUNT_NOT_DETECTED: " + JSON.stringify({
+          readSucceeded: check.readSucceeded, accountCount: check.accounts.length, sources: check.sources ?? [],
+        }));
         if (check.accounts.some((account) => !aliases.includes(account.email.toLowerCase())) || (check.suggestedEmail && !aliases.includes(check.suggestedEmail.toLowerCase()))) {
           throw new Error("Die Office-Konten stimmen nicht eindeutig mit dem DMH-Konto überein. In DMH und Excel muss dasselbe Geschäftskonto angemeldet sein. Bitte die Konten prüfen und erneut versuchen. Es wurde kein Outlook-Profil geändert.");
         }

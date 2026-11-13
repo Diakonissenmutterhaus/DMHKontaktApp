@@ -57,6 +57,18 @@ internal static class OfficeIdentityTests
         check(Program.SelectAccount([account, new Account("Anna@example.test", "another")], "tenant", null, selected.Aliases) is null);
         // The same identity recorded by two Office versions remains a single identity.
         check(OfficeIdentity.Read(_ => root).Identities.Length == 1);
+        // A local Windows account has no ADUserName. The Office identity is
+        // still valid, including an older/32-bit Office registration.
+        var localRoot = Root(new Key { Children = { ["office-user"] = identity } });
+        var x86Only = OfficeIdentity.Read((version, view) =>
+            version == "16.0" && view == Microsoft.Win32.RegistryView.Registry32 ? localRoot : null);
+        check(x86Only.Complete && x86Only.Identities.Length == 1);
+        check(OfficeIdentity.Select(x86Only, null).Aliases.Contains("anna@example.test", StringComparer.OrdinalIgnoreCase));
+        var oldOffice = OfficeIdentity.Read((version, _) => version == "15.0" ? localRoot : null);
+        check(oldOffice.Complete && oldOffice.Identities.Length == 1);
+        var deniedView = OfficeIdentity.Read((_, view) => view == Microsoft.Win32.RegistryView.Registry64
+            ? throw new UnauthorizedAccessException() : localRoot);
+        check(!deniedView.Complete && OfficeIdentity.Select(deniedView, null).ErrorCode == "office_identity_read_failed");
 
         var second = new Key { Values = { ["EmailAddress"] = "admin@example.test" } };
         var multiple = Read(Root(new Key { Children = { ["anna"] = identity, ["admin"] = second } }));

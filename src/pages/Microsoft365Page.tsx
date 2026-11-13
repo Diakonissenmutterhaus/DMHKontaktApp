@@ -230,9 +230,11 @@ function Microsoft365Content({ title, synchronizeAfterConnection }: Microsoft365
         setConnectionError((current) => current || "Microsoft 365 ist verbunden, aber die automatische Synchronisierung konnte nicht eingerichtet werden. Bitte „Automatik einschalten“ wählen oder die EDV informieren.");
       }
     } catch (error) {
-      setShowCodeFallback(true);
+      setShowCodeFallback(chooseAccount);
       await finishProcedureReport(loginReport.current, "error", String(error));
-      setConnectionError("Die Anmeldung wurde nicht abgeschlossen. Bitte erneut verbinden oder „Anderes Konto verwenden“ wählen. Wenn es weiterhin nicht klappt, die EDV informieren.");
+      setConnectionError(chooseAccount
+        ? "Die Anmeldung wurde nicht abgeschlossen. Bitte erneut versuchen oder die EDV kontaktieren."
+        : "Die automatische Anmeldung konnte nicht abgeschlossen werden. Bitte die EDV kontaktieren; Sie müssen hier kein Kennwort eingeben.");
       setMessageType("error");
       setMessage(`Microsoft-365-Anmeldung wurde nicht abgeschlossen: ${error}`);
     } finally {
@@ -386,8 +388,8 @@ function Microsoft365Content({ title, synchronizeAfterConnection }: Microsoft365
             <div>
               <h3>Mit Microsoft 365 verbinden</h3>
               <p>
-                Verwenden Sie Ihr bereits mit Windows verbundenes Geschäftskonto. Falls Microsoft
-                eine Bestätigung benötigt, öffnet sich die Microsoft-Anmeldung.
+                Ihr vorhandenes Windows-/Office-Geschäftskonto wird im Hintergrund geprüft.
+                Es öffnet sich kein zusätzliches Anmeldefenster.
               </p>
             </div>
           </div>

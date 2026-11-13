@@ -2,9 +2,9 @@
 // Store the files in this folder, for example media/m365-exchange.mp4.
 // Empty entries do not request missing media or display fabricated captures.
 window.DMH_MIGRATION_MEDIA = {
-  video: "media/dmh-backup-anleitung-web.mp4",
-  temporaryVideo: true,
-  poster: "assets/kurzanleitung.png",
+  video: "media/migration-anleitung.mp4",
+  temporaryVideo: false,
+  poster: "",
   captures: {
     navigation: "assets/tutorial-01-microsoft365-oeffnen.png",
     connect: "assets/tutorial-02-microsoft365-verbinden.png",

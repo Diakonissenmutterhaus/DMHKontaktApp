@@ -988,6 +988,11 @@ fn record_broker_result(
     );
 }
 
+fn silent_connection_error(code: Option<&str>) -> String {
+    let code = code.filter(|value| value.len() <= 160 && value.chars().all(|c| c.is_ascii_alphanumeric() || "_./-".contains(c))).unwrap_or("broker_unavailable");
+    format!("Die automatische Windows-Anmeldung konnte nicht abgeschlossen werden. Bitte die EDV kontaktieren. [WAM: {code}]")
+}
+
 #[tauri::command]
 pub async fn connect_m365_with_windows_account(
     app: AppHandle,
@@ -1003,7 +1008,7 @@ pub async fn connect_m365_with_windows_account(
             .as_ref()
             .map(|account| account.user_principal_name.as_str())
             .filter(|value| !value.is_empty());
-        let result = crate::m365_wam::acquire(&app, client, tenant_id(), None, hint, true).await;
+        let result = crate::m365_wam::acquire(&app, client, tenant_id(), None, hint, false).await;
         if let Ok(mut response) = result {
             if response.status == "cancelled" {
                 return Err("Anmeldung wurde abgebrochen.".into());
@@ -1041,13 +1046,13 @@ pub async fn connect_m365_with_windows_account(
                 return Ok(account);
             }
             record_broker_result(&app, Some(&response), None, "connect");
+            return Err(silent_connection_error(response.error_code.as_deref()));
         } else if let Err(error) = result {
             record_broker_result(&app, None, Some(&error), "connect");
+            return Err(silent_connection_error(Some(&error)));
         }
     }
-    // The user explicitly clicked Connect. Only here may the browser open;
-    // renewal/background synchronization never starts an interactive login.
-    start_m365_interactive_connection(app, None).await
+    Err(silent_connection_error(None))
 }
 
 fn graph_retry_delay(

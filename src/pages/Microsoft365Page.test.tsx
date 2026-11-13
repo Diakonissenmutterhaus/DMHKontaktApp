@@ -117,7 +117,7 @@ describe("Microsoft365Page Windows account login", () => {
     render(<Microsoft365Page />);
     await userEvent.click(await screen.findByRole("button", { name: "Mit Microsoft 365 verbinden" }));
     const alert = await screen.findByRole("alert");
-    expect(alert).toHaveTextContent("Bitte erneut verbinden");
+    expect(alert).toHaveTextContent("Bitte die EDV kontaktieren");
     expect(alert).not.toHaveTextContent("AADSTS");
     expect(screen.queryByText(/private server detail/)).toBeNull();
     await userEvent.click(screen.getByRole("button", { name: "Mit Microsoft 365 verbinden" }));
@@ -149,6 +149,18 @@ describe("Microsoft365Page Windows account login", () => {
     await userEvent.click(await screen.findByRole("button",{name:"Mit Microsoft 365 verbinden"}));
     await waitFor(()=>expect(reports.finishProcedureReport).toHaveBeenCalledWith(expect.any(Object),"error",expect.stringContaining("Windows broker unavailable")));
     expect(reports.finishProcedureReport.mock.calls.some(([,state])=>state==="success")).toBe(false);
+  });
+  it.each(["invalid_grant/AADSTS50076", "office_identity_read_failed", "office_account_ambiguous"])("reports silent sign-in failure %s without opening another login", async (code) => {
+    db.connectMicrosoft365WithWindowsAccount.mockRejectedValueOnce(new Error(`[WAM: ${code}]`));
+    render(<Microsoft365Page />);
+    await userEvent.click(await screen.findByRole("button", { name: "Mit Microsoft 365 verbinden" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(screen.getByRole("alert")).toHaveTextContent("kein Kennwort eingeben");
+    expect(db.connectMicrosoft365Interactively).not.toHaveBeenCalled();
+    expect(db.startMicrosoft365Connection).not.toHaveBeenCalled();
+    expect(screen.queryByRole("button", { name: "Anmeldung mit Code verwenden" })).toBeNull();
+    expect(reports.finishProcedureReport).toHaveBeenCalledWith(expect.any(Object), "error", expect.stringContaining(code));
+    expect(reports.finishProcedureReport.mock.calls.some(([, state]) => state === "success")).toBe(false);
   });
   it("reports a post-login setup failure as error rather than early success",async()=>{
     vi.mocked(enableCompleteAutomaticMicrosoft365Sync).mockRejectedValueOnce(new Error("3 Kalender nicht erreichbar"));

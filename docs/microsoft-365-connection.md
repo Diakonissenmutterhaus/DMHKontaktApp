@@ -4,14 +4,20 @@ Die App verbindet ein dienstliches Microsoft-365-Konto unter:
 
 `M365 Anmeldung → Mit Microsoft 365 verbinden`
 
-Der Standardweg versucht zuerst, das bereits mit Windows verbundene
-Geschäftskonto über Microsoft MSAL/WAM ohne Kennworteingabe zu verwenden.
-Wenn die Microsoft-Richtlinien eine Bestätigung verlangen, das Konto nicht
-verfügbar ist oder Windows bei mehreren Konten keine Standardidentität bestimmen kann, öffnet
-die App die offizielle Microsoft-Anmeldung zur Auswahl/Bestätigung. Wenn WAM
-nicht verfügbar ist, bleibt der Browser-Login mit PKCE als Alternative. Mit
-**Anderes Konto verwenden** lässt sich diese Auswahl direkt öffnen.
-Ein Gerätecode bleibt als Alternative nach fehlgeschlagener Anmeldung erhalten.
+Der Standardweg verwendet ausschließlich stille MSAL/WAM-Anmeldung. Eindeutige
+Office-Identitätsmetadaten helfen bei der Kontoauswahl; sie sind kein Nachweis
+für eine gültige Sitzung. Eine zurückgegebene Identität muss zum Hinweis passen.
+Mehrere Adressen innerhalb derselben gespeicherten Office-Identität gelten als
+Aliase dieses Kontos. Unterschiedliche Identitäten werden nicht allein wegen
+übereinstimmender Adressen zusammengelegt. Schlägt das Lesen von Office-Daten
+teilweise fehl, wird keine Kontoauswahl anhand der unvollständigen Daten
+getroffen; der Bericht enthält `office_identity_read_failed`. Tatsächlich
+fehlende Office-Einträge erlauben weiterhin die stille Windows-Kontoauswahl.
+Nach einem veralteten Cache-Eintrag wird zusätzlich die Windows-Standardsitzung
+still geprüft. Bei fehlender Freigabe öffnet sich kein Kennwortfenster: Die App
+zeigt einen EDV-Hinweis und erfasst den WAM/AADSTS-Code im Verfahrensbericht.
+**Anderes Konto verwenden** startet nur nach gesondertem Klick den Browser-Login
+mit PKCE. Der Gerätecode wird erst nach fehlgeschlagener manueller Anmeldung angeboten.
 
 Die App setzt kein Kennwort zurück, meldet keine anderen Microsoft-Apps ab und
 umgeht keine MFA-, Einwilligungs- oder Conditional-Access-Anforderung. Ein
@@ -156,8 +162,7 @@ Office-Zugangsdaten ausgelesen oder verändert.
   WAM-Verfügbarkeit prüfen, erneut versuchen; bei dauerhaftem Problem erneut
   verbinden. Vorübergehende Ausfälle löschen die bestehende Verbindung nicht.
 - Technische WAM-Codes bleiben in der EDV-Historie; Benutzer erhalten bei
-  fehlgeschlagenem Verbinden einen kurzen Hinweis zum erneuten Versuch oder
-  zur Auswahl eines anderen Kontos.
+  fehlgeschlagenem automatischen Verbinden einen kurzen Hinweis auf die EDV.
 
 ## Prüfungen
 

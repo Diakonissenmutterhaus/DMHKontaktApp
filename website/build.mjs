@@ -13,9 +13,8 @@ for (const path of paths) {
 }
 if (process.env.REPORTING_SITE_ONLY === '1') {
   await cp(resolve(root, 'migration'), output, { recursive: true });
-  // Temporary reuse of the existing guide, explicitly requested by EDV.
-  // Copy only the web video and its poster, not unrelated downloads.
+  // Copy the migration tutorial without unrelated downloads.
   await mkdir(resolve(output, 'media'), { recursive: true });
-  await cp(resolve(root, 'media/dmh-backup-anleitung-web.mp4'), resolve(output, 'media/dmh-backup-anleitung-web.mp4'));
+  await cp(resolve(root, 'media/migration-anleitung.mp4'), resolve(output, 'media/migration-anleitung.mp4'));
   await cp(resolve(root, 'assets/kurzanleitung.png'), resolve(output, 'assets/kurzanleitung.png'));
 }

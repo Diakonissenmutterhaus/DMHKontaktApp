@@ -15,19 +15,26 @@ internal static class Program
     static readonly JsonSerializerOptions JsonOptions = new() { PropertyNamingPolicy = JsonNamingPolicy.CamelCase, PropertyNameCaseInsensitive = true };
 
     // Never choose the first account from a list. Renewal is pinned to the
-    // original account; ambiguity uses only Windows' own default identity.
-    internal static IAccount? SelectAccount(IAccount[] accounts, string tenantId, string? homeAccountId, string? loginHint = null)
+    // original account; conflicting identities matching Office aliases are rejected.
+    internal static IAccount? SelectAccount(IAccount[] accounts, string tenantId, string? homeAccountId, string[]? loginHints = null)
     {
         var unique = accounts.DistinctBy(account => account.HomeAccountId.Identifier).ToArray();
         if (!string.IsNullOrEmpty(homeAccountId))
             return unique.SingleOrDefault(account => account.HomeAccountId.Identifier == homeAccountId);
         var matching = unique.Where(account => string.Equals(account.HomeAccountId.TenantId, tenantId, StringComparison.OrdinalIgnoreCase)).ToArray();
-        if (!string.IsNullOrEmpty(loginHint)) {
-            var known = matching.Where(account => account.Username.Equals(loginHint, StringComparison.OrdinalIgnoreCase)).ToArray();
+        if (loginHints is { Length: > 0 }) {
+            var known = unique.Where(account => loginHints.Contains(account.Username, StringComparer.OrdinalIgnoreCase)).ToArray();
             if (known.Length == 1) return known[0];
+            // Conflicting broker identities must not be hidden by a Windows-default fallback.
+            return known.Length == 0 ? PublicClientApplication.OperatingSystemAccount : null;
         }
         return matching.Length == 1 ? matching[0] : PublicClientApplication.OperatingSystemAccount;
     }
+
+    internal static bool IdentityMatches(IAccount? account, string? pinned, string[]? hints) =>
+        account is not null && !string.IsNullOrEmpty(account.HomeAccountId.Identifier)
+        && (string.IsNullOrEmpty(pinned) || account.HomeAccountId.Identifier == pinned)
+        && (hints is not { Length: > 0 } || hints.Contains(account.Username, StringComparer.OrdinalIgnoreCase));
 
     static async Task<Response> Acquire(Request request)
     {
@@ -42,23 +49,26 @@ internal static class Program
             })
             .WithParentActivityOrWindow(() => new IntPtr(request.WindowHandle))
             .Build();
-        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(request.AllowInteractive ? 240 : 45));
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(45));
+        var selection = string.IsNullOrEmpty(request.HomeAccountId)
+            ? OfficeIdentity.Select(OfficeIdentity.Read(), request.LoginHint)
+            : new OfficeIdentity.Selection([]);
+        if (selection.ErrorCode is { } errorCode) return new("interaction_required", ErrorCode: errorCode);
         var accounts = (await app.GetAccountsAsync().WaitAsync(timeout.Token)).ToArray();
-        var account = SelectAccount(accounts, request.TenantId, request.HomeAccountId, request.LoginHint);
+        var account = SelectAccount(accounts, request.TenantId, request.HomeAccountId, selection.Aliases);
         if (account is null) return new("interaction_required", ErrorCode: "account_selection");
+        var expectedAliases = selection.Aliases.Length > 0 ? selection.Aliases
+            : ReferenceEquals(account, PublicClientApplication.OperatingSystemAccount) ? [] : new[] { account.Username };
         AuthenticationResult result;
         try { result = await app.AcquireTokenSilent(request.Scopes, account).ExecuteAsync(timeout.Token); }
-        catch (MsalUiRequiredException) when (request.AllowInteractive && request.WindowHandle != 0 && string.IsNullOrEmpty(request.HomeAccountId)) {
-            // Only an explicit Connect click permits Microsoft's account
-            // selection / policy confirmation. Never during renewal.
-            var interactive = app.AcquireTokenInteractive(request.Scopes);
-            if (ReferenceEquals(account, PublicClientApplication.OperatingSystemAccount))
-                interactive = interactive.WithPrompt(Prompt.SelectAccount);
-            else interactive = interactive.WithAccount(account);
-            result = await interactive.ExecuteAsync(timeout.Token);
+        catch (MsalUiRequiredException) when (string.IsNullOrEmpty(request.HomeAccountId)
+            && !ReferenceEquals(account, PublicClientApplication.OperatingSystemAccount)) {
+            // A cached app account may be stale while Windows still has an SSO session.
+            // This second attempt is silent as well; never open a password dialog here.
+            result = await app.AcquireTokenSilent(request.Scopes, PublicClientApplication.OperatingSystemAccount)
+                .ExecuteAsync(timeout.Token);
         }
-        if (result.Account is null || string.IsNullOrEmpty(result.Account.HomeAccountId.Identifier)
-            || (!string.IsNullOrEmpty(request.HomeAccountId) && result.Account.HomeAccountId.Identifier != request.HomeAccountId))
+        if (!IdentityMatches(result.Account, request.HomeAccountId, expectedAliases))
             return new("interaction_required", ErrorCode: "account_mismatch");
         return new("connected", result.AccessToken, result.Account.HomeAccountId.Identifier,
             Math.Max(0, (long)(result.ExpiresOn - DateTimeOffset.UtcNow).TotalSeconds));

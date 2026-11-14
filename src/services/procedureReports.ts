@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import { captureSupportDiagnostic } from "./supportDiagnostics";
+import { captureSupportDiagnostic, sanitizeSupportLog } from "./supportDiagnostics";
 type Report = { attemptId: string; procedure: "m365_login" | "outlook_exchange" | "m365_sync" | "diagnostics"; sequence: number; done: boolean };
 // Report delivery must never mask or replace the original procedure result.
 const pendingKey = "dmh.procedure-report-retry.v1";
@@ -19,7 +19,7 @@ async function retryPending() {
   try { await retrying; } finally { retrying=null; }
 }
 const send = async (event: Record<string, unknown>) => {
-  pending.set(String(event.eventId), {...event,accountEmail:typeof event.accountEmail === "string" ? event.accountEmail : "",occurredAt:new Date().toISOString()});
+  pending.set(String(event.eventId), {...event,accountEmail:typeof event.accountEmail === "string" ? event.accountEmail : "",occurredAt:event.occurredAt ?? new Date().toISOString()});
   savePending();
   await retryPending();
   window.dispatchEvent(new Event("dmh:procedure-reports-changed"));
@@ -35,10 +35,17 @@ export async function beginProcedureReport(procedure: Report["procedure"], accou
 export async function finishProcedureReport(report: Report | null, status: "success" | "error" | "cancelled" | "interrupted", message = "", accountEmail = "", profile = "", stage = status === "interrupted" ? "timeout" : "error") {
   if (!report || report.done) return;
   report.done = true;
-  if ((status === "error" || status === "interrupted") && (report.procedure === "m365_login" || report.procedure === "outlook_exchange")) {
-    captureSupportDiagnostic({ attemptId: report.attemptId, procedure: report.procedure, stage, message });
+  const event = { eventId: crypto.randomUUID(), attemptId: report.attemptId, sequence: ++report.sequence, procedure: report.procedure, status, accountEmail, step: status === "success" ? "Abschluss bestätigt" : "Abschluss nicht bestätigt", message: sanitizeReportMessage(message), profile, occurredAt: new Date().toISOString() };
+  await send(event);
+  if ((status === "error" || status === "interrupted") && report.procedure !== "diagnostics") {
+    // Enrich the same attempt, preserving its outcome, occurrence time and attempt count.
+    // Persist the result before collecting the slower environment snapshot.
+    void captureSupportDiagnostic({ attemptId: report.attemptId, procedure: report.procedure, stage, message }).then(async (diagnostic) => {
+      if (!diagnostic) return;
+      await send({ ...event, eventId: crypto.randomUUID(), sequence: event.sequence + 1,
+        diagnostic: { code: diagnostic.code, text: sanitizeSupportLog(diagnostic.text) } });
+    }).catch(() => undefined);
   }
-  await send({ eventId: crypto.randomUUID(), attemptId: report.attemptId, sequence: ++report.sequence, procedure: report.procedure, status, accountEmail, step: status === "success" ? "Abschluss bestätigt" : "Abschluss nicht bestätigt", message: sanitizeReportMessage(message), profile });
 }
 export function startReportDelivery() {
   const flush = () => { void retryPending().then(()=>invoke("flush_procedure_reports")).catch(() => undefined); };
@@ -51,7 +58,11 @@ export function startReportDelivery() {
         && Number.isInteger(entry.sequence) && entry.sequence>=0 && entry.sequence<=10000
         && ["accountEmail","step","message","profile","occurredAt"].every(key=>typeof entry[key] === "string")
         && entry.message.length<=1800 && entry.accountEmail.length<=300 && entry.step.length<=200 && entry.profile.length<=200
-        && Number.isFinite(Date.parse(entry.occurredAt))) pending.set(entry.eventId, {...entry,message:sanitizeReportMessage(entry.message)});
+        && Number.isFinite(Date.parse(entry.occurredAt))
+        && (entry.diagnostic == null || (typeof entry.diagnostic.code === "string" && /^DMH-[A-Z0-9-]{1,60}$/.test(entry.diagnostic.code)
+          && typeof entry.diagnostic.text === "string" && entry.diagnostic.text.length <= 60_000)))
+        pending.set(entry.eventId, {...entry,message:sanitizeReportMessage(entry.message),
+          ...(entry.diagnostic ? { diagnostic: { code: entry.diagnostic.code, text: sanitizeSupportLog(entry.diagnostic.text) } } : {})});
     }
   } catch { /* Existing native outbox remains independent of this fallback. */ }
   flush(); const timer = window.setInterval(flush, 60_000); window.addEventListener("online", flush);
@@ -61,7 +72,9 @@ export function startReportDelivery() {
 // Synchronization errors are distinct from authentication and Exchange-profile setup.
 let syncFailure = "";
 let syncFailureAt = 0;
-export async function reportSynchronizationFailure(message: string, accountEmail = "") {
+export async function reportSynchronizationFailure(message: string, accountEmail = "", onlyIfNoFailureSince?: number) {
+  // A generic post-login fallback must not replace the detailed failure already reported by that sync cycle.
+  if (onlyIfNoFailureSince !== undefined && syncFailure && syncFailureAt >= onlyIfNoFailureSince) return;
   const detail=sanitizeReportMessage(message), key=`${accountEmail}:${detail}`;
   if (syncFailure === key && Date.now()-syncFailureAt<15*60_000) return;
   syncFailure=key;syncFailureAt=Date.now();

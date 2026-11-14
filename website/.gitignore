@@ -3,5 +3,6 @@
 media/dmh-backup-anleitung.mp4
 .vercel/
 .env*
+!.env.supabase.example
 node_modules/
 public/

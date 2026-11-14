@@ -58,6 +58,7 @@ internal static class SelfTests
         Check(Program.VerifyWorkAccount([wrongTenant, second], verification).Status == "account_verified");
         Check(Program.VerifyWorkAccount([first, second], verification with { AccountAliases = [first.Username, second.Username] }).ErrorCode == "windows_work_account_ambiguous");
         OfficeIdentityTests.Run(Check);
+        WindowsWorkIdentityTests.Run(Check);
         Console.WriteLine($"{checks} WAM identity/read-failure/redaction checks passed.");
     }
 }

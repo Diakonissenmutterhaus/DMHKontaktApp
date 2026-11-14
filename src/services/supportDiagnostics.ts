@@ -1,9 +1,8 @@
 import { invoke } from "@tauri-apps/api/core";
 
-export const supportDiagnosticEvent = "dmh:support-diagnostic";
 export interface SupportDiagnosticRequest {
   attemptId: string;
-  procedure: "m365_login" | "outlook_exchange";
+  procedure: "m365_login" | "outlook_exchange" | "m365_sync";
   stage: string;
   message: string;
 }
@@ -14,32 +13,26 @@ export interface SupportDiagnosticReport {
   localPath: string | null;
   saveError: string | null;
 }
-export interface SupportDiagnosticState {
-  request: SupportDiagnosticRequest;
-  loading: boolean;
-  report?: SupportDiagnosticReport;
-  collectionError?: string;
-}
-let current: SupportDiagnosticState | null = null;
 const captured = new Set<string>();
 const sanitize = (message: string) => /bearer\s|access_token|refresh_token|id_token|client_secret|password|passwort|kennwort|authorization|eyJ/i.test(message)
   ? "Technische Meldung enthält möglicherweise Zugangsdaten und wurde ausgeblendet." : message.slice(0, 12000);
 
-export const getSupportDiagnostic = () => current;
-function publish(value: SupportDiagnosticState) {
-  current = value;
-  window.dispatchEvent(new Event(supportDiagnosticEvent));
-}
-export function captureSupportDiagnostic(request: SupportDiagnosticRequest) {
+export async function captureSupportDiagnostic(request: SupportDiagnosticRequest): Promise<SupportDiagnosticReport | undefined> {
   if (import.meta.env.VITE_DMH_SUPPORT_DIAGNOSTICS !== "true" || captured.has(request.attemptId)) return;
   captured.add(request.attemptId);
   if (captured.size > 100) captured.delete(captured.values().next().value!);
   const safeRequest = { ...request, message: sanitize(request.message) };
-  publish({ request: safeRequest, loading: true });
-  // No network, retries, auth calls or migration calls. Native collection has a timeout.
-  void invoke<SupportDiagnosticReport>("collect_support_diagnostic", { request: safeRequest }).then((report) => {
-    if (current?.request.attemptId === request.attemptId) publish({ request: safeRequest, loading: false, report });
-  }).catch((error: unknown) => {
-    if (current?.request.attemptId === request.attemptId) publish({ request: safeRequest, loading: false, collectionError: sanitize(String(error)) });
-  });
+  // No authentication/migration retries. Delivery uses the durable reporting queue.
+  try {
+    const report = await invoke<SupportDiagnosticReport>("collect_support_diagnostic", { request: safeRequest });
+    return report;
+  } catch (error: unknown) {
+    return { code: "DMH-DIAGNOSE-UNVOLLSTAENDIG", fileName: "", localPath: null, saveError: null,
+      text: `Versuch: ${request.attemptId}\nVorgang: ${request.procedure}\nSchritt: ${request.stage}\nMeldung: ${safeRequest.message}\nDiagnose: ${sanitize(String(error))}` };
+  }
 }
+
+export const sanitizeSupportLog = (text: string) => {
+  const safe = text.slice(0, 60_000).split(/\r?\n/).map(sanitize).join("\n");
+  return text.length > 60_000 || safe.length > 60_000 ? `${safe.slice(0, 59_900)}\n[Protokoll gekürzt; vollständige Kopie lokal gespeichert.]` : safe;
+};

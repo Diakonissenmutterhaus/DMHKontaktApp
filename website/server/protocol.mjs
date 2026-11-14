@@ -25,12 +25,21 @@ export function redact(value) {
     .slice(0, 1800);
 }
 function text(value, limit) { return typeof value === 'string' ? value.replace(/[\u0000-\u001f]/g, ' ').slice(0, limit).trim() : ''; }
+export function validateDiagnostic(input) {
+  if (input == null) return undefined;
+  if (typeof input !== 'object' || Array.isArray(input) || typeof input.code !== 'string' || !/^DMH-[A-Z0-9-]{1,60}$/.test(input.code) || typeof input.text !== 'string' || input.text.length > 60000) throw new Error('Ungültiger Diagnosebericht.');
+  const text = input.text.split(/\r?\n/).map(line => /bearer\s|access_token|refresh_token|id_token|client_secret|password|passwort|kennwort|authorization|eyJ|otpauth/i.test(line)
+    ? '[Zugangsdaten entfernt]' : line).join('\n').replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f]/g, '');
+  return { code: input.code, text };
+}
 export function validateEvent(input, deviceId) {
   if (!input || !uuid(input.eventId) || !uuid(input.attemptId) || !['m365_login', 'outlook_exchange', 'm365_sync', 'diagnostics'].includes(input.procedure)
     || !['running', 'success', 'error', 'cancelled', 'interrupted'].includes(input.status)
     || !Number.isSafeInteger(input.sequence) || input.sequence < 0 || input.sequence > 10000
     || !Number.isFinite(Date.parse(input.occurredAt))) throw new Error('Ungültiger Bericht.');
+  const diagnostic = validateDiagnostic(input.diagnostic);
   return { schemaVersion: 1, deviceId, eventId: input.eventId, attemptId: input.attemptId, sequence: input.sequence,
+    ...(diagnostic ? { diagnostic } : {}),
     procedure: input.procedure, status: input.status, occurredAt: new Date(input.occurredAt).toISOString(), receivedAt: new Date().toISOString(),
     computer: text(input.computer, 100), windowsUser: text(input.windowsUser, 150), accountEmail: text(input.accountEmail, 250),
     appVersion: text(input.appVersion, 30), step: text(input.step, 120), message: redact(input.message), profile: text(input.profile, 100) };

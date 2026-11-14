@@ -1148,9 +1148,10 @@ test("M365 mostra janela antes de consultar o PC e mantém progresso durante tod
   await page.evaluate(() => (window as any).__DMH_FINISH_SETUP__());
   await expect.poll(() => page.evaluate(() => typeof (window as any).__DMH_FINISH_REFRESH__)).toBe("function");
   await expect(progress).toBeVisible();
-  await expect(page.getByText("Exchange eingerichtet.", { exact: true })).toHaveCount(0);
+  const success = page.getByText("Outlook wurde erfolgreich auf Exchange umgestellt. Ihr Exchange-Profil ist als Standard eingerichtet.", { exact: true });
+  await expect(success).toHaveCount(0);
   await page.evaluate(() => (window as any).__DMH_FINISH_REFRESH__());
-  await expect(page.getByText("Exchange eingerichtet.", { exact: true })).toBeVisible();
+  await expect(success).toBeVisible();
   await expect(page.getByRole("dialog")).toHaveCount(0);
   await expect(page.getByText("Standardprofil:", { exact: false })).toContainText("Profile Exchange");
 });
@@ -1205,7 +1206,7 @@ test("M365 mantém carregamento após login até terminar a última consulta do 
     w.__RELEASE_M365_SOURCES__();
   });
   // Sources and the first sync have settled, but Outlook is still deliberately held.
-  await expect(page.getByText("nicht vollständig geladen", { exact: false })).toHaveCount(1);
+  await expect(page.getByText("nicht vollständig geladen", { exact: false })).toHaveCount(0);
   await expect(loading).toBeVisible();
   expect(await page.evaluate(() => (window as any).__M365_LOADING_REMOVED__)).toBe(false);
   await page.screenshot({ path: testInfo.outputPath("m365-connection-loading.png") });

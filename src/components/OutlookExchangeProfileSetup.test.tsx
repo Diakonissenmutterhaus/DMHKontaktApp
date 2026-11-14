@@ -28,6 +28,8 @@ const waiting: OutlookExchangeSetupStatus = {
   message: "Das neue Profil ist vorbereitet. Bitte die Anmeldung in Outlook abschließen."
 };
 const completed: OutlookExchangeSetupStatus = { ...waiting, stage: "complete", message: "Outlook ist mit Exchange verbunden. Profile Exchange ist das Standardprofil." };
+const successMessage = "Outlook wurde erfolgreich auf Exchange umgestellt. Ihr Exchange-Profil ist als Standard eingerichtet.";
+const failureMessage = "Die automatische Einrichtung konnte nicht abgeschlossen werden. Bitte wenden Sie sich an die EDV. Ihr bisheriges Outlook-Profil bleibt erhalten.";
 const progressMessage = "Wird eingerichtet. Bitte warten und die Anwendung nicht schließen.";
 
 async function clickButton(name: string | RegExp) {
@@ -66,9 +68,9 @@ describe("Outlook Exchange profile setup", () => {
     db.prepareOutlookExchangeProfile.mockRejectedValueOnce("OUTLOOK_HELPER_TIMEOUT: powershell.exe; Zeitlimit 25s");
     render(<OutlookExchangeProfileSetup email={email} />);
     await clickButton("Zu Exchange wechseln");
-    expect(screen.getByRole("alert")).toHaveTextContent("Bitte wenden Sie sich an die EDV");
+    expect(screen.getByText(failureMessage)).toBeVisible();
     expect(screen.queryByText(/OUTLOOK_HELPER_TIMEOUT|Anmeldefenster/)).toBeNull();
-    expect(screen.queryByText(completed.message)).toBeNull();
+    expect(screen.queryByText(successMessage)).toBeNull();
     expect(db.completeOutlookExchangeProfile).not.toHaveBeenCalled();
   });
 
@@ -85,10 +87,10 @@ describe("Outlook Exchange profile setup", () => {
     expect(db.completeOutlookExchangeProfile).toHaveBeenCalledTimes(1);
     expect(db.getOutlookAccountConfiguration).toHaveBeenCalledTimes(2);
     expect(screen.getByRole("dialog")).toBe(loading);
-    expect(screen.queryByText(completed.message)).toBeNull();
+    expect(screen.queryByText(successMessage)).toBeNull();
     await act(async () => finishRefresh({ ...oldConfiguration, profile: "Profile Exchange", defaultProfile: "Profile Exchange" }));
     expect(screen.queryByRole("dialog")).toBeNull();
-    expect(screen.getByText(completed.message)).toBeVisible();
+    expect(screen.getByText(successMessage)).toBeVisible();
     expect(screen.getByText(/Standardprofil:/)).toHaveTextContent("Profile Exchange");
   });
 
@@ -109,7 +111,7 @@ describe("Outlook Exchange profile setup", () => {
     expect(screen.getByRole("progressbar")).toHaveAttribute("value", "2");
     await act(async () => resolvePrepare({ ...waiting, stage: "outlook_open", message: "Entwurf speichern." }));
     expect(screen.queryByRole("dialog")).toBeNull();
-    expect(screen.getByText("Entwurf speichern.")).toBeVisible();
+    expect(screen.getByText(failureMessage)).toBeVisible();
   });
   it("shows an actionable error without creating a profile when Office and DMH differ", async () => {
     db.getOutlookOfficeAccountCheck.mockResolvedValue({ dmhEmail: email, dmhEmails: [email], accounts: [{ email: "employee@example.test", displayName: "Employee" }], suggestedEmail: "employee@example.test", readSucceeded: true });
@@ -117,7 +119,7 @@ describe("Outlook Exchange profile setup", () => {
     await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Zu Exchange wechseln" })); });
     await act(async () => { await vi.advanceTimersByTimeAsync(40); });
     expect(screen.queryByRole("dialog")).toBeNull();
-    expect(screen.getByRole("alert")).toHaveTextContent("In DMH und Excel muss dasselbe Geschäftskonto");
+    expect(screen.getByText(failureMessage)).toBeVisible();
     expect(screen.queryByRole("button", { name: "Exchange einrichten" })).toBeNull();
     expect(db.prepareOutlookExchangeProfile).not.toHaveBeenCalled();
     expect(db.completeOutlookExchangeProfile).not.toHaveBeenCalled();
@@ -132,7 +134,7 @@ describe("Outlook Exchange profile setup", () => {
     db.getOutlookOfficeAccountCheck.mockResolvedValue({ dmhEmail: email, dmhEmails: [email], ...metadata });
     render(<OutlookExchangeProfileSetup email={email} />);
     await clickButton("Zu Exchange wechseln");
-    expect(screen.getByRole("alert")).toBeVisible();
+    expect(screen.getByText(failureMessage)).toBeVisible();
     expect(screen.queryByRole("dialog")).toBeNull();
     expect(db.prepareOutlookExchangeProfile).not.toHaveBeenCalled();
   });
@@ -161,7 +163,7 @@ describe("Outlook Exchange profile setup", () => {
     await act(async () => { resolveComplete(completed); });
     expect(screen.queryByRole("dialog")).toBeNull();
     expect(view.container).not.toHaveAttribute("inert");
-    expect(screen.getByText(completed.message)).toBeVisible();
+    expect(screen.getByText(successMessage)).toBeVisible();
   });
 
   it("does not tell an already signed-in Excel user to log in when metadata is missing", async () => {
@@ -171,8 +173,8 @@ describe("Outlook Exchange profile setup", () => {
     });
     render(<OutlookExchangeProfileSetup email={email} />);
     await clickButton("Zu Exchange wechseln");
-    expect(screen.getByRole("alert")).toHaveTextContent("nicht eindeutig zugeordnet");
-    expect(screen.getByRole("alert")).not.toHaveTextContent(/anmelden|Registry32|OFFICE_ACCOUNT_NOT_DETECTED/);
+    expect(screen.getByText(failureMessage)).toBeVisible();
+    expect(screen.getByText(failureMessage)).not.toHaveTextContent(/anmelden|Registry32|OFFICE_ACCOUNT_NOT_DETECTED/);
     expect(db.prepareOutlookExchangeProfile).not.toHaveBeenCalled();
     const failure = native.invoke.mock.calls.find(([command, args]) => command === "record_procedure_report" && args.event.status === "error")?.[1].event;
     expect(failure).toMatchObject({ procedure: "outlook_exchange", accountEmail: email, status: "error" });
@@ -206,15 +208,15 @@ describe("Outlook Exchange profile setup", () => {
     render(<OutlookExchangeProfileSetup email={email} />);
     await clickButton("Zu Exchange wechseln");
     expect(db.prepareOutlookExchangeProfile).not.toHaveBeenCalled();
-    expect(screen.getByRole("alert")).toBeVisible();
+    expect(screen.getByText(failureMessage)).toBeVisible();
   });
 
   it("keeps native recheck diagnostics in the EDV report without showing technical details", async () => {
     db.prepareOutlookExchangeProfile.mockRejectedValueOnce('OFFICE_ACCOUNT_NOT_DETECTED: {"readSucceeded":false,"accountCount":1}');
     render(<OutlookExchangeProfileSetup email={email} />);
     await clickButton("Zu Exchange wechseln");
-    expect(screen.getByRole("alert")).toHaveTextContent("nicht eindeutig zugeordnet");
-    expect(screen.getByRole("alert")).not.toHaveTextContent(/OFFICE_ACCOUNT_NOT_DETECTED|readSucceeded|anmelden/);
+    expect(screen.getByText(failureMessage)).toBeVisible();
+    expect(screen.getByText(failureMessage)).not.toHaveTextContent(/OFFICE_ACCOUNT_NOT_DETECTED|readSucceeded|anmelden/);
     expect(db.completeOutlookExchangeProfile).not.toHaveBeenCalled();
     const failure = native.invoke.mock.calls.find(([command, args]) => command === "record_procedure_report" && args.event.status === "error")?.[1].event;
     expect(failure?.message).toContain('"readSucceeded":false');
@@ -239,18 +241,18 @@ describe("Outlook Exchange profile setup", () => {
     await act(async () => { await vi.advanceTimersByTimeAsync(4_000); });
     expect(screen.getByText(progressMessage)).toBeVisible();
     expect(screen.queryByText(closing.message)).toBeNull();
-    expect(screen.queryByText(completed.message)).toBeNull();
+    expect(screen.queryByText(successMessage)).toBeNull();
     expect(screen.queryByText(/Bitte die Einrichtung im geöffneten Outlook abschließen/)).toBeNull();
     db.getOutlookExchangeSetupStatus.mockResolvedValue(closing);
     await act(async () => { await vi.advanceTimersByTimeAsync(4_000); });
-    expect(screen.getByText(completed.message)).toBeVisible();
+    expect(screen.getByText(successMessage)).toBeVisible();
     expect(db.completeOutlookExchangeProfile).toHaveBeenCalledTimes(2);
   });
   it("restores a completed compact view without repeating login or activation", async () => {
     db.getOutlookExchangeSetupStatus.mockResolvedValue(completed);
     render(<OutlookExchangeProfileSetup email={email} compact leadingAction={<button>Synchronisieren</button>} />);
     await act(async () => {});
-    expect(screen.getByText(completed.message)).toBeVisible();
+    expect(screen.getByText(successMessage)).toBeVisible();
     expect(screen.queryByRole("heading", { name: "Outlook auf Exchange umstellen" })).toBeNull();
     expect(screen.queryByText(/Bitte die Einrichtung im geöffneten Outlook/)).toBeNull();
     expect(screen.getByRole("button", { name: "Synchronisieren" })).toBeVisible();
@@ -269,7 +271,7 @@ describe("Outlook Exchange profile setup", () => {
     expect(screen.queryByText(/Bitte die Einrichtung im geöffneten Outlook/)).toBeNull();
     expect(screen.queryByRole("button")).toBeNull();
     await act(async () => { resolveComplete(completed); });
-    expect(screen.getByText(completed.message)).toBeVisible();
+    expect(screen.getByText(successMessage)).toBeVisible();
     expect(screen.queryByRole("heading")).toBeNull();
   });
 
@@ -286,7 +288,7 @@ describe("Outlook Exchange profile setup", () => {
     db.prepareOutlookExchangeProfile.mockResolvedValueOnce({ ...waiting, stage: "outlook_open", message: "Outlook ist noch geöffnet." });
     render(<OutlookExchangeProfileSetup email={email} />);
     await clickButton("Zu Exchange wechseln");
-    expect(screen.getByText("Outlook ist noch geöffnet.")).toBeVisible();
+    expect(screen.getByText(failureMessage)).toBeVisible();
     expect(db.completeOutlookExchangeProfile).not.toHaveBeenCalled();
     await clickButton("Erneut versuchen");
     expect(db.prepareOutlookExchangeProfile).toHaveBeenCalledTimes(2);
@@ -298,14 +300,14 @@ describe("Outlook Exchange profile setup", () => {
     render(<OutlookExchangeProfileSetup email={email} />);
     await clickButton("Zu Exchange wechseln");
     expect(db.prepareOutlookExchangeProfile).toHaveBeenCalledWith(email);
-    expect(screen.queryByText(completed.message)).toBeNull();
+    expect(screen.queryByText(successMessage)).toBeNull();
     await act(async () => { await vi.advanceTimersByTimeAsync(4_000); });
     expect(db.getOutlookExchangeSetupStatus).toHaveBeenCalledTimes(2);
     expect(db.completeOutlookExchangeProfile).not.toHaveBeenCalled();
     db.getOutlookExchangeSetupStatus.mockResolvedValue({ ...waiting, stage: "connected" });
     await act(async () => { await vi.advanceTimersByTimeAsync(4_000); });
     expect(db.completeOutlookExchangeProfile).toHaveBeenCalledWith();
-    expect(screen.getByText(completed.message)).toBeVisible();
+    expect(screen.getByText(successMessage)).toBeVisible();
     expect(screen.queryByRole("button")).toBeNull();
   });
 
@@ -315,11 +317,11 @@ describe("Outlook Exchange profile setup", () => {
     render(<OutlookExchangeProfileSetup email={email} />);
     await clickButton("Zu Exchange wechseln");
     await act(async () => { await vi.advanceTimersByTimeAsync(4_000); });
-    expect(screen.getByRole("alert")).toHaveTextContent("Bitte erneut versuchen");
+    expect(screen.getByText(failureMessage)).toBeVisible();
     expect(screen.queryByRole("dialog")).toBeNull();
-    expect(screen.queryByText(completed.message)).toBeNull();
+    expect(screen.queryByText(successMessage)).toBeNull();
     await clickButton("Einrichtung abschließen");
-    expect(screen.getByText(completed.message)).toBeVisible();
+    expect(screen.getByText(successMessage)).toBeVisible();
     expect(screen.queryByRole("alert")).toBeNull();
   });
 
@@ -354,7 +356,7 @@ describe("Outlook Exchange profile setup", () => {
     db.prepareOutlookExchangeProfile.mockResolvedValue({ ...waiting, stage: "connected", email: "other@example.test" });
     render(<OutlookExchangeProfileSetup email={email} />);
     await clickButton("Zu Exchange wechseln");
-    expect(screen.getByRole("alert")).toHaveTextContent("Microsoft-365-Konto wurde geändert");
+    expect(screen.getByText(failureMessage)).toBeVisible();
     expect(db.completeOutlookExchangeProfile).not.toHaveBeenCalled();
   });
 
@@ -364,11 +366,11 @@ describe("Outlook Exchange profile setup", () => {
     render(<OutlookExchangeProfileSetup email={email} />);
     await clickButton("Zu Exchange wechseln");
     await act(async () => { await vi.advanceTimersByTimeAsync(4_000); });
-    expect(screen.queryByText(completed.message)).toBeNull();
+    expect(screen.queryByText(successMessage)).toBeNull();
     expect(db.completeOutlookExchangeProfile).toHaveBeenCalledTimes(1);
     await act(async () => { await vi.advanceTimersByTimeAsync(4_000); });
     expect(db.completeOutlookExchangeProfile).toHaveBeenCalledTimes(2);
-    expect(screen.getByText(completed.message)).toBeVisible();
+    expect(screen.getByText(successMessage)).toBeVisible();
   });
 
   it("rejects a completion for another account instead of reporting success", async () => {
@@ -377,7 +379,7 @@ describe("Outlook Exchange profile setup", () => {
     render(<OutlookExchangeProfileSetup email={email} />);
     await clickButton("Zu Exchange wechseln");
     await act(async () => { await vi.advanceTimersByTimeAsync(4_000); });
-    expect(screen.getByRole("alert")).toHaveTextContent("Microsoft-365-Konto wurde geändert");
-    expect(screen.queryByText(completed.message)).toBeNull();
+    expect(screen.getByText(failureMessage)).toBeVisible();
+    expect(screen.queryByText(successMessage)).toBeNull();
   });
 });

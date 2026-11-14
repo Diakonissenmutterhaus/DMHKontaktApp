@@ -27,6 +27,37 @@ pub(crate) struct BrokerResponse {
     pub error_code: Option<String>,
     #[serde(default)]
     pub verified_email: Option<String>,
+    #[serde(default)]
+    pub diagnostic: Option<BrokerLoginDiagnostic>,
+}
+
+// Explicit allowlist: never forward the helper's complete response (which can
+// contain an access token) into a support log.
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct BrokerLoginDiagnostic {
+    pub client_id: Option<String>,
+    pub tenant_id: Option<String>,
+    pub stage: Option<String>,
+    pub office_read_complete: Option<bool>,
+    pub office_identity_count: Option<u32>,
+    pub available_account_count: Option<u32>,
+    pub tenant_account_count: Option<u32>,
+    pub windows_registration_read_complete: Option<bool>,
+    pub windows_registration_count: Option<u32>,
+    pub selection_source: String,
+    pub selected_email: Option<String>,
+    #[serde(default)]
+    pub attempts: Vec<BrokerSilentAttempt>,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct BrokerSilentAttempt {
+    pub kind: String,
+    pub status: String,
+    pub error_code: Option<String>,
+    pub correlation_id: Option<String>,
 }
 
 impl Drop for BrokerResponse {
@@ -192,6 +223,27 @@ async fn run_helper(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn login_diagnostic_keeps_both_attempts_without_response_secrets() {
+        let response: BrokerResponse = serde_json::from_value(serde_json::json!({
+            "status":"interaction_required", "accessToken":"outer-secret",
+            "diagnostic": {
+                "selectionSource":"office_metadata", "selectedEmail":"user@example.test",
+                "accessToken":"nested-secret", "attempts":[
+                    {"kind":"office_metadata","status":"failed","errorCode":"consent_required/AADSTS65001","rawMessage":"hidden-message"},
+                    {"kind":"windows_default_fallback","status":"failed","errorCode":"failed_to_acquire_token_silently_from_broker"}
+                ]
+            }
+        })).unwrap();
+        let diagnostic = response.diagnostic.as_ref().unwrap();
+        assert_eq!(diagnostic.attempts.len(), 2);
+        assert_eq!(
+            diagnostic.attempts[0].error_code.as_deref(),
+            Some("consent_required/AADSTS65001")
+        );
+        let text = serde_json::to_string(diagnostic).unwrap();
+        assert!(!text.contains("secret") && !text.contains("hidden-message"));
+    }
     #[test]
     fn renewal_cannot_switch_accounts_or_accept_expired_tokens() {
         let mut response: BrokerResponse = serde_json::from_value(serde_json::json!({

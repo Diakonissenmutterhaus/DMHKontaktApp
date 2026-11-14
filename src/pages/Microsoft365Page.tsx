@@ -49,7 +49,7 @@ import {
   type Microsoft365SynchronizationRuntimeStatus
 } from "../utils/automaticCalendarSync";
 import { enableCompleteAutomaticMicrosoft365Sync } from "../utils/microsoft365SyncConfig";
-import { beginProcedureReport, finishProcedureReport, reportMicrosoft365Failure } from "../services/procedureReports";
+import { beginProcedureReport, finishProcedureReport, reportMicrosoft365Failure, reportSynchronizationFailure } from "../services/procedureReports";
 
 const emptyStatus: Microsoft365ConnectionStatus = {
   configured: false,
@@ -86,7 +86,6 @@ function Microsoft365Content({ title, synchronizeAfterConnection }: Microsoft365
   const [syncPreparing, setSyncPreparing] = useState(false);
   const [overviewLoading, setOverviewLoading] = useState(true);
   const pollingRef = useRef(false);
-  const preparationFailure = useRef("");
   const loginReport = useRef<Awaited<ReturnType<typeof beginProcedureReport>> | null>(null);
 
   const loadSynchronizationOverview = async () => {
@@ -98,9 +97,9 @@ function Microsoft365Content({ title, synchronizeAfterConnection }: Microsoft365
     setSyncRuntimeStatus(parseSynchronizationRuntimeStatus(rawRuntimeStatus));
   };
 
-  const prepareCompleteSynchronization = async (force = false, afterConnection = false): Promise<boolean> => {
+  const prepareCompleteSynchronization = async (force = false, afterConnection = false, email = status?.account?.email || status?.account?.userPrincipalName || ""): Promise<boolean> => {
+    const startedAt = Date.now();
     setSyncPreparing(true);
-    preparationFailure.current = "";
     try {
       const configured = await enableCompleteAutomaticMicrosoft365Sync(force);
       setSyncConfig(configured);
@@ -108,9 +107,8 @@ function Microsoft365Content({ title, synchronizeAfterConnection }: Microsoft365
       if (afterConnection && synchronizeAfterConnection) {
         const outcome = await synchronizeAfterConnection();
         await loadSynchronizationOverview();
-        if (outcome === "error" || outcome === "skipped") {
-          preparationFailure.current = "Microsoft 365 verbunden, aber die anschließende Synchronisierung wurde nicht bestätigt.";
-          setConnectionError("Microsoft 365 ist verbunden. Einige Informationen konnten nicht vollständig geladen werden. Bitte erneut synchronisieren oder die EDV informieren.");
+        if (outcome === "error") {
+          await reportSynchronizationFailure("Synchronisierung nach erfolgreicher Anmeldung nicht bestätigt.", email, startedAt);
           return false;
         }
       } else {
@@ -118,9 +116,7 @@ function Microsoft365Content({ title, synchronizeAfterConnection }: Microsoft365
       }
       return true;
     } catch (error) {
-      preparationFailure.current = error instanceof Error ? error.message : String(error);
-      setMessageType("error");
-      setMessage(`Die automatische Synchronisierung konnte nicht eingerichtet werden: ${error}`);
+      await reportSynchronizationFailure(`Die automatische Synchronisierung konnte nicht eingerichtet werden: ${error}`, email);
       return false;
     } finally {
       setSyncPreparing(false);
@@ -157,7 +153,7 @@ function Microsoft365Content({ title, synchronizeAfterConnection }: Microsoft365
   useEffect(() => {
     const handleAutomaticSync = (event: Event) => {
       const detail = (event as CustomEvent<CalendarAutomaticSyncStatus>).detail;
-      if (detail) {
+      if (detail && detail.state !== "error") {
         setMessageType(detail.state);
         setMessage(detail.message);
       }
@@ -181,12 +177,8 @@ function Microsoft365Content({ title, synchronizeAfterConnection }: Microsoft365
           setDeviceCode(null);
           setBusyAction("connect");
           setStatus({ configured: true, connected: true, account: result.account });
-          const ready = await prepareCompleteSynchronization(true, true);
-          await finishProcedureReport(loginReport.current, ready ? "success" : "error", ready ? "Microsoft-365-Anmeldung und Einrichtung bestätigt." : preparationFailure.current, result.account?.email || result.account?.userPrincipalName || "");
-          if (ready) {
-            setMessageType("success");
-            setMessage("Microsoft 365 wurde verbunden. Kontakte und Kalender werden jetzt automatisch synchronisiert.");
-          }
+          await finishProcedureReport(loginReport.current, "success", "Microsoft-365-Anmeldung bestätigt.", result.account?.email || result.account?.userPrincipalName || "");
+          await prepareCompleteSynchronization(true, true, result.account?.email || result.account?.userPrincipalName || "");
           setBusyAction(null);
           return;
         }
@@ -220,15 +212,10 @@ function Microsoft365Content({ title, synchronizeAfterConnection }: Microsoft365
       await showM365LoadingFrame();
       const account = await (chooseAccount ? connectMicrosoft365Interactively() : connectMicrosoft365WithWindowsAccount());
       setStatus({ configured: true, connected: true, account });
-      const synchronizationReady = await prepareCompleteSynchronization(true, true);
-      await finishProcedureReport(loginReport.current, synchronizationReady ? "success" : "error", synchronizationReady ? "Microsoft-365-Anmeldung und Einrichtung bestätigt." : preparationFailure.current, account.email || account.userPrincipalName || "");
+      // Authentication is confirmed by the native login, independently of calendar hydration.
+      await finishProcedureReport(loginReport.current, "success", "Microsoft-365-Anmeldung bestätigt.", account.email || account.userPrincipalName || "");
+      await prepareCompleteSynchronization(true, true, account.email || account.userPrincipalName || "");
       setShowCodeFallback(false);
-      if (synchronizationReady) {
-        setMessageType("success");
-        setMessage("Microsoft 365 wurde verbunden. Kontakte und Kalender werden jetzt automatisch synchronisiert.");
-      } else {
-        setConnectionError((current) => current || "Microsoft 365 ist verbunden, aber die automatische Synchronisierung konnte nicht eingerichtet werden. Bitte „Automatik einschalten“ wählen oder die EDV informieren.");
-      }
     } catch (error) {
       setShowCodeFallback(chooseAccount);
       await finishProcedureReport(loginReport.current, "error", String(error));

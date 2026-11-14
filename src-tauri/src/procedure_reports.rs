@@ -40,6 +40,35 @@ pub struct Event {
     profile: String,
     #[serde(default)]
     occurred_at: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    diagnostic: Option<SupportLog>,
+}
+#[derive(Serialize, Deserialize)]
+pub struct SupportLog {
+    code: String,
+    text: String,
+}
+impl SupportLog {
+    fn sanitize(&mut self) -> Result<(), String> {
+        if self.code.len() > 64
+            || !self.code.starts_with("DMH-")
+            || !self
+                .code
+                .bytes()
+                .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == b'-')
+            || self.text.len() > 240_000
+            || self.text.chars().count() > 60_000
+        {
+            return Err("Ungültiger Diagnosebericht.".into());
+        }
+        self.text = self
+            .text
+            .lines()
+            .map(diagnostics::redact)
+            .collect::<Vec<_>>()
+            .join("\n");
+        Ok(())
+    }
 }
 fn ensure(conn: &rusqlite::Connection) -> Result<(), String> {
     conn.execute_batch("CREATE TABLE IF NOT EXISTS procedure_report_deliveries (event_id TEXT NOT NULL, device_id TEXT NOT NULL, delivered_at TEXT NOT NULL, PRIMARY KEY(event_id,device_id)); CREATE TABLE IF NOT EXISTS procedure_report_outbox (event_id TEXT PRIMARY KEY, payload TEXT NOT NULL, created_at TEXT NOT NULL, error TEXT); CREATE TABLE IF NOT EXISTS procedure_report_history (event_id TEXT PRIMARY KEY, payload TEXT NOT NULL, created_at TEXT NOT NULL);") .map_err(|e| e.to_string())
@@ -257,6 +286,9 @@ pub fn record_procedure_report(app: AppHandle, mut event: Event) -> Result<(), S
         return Err("Ungültiger Verfahrensbericht.".into());
     }
     event.message = diagnostics::redact(&event.message);
+    if let Some(log) = event.diagnostic.as_mut() {
+        log.sanitize()?;
+    }
     let mut payload = serde_json::to_value(&event).map_err(|e| e.to_string())?;
     payload["computer"] = std::env::var("COMPUTERNAME").unwrap_or_default().into();
     payload["windowsUser"] = std::env::var("USERNAME").unwrap_or_default().into();
@@ -342,23 +374,39 @@ pub async fn flush_procedure_reports(app: AppHandle) -> Result<(), String> {
         if std::time::Instant::now() > deadline {
             break;
         }
+        let has_diagnostic = serde_json::from_str::<serde_json::Value>(&payload)
+            .ok()
+            .is_some_and(|v| v.get("diagnostic").is_some_and(|d| !d.is_null()));
+        // A distinct endpoint prevents older servers from silently dropping the log and acknowledging it.
+        let endpoint = if has_diagnostic {
+            config
+                .endpoint
+                .replace("action=ingest", "action=ingest-diagnostic")
+        } else {
+            config.endpoint.clone()
+        };
         let result = client
-            .post(&config.endpoint)
+            .post(&endpoint)
             .bearer_auth(&config.token)
             .header("X-DMH-Device", &config.device_id)
             .header("Content-Type", "application/json")
             .body(payload)
             .send()
             .await;
-        let rejected_record = result
-            .as_ref()
-            .is_ok_and(|response| matches!(response.status().as_u16(), 400 | 409 | 413 | 422));
+        let rejected_record = result.as_ref().is_ok_and(|response| {
+            matches!(response.status().as_u16(), 400 | 409 | 413 | 422)
+                || (has_diagnostic && matches!(response.status().as_u16(), 401 | 403 | 404))
+        });
         let accepted = match result {
             Ok(response) if response.status().is_success() => response
                 .json::<serde_json::Value>()
                 .await
                 .ok()
-                .is_some_and(|body| body["accepted"] == true && body["eventId"] == id),
+                .is_some_and(|body| {
+                    body["accepted"] == true
+                        && body["eventId"] == id
+                        && (!has_diagnostic || body["diagnosticAccepted"] == true)
+                }),
             _ => false,
         };
         let mut conn = open_db(&app)?;
@@ -386,6 +434,43 @@ pub async fn flush_procedure_reports(app: AppHandle) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn diagnostic_keeps_process_evidence_and_rejects_oversized_logs() {
+        let mut log = SupportLog {
+            code: "DMH-M365-SYNC".into(),
+            text: "PC: LOCAL-LAPTOP\nprocessId: 42\npassword=hidden\npath: C:\\Office".into(),
+        };
+        log.sanitize().unwrap();
+        assert!(log.text.contains("processId: 42"));
+        assert!(log.text.contains("C:\\Office"));
+        assert!(!log.text.contains("hidden"));
+        log.text = "x".repeat(60_001);
+        assert!(log.sanitize().is_err());
+    }
+    #[test]
+    fn diagnostic_survives_durable_queue_and_acknowledgement() {
+        let mut conn = rusqlite::Connection::open_in_memory().unwrap();
+        ensure(&conn).unwrap();
+        let payload = serde_json::json!({"eventId":"log-event", "attemptId":"same-attempt", "sequence":2, "procedure":"m365_sync", "status":"error", "occurredAt":"2026-11-14T10:00:00Z", "diagnostic":{"code":"DMH-M365-SYNC", "text":"PC: LOCAL-LAPTOP\nprocessId: 42"}}).to_string();
+        persist_event(&mut conn, "log-event", &payload, true).unwrap();
+        let queued: String = conn
+            .query_row(
+                "SELECT payload FROM procedure_report_outbox WHERE event_id='log-event'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(queued, payload);
+        acknowledge(&mut conn, "log-event", "device").unwrap();
+        let history: String = conn
+            .query_row(
+                "SELECT payload FROM procedure_report_history WHERE event_id='log-event'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(history, payload);
+    }
     #[test]
     fn old_manual_configuration_remains_readable() {
         let value = serde_json::json!({"schemaVersion":1,"endpoint":"https://migration.dmh-aidlingen.de/api/edv?action=ingest","deviceId":Uuid::new_v4().to_string(),"token":"a".repeat(43)});

@@ -2,6 +2,13 @@ const $ = id => document.getElementById(id);
 const statuses = { running:'In Bearbeitung',success:'Erfolgreich',error:'Fehler',cancelled:'Abgebrochen',interrupted:'Unterbrochen' };
 const procedures = { m365_login:'Microsoft-365-Anmeldung',outlook_exchange:'Outlook Exchange',m365_sync:'Microsoft-365-Synchronisierung',diagnostics:'PC-Diagnose' };
 let busy = false, queued = false;
+let pollTimer, failedLoads = 0, hasLoadedReports = false;
+function scheduleRefresh() {
+  clearTimeout(pollTimer);
+  if (document.hidden || $('dashboard').hidden) return;
+  // Read only while the dashboard is visible; back off during service failures.
+  pollTimer = setTimeout(() => void load(), Math.min(15 * 60_000, 2 * 60_000 * 2 ** Math.min(failedLoads, 3)));
+}
 let sort = 'occurredAt', direction = 'desc';
 function updateSortHeaders() {
   document.querySelectorAll('[data-sort]').forEach(button => {
@@ -23,7 +30,7 @@ async function api(action, data) {
 function query(action) { const args = new URLSearchParams({action,view:$('view').value,search:$('search').value,status:$('status').value,procedure:$('procedure').value,sort,direction}); return `/api/edv?${args}`; }
 function element(tag,text,className) { const e=document.createElement(tag);e.textContent=text;if(className)e.className=className;return e; }
 async function load() {
-  if (busy) { queued=true; return; } busy=true; $('refresh').disabled=true; notice('Berichte werden geladen …');
+  if (busy) { queued=true; return; } busy=true; clearTimeout(pollTimer); $('refresh').disabled=true; notice('Berichte werden geladen …');
   try {
     const response=await fetch(query('reports'),{cache:'no-store'}), result=await response.json();
     if (!response.ok) { if(response.status===401){$('login').hidden=false;$('dashboard').hidden=true;$('logout').hidden=true;} throw new Error(result.error); }
@@ -36,12 +43,28 @@ async function load() {
     }
     if(!result.reports.length){const tr=document.createElement('tr'),td=element('td','Keine Berichte vorhanden. Neue Ergebnisse erscheinen, sobald ein eingerichteter PC sie übermittelt.');td.colSpan=9;tr.append(td);$('rows').append(tr);}
     const count=result.reports.length;
+    hasLoadedReports=true; failedLoads=0;
     $('count').textContent=`${count} ${$('view').value==='history'?(count===1?'Versuch':'Versuche'):(count===1?'Vorgang':'Vorgänge')}`; $('updated').textContent=`Stand: ${date(result.updatedAt)}`;notice('');
-  } catch(error){notice(error.message,true);}finally{busy=false;$('refresh').disabled=false;if(queued){queued=false;void load();}}
+  } catch(error){failedLoads++;if(!hasLoadedReports)$('count').textContent='Berichte konnten nicht geladen werden.';notice(error.message,true);}finally{busy=false;$('refresh').disabled=false;if(queued){queued=false;void load();}else scheduleRefresh();}
 }
 function showDetails(row) {
   $('detail-fields').replaceChildren();
   for(const [label,value] of [['Benutzer',row.windowsUser],['Microsoft-Konto',row.accountEmail],['Computer',row.computer],['Vorgang',procedures[row.procedure]],['Ergebnis',statuses[row.status]],['Schritt',row.step],['Meldung',row.message],['Outlook-Profil',row.profile],['App-Version',row.appVersion],['Versuche',String(row.attemptCount ?? 1)],['Zeitpunkt',date(row.occurredAt)],['Empfangen',date(row.receivedAt)],['Versuchs-ID',row.attemptId],['PC-ID',row.deviceId]])$('detail-fields').append(element('dt',label),element('dd',value||'—'));
+  if (row.hasDiagnostic) {
+    const section=element('dd',''), label=element('dt','Diagnoseprotokoll');
+    const load=element('button','Protokoll laden');section.append(load);$('detail-fields').append(label,section);
+    load.addEventListener('click',async()=>{
+      load.disabled=true;
+      try {
+        const args=new URLSearchParams({deviceId:row.deviceId,attemptId:row.attemptId,sequence:String(row.sequence)});
+        const {diagnostic}=await api(`diagnostic&${args}`);
+        const log=element('pre',diagnostic.text,'diagnostic-log');log.tabIndex=0;
+        const save=element('button','.log herunterladen');save.addEventListener('click',()=>download(diagnostic.text,`DMH-Diagnose-${row.attemptId}.log`,'text/plain;charset=utf-8'));
+        const copy=element('button','Kopieren');copy.addEventListener('click',async()=>{try{await navigator.clipboard.writeText(diagnostic.text);copy.textContent='Kopiert';}catch{copy.textContent='Bitte Text markieren';}});
+        section.replaceChildren(element('strong',diagnostic.code),log,copy,save);
+      } catch(error) {load.disabled=false;load.textContent='Erneut laden';notice(error.message,true);}
+    });
+  }
   $('details').showModal();
 }
 async function deviceList(){const {devices}=await api('devices');$('device-list').replaceChildren();for(const device of devices){const li=element('li',`${device.name}${device.windowsUser?' / '+device.windowsUser:''} · ${device.registration==='automatic'?'Automatisch · App-Meldung':'Manuell'} · ${device.revoked?'Gesperrt':'Aktiv'}`);if(!device.revoked){const button=element('button','Sperren');button.addEventListener('click',async()=>{if(!confirm(`PC-Zugang „${device.name}“ sperren?`))return;try{await api('revoke',{deviceId:device.deviceId});await deviceList();}catch(error){notice(error.message,true);}});li.append(button);}$('device-list').append(li);}}
@@ -62,5 +85,5 @@ $('export').addEventListener('click',async()=>{try{const response=await fetch(qu
 $('devices').addEventListener('click',async()=>{try{await deviceList();$('pc-dialog').showModal();}catch(error){notice(error.message,true);}});
 $('new-device').addEventListener('submit',async event=>{event.preventDefault();event.submitter.disabled=true;try{const config=await api('devices',{name:$('pc-name').value});download(JSON.stringify(config,null,2),'DMH-Berichte-PC-Zugang.json','application/json');$('pc-name').value='';await deviceList();}catch(error){notice(error.message,true);}finally{event.submitter.disabled=false;}});
 document.querySelectorAll('dialog .close').forEach(button=>button.addEventListener('click',()=>button.closest('dialog').close()));
-setInterval(()=>{if(!document.hidden&&!$('dashboard').hidden)void load();},30000);
+document.addEventListener('visibilitychange',()=>{if(!document.hidden&&!$('dashboard').hidden)void load();else clearTimeout(pollTimer);});
 try{await api('session');$('dashboard').hidden=false;$('logout').hidden=false;await load();}catch(error){notice(error.message,true);}

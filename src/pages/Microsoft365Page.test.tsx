@@ -15,7 +15,7 @@ const db = vi.hoisted(() => ({
 vi.mock("../services/db", () => db);
 vi.mock("../utils/microsoft365SyncConfig", () => ({ enableCompleteAutomaticMicrosoft365Sync: vi.fn(async () => defaultSyncConfig) }));
 
-const reports=vi.hoisted(()=>({beginProcedureReport:vi.fn(),finishProcedureReport:vi.fn(),reportMicrosoft365Failure:vi.fn()}));
+const reports=vi.hoisted(()=>({beginProcedureReport:vi.fn(),finishProcedureReport:vi.fn(),reportMicrosoft365Failure:vi.fn(),reportSynchronizationFailure:vi.fn()}));
 vi.mock("../services/procedureReports",()=>reports);
 const account = { id: "account-one", displayName: "Anna Test", email: "anna@example.test", userPrincipalName: "anna@example.test", connectedAt: "2026-10-13T12:00:00Z" };
 beforeEach(() => {
@@ -82,12 +82,14 @@ describe("Microsoft365Page Windows account login", () => {
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
   });
 
-  it("ends loading with an actionable error instead of success when the first sync fails", async () => {
+  it("keeps confirmed login successful and reports a failed first sync separately to EDV", async () => {
     render(<Microsoft365Page synchronizeAfterConnection={async () => "error"} />);
     await userEvent.click(await screen.findByRole("button", { name: "Mit Microsoft 365 verbinden" }));
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
     expect(screen.getByText("Anna Test")).toBeVisible();
-    expect(screen.getByRole("alert")).toHaveTextContent("nicht vollständig geladen");
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(reports.finishProcedureReport).toHaveBeenCalledWith(expect.any(Object), "success", "Microsoft-365-Anmeldung bestätigt.", account.email);
+    expect(reports.reportSynchronizationFailure).toHaveBeenCalledWith("Synchronisierung nach erfolgreicher Anmeldung nicht bestätigt.", account.email, expect.any(Number));
     expect(screen.queryByText(/Microsoft 365 wurde verbunden\./)).toBeNull();
   });
 
@@ -162,12 +164,14 @@ describe("Microsoft365Page Windows account login", () => {
     expect(reports.finishProcedureReport).toHaveBeenCalledWith(expect.any(Object), "error", expect.stringContaining(code));
     expect(reports.finishProcedureReport.mock.calls.some(([, state]) => state === "success")).toBe(false);
   });
-  it("reports a post-login setup failure as error rather than early success",async()=>{
+  it("does not mislabel a post-login synchronization setup error as failed authentication",async()=>{
     vi.mocked(enableCompleteAutomaticMicrosoft365Sync).mockRejectedValueOnce(new Error("3 Kalender nicht erreichbar"));
     render(<Microsoft365Page />);
     await userEvent.click(await screen.findByRole("button",{name:"Mit Microsoft 365 verbinden"}));
-    await waitFor(()=>expect(reports.finishProcedureReport).toHaveBeenCalledWith(expect.any(Object),"error","3 Kalender nicht erreichbar",account.email));
-    expect(reports.finishProcedureReport.mock.calls.some(([,state])=>state==="success")).toBe(false);
+    await waitFor(()=>expect(reports.reportSynchronizationFailure).toHaveBeenCalledWith(expect.stringContaining("3 Kalender nicht erreichbar"),account.email));
+    expect(reports.finishProcedureReport).toHaveBeenCalledWith(expect.any(Object),"success","Microsoft-365-Anmeldung bestätigt.",account.email);
+    expect(reports.finishProcedureReport.mock.calls.some(([,state])=>state==="error")).toBe(false);
+    expect(screen.queryByRole("alert")).toBeNull();
   });
   it("checks an existing connection without starting a new interactive login", async () => {
     db.getMicrosoft365ConnectionStatus.mockResolvedValue({ configured: true, connected: true, account });
@@ -184,9 +188,30 @@ describe("Microsoft365Page Windows account login", () => {
     expect(await screen.findByText("Anna Test")).toBeVisible();
     expect(screen.getByRole("heading", { name: "Automatische Synchronisierung" })).toBeVisible();
     expect(screen.getByRole("button", { name: "Zu Exchange wechseln" })).toBeVisible();
-    expect(await screen.findByRole("alert")).toHaveTextContent("Automatik einschalten");
+    await waitFor(() => expect(reports.reportSynchronizationFailure).toHaveBeenCalled());
+    expect(screen.queryByRole("alert")).toBeNull();
     await userEvent.click(screen.getByRole("button", { name: "Automatik einschalten" }));
     await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
     expect(db.connectMicrosoft365WithWindowsAccount).toHaveBeenCalledTimes(1);
   });
+});
+
+it("shows only verified Exchange success even when post-login hydration fails", async () => {
+  db.getOutlookExchangeSetupStatus.mockResolvedValue({ stage:"complete", email:account.email, exchangeProfile:"Profile Exchange", message:"native implementation details" });
+  render(<Microsoft365Page synchronizeAfterConnection={async () => "error"} />);
+  await userEvent.click(await screen.findByRole("button", {name:"Mit Microsoft 365 verbinden"}));
+  await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  expect(screen.getByText("Outlook wurde erfolgreich auf Exchange umgestellt. Ihr Exchange-Profil ist als Standard eingerichtet.")).toBeVisible();
+  expect(screen.queryByRole("alert")).toBeNull();
+  expect(screen.queryByText(/native implementation details|nicht vollständig geladen|Letzte Diagnose/)).toBeNull();
+  expect(reports.reportSynchronizationFailure).toHaveBeenCalled();
+});
+
+it("does not classify a skipped background cycle as a failed login or sync", async () => {
+  render(<Microsoft365Page synchronizeAfterConnection={async () => "skipped"} />);
+  await userEvent.click(await screen.findByRole("button", {name:"Mit Microsoft 365 verbinden"}));
+  await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  expect(reports.finishProcedureReport).toHaveBeenCalledWith(expect.any(Object),"success","Microsoft-365-Anmeldung bestätigt.",account.email);
+  expect(reports.reportSynchronizationFailure).not.toHaveBeenCalled();
+  expect(screen.queryByText(/Outlook wurde erfolgreich/)).toBeNull();
 });

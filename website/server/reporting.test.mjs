@@ -17,6 +17,29 @@ function fixture(){
   const request=(action,body,cookie=admin,extra={})=>{const headers={origin,cookie,...(body?{'content-type':'application/json'}:{}),...extra};if(extra.origin===null)delete headers.origin;return handle(new Request(`${origin}/api/edv?action=${action}`,{method:body?'POST':'GET',headers,...(body?{body:JSON.stringify(body)}:{})}));};
   return {rows,request};
 }
+test('diagnostic enrichment keeps the attempt outcome and is readable only by EDV on demand',async()=>{
+  const {request}=fixture();
+  const config=await(await request('devices',{name:'LOCAL-LAPTOP'})).json();
+  const headers={'x-dmh-device':config.deviceId,authorization:`Bearer ${config.token}`};
+  const event={eventId:randomUUID(),attemptId:randomUUID(),sequence:1,procedure:'m365_sync',status:'error',occurredAt:'2026-11-14T10:00:00Z',computer:'LOCAL-LAPTOP',windowsUser:'Admin',accountEmail:'',step:'Synchronisierung',message:'Calendar unavailable',appVersion:'test'};
+  assert.equal((await request('ingest',event,'',headers)).status,200);
+  const diagnostic={code:'DMH-M365-SYNC',text:'PC: LOCAL-LAPTOP\nprocessId: 42\npassword=do-not-export\n'+ 'trace '.repeat(4000)};
+  const enriched={...event,eventId:randomUUID(),sequence:2,diagnostic};
+  const accepted=await request('ingest-diagnostic',enriched,'',headers);
+  assert.equal(accepted.status,200);assert.equal((await accepted.json()).diagnosticAccepted,true);
+  assert.equal((await request('ingest-diagnostic',enriched,'',headers)).status,200);
+  const {reports}=await(await request('reports')).json();
+  assert.equal(reports.length,1);assert.equal(reports[0].attemptCount,1);assert.equal(reports[0].status,'error');assert.equal(reports[0].occurredAt,new Date(event.occurredAt).toISOString());
+  assert.equal(reports[0].hasDiagnostic,true);assert.equal(reports[0].diagnostic,undefined);
+  const action=`diagnostic&deviceId=${config.deviceId}&attemptId=${event.attemptId}&sequence=2`;
+  assert.equal((await request(action,null,'',headers)).status,401);
+  const fetched=await(await request(action)).json();
+  assert.match(fetched.diagnostic.text,/processId: 42/);assert.doesNotMatch(fetched.diagnostic.text,/do-not-export/);
+  assert.ok(fetched.diagnostic.text.length>12000);
+  assert.equal((await request('ingest-diagnostic',{...enriched,diagnostic:{code:'DMH-LOG',text:'x'.repeat(60001)}},'',headers)).status,400);
+  assert.equal((await request('ingest-diagnostic',event,'',headers)).status,400);
+  assert.equal((await request('ingest-diagnostic',enriched,'')).status,401);
+});
 test('anonymous users and write-only devices cannot read reports or export Excel',async()=>{
   const {request}=fixture();for(const action of ['reports','export','devices','session'])assert.equal((await request(action,null,'')).status,401);
   assert.equal((await request('login',{username:'IDV',password:'wrong'},'')).status,401);
@@ -26,6 +49,31 @@ test('anonymous users and write-only devices cannot read reports or export Excel
 test('session rejects forgery and expires after eight hours',()=>{
   const cookie=sessionCookie('key',1000000).split(';')[0];
   const req=new Request(origin,{headers:{cookie}});assert.equal(hasSession(req,'key',1001000),true);assert.equal(hasSession(req,'wrong',1001000),false);assert.equal(hasSession(req,'key',1000000+28800001),false);
+});
+
+test('Supabase overview uses the aggregate query without scanning raw events and keeps export history', async () => {
+  const deviceId = randomUUID(), attemptId = randomUUID();
+  const event = { deviceId, attemptId, eventId: randomUUID(), sequence: 1, procedure: 'm365_login', status: 'error', occurredAt: '2026-11-10T12:00:00Z', receivedAt: '2026-11-10T12:00:01Z', windowsUser: 'PC-User', computer: 'PC-01', accountEmail: '', step: 'error', message: 'Silent login failed', profile: '', appVersion: '0.1.test' };
+  let scans = 0;
+  const handler = createHandler({ configured: () => true, read: async () => null, write: async () => {}, scan: async () => { scans++; return [event]; }, listAttempts: async () => [{ ...event, attemptCount: 4 }] });
+  const cookie = sessionCookie(process.env.EDV_SESSION_SECRET).split(';')[0];
+  const request = action => handler(new Request(`${origin}/api/edv?action=${action}`, { headers: { cookie } }));
+  const savedBlobToken = process.env.BLOB_READ_WRITE_TOKEN;
+  delete process.env.BLOB_READ_WRITE_TOKEN;
+  try {
+    const overview = await request('reports');
+    assert.equal(overview.status, 200);
+    const result = await overview.json();
+    assert.equal(result.reports[0].attemptCount, 4);
+    assert.equal(result.reports[0].accountEmail, '');
+    assert.equal(scans, 0);
+    const exported = await request('export');
+    assert.equal(exported.status, 200);
+    assert.equal(scans, 1);
+    const workbook = new ExcelJS.Workbook();
+    await workbook.xlsx.load(Buffer.from(await exported.arrayBuffer()));
+    assert.equal(workbook.getWorksheet('Versuchsverlauf').getRow(2).getCell(3).value, 'PC-01');
+  } finally { process.env.BLOB_READ_WRITE_TOKEN = savedBlobToken; }
 });
 test('reports survive retries, preserve latest sequence, redact tokens and export string cells',async()=>{
   const {request,rows}=fixture();const config=await(await request('devices',{name:'PC-Test'})).json();

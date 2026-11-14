@@ -19,12 +19,7 @@ interface OutlookExchangeProfileSetupProps {
 const pollIntervalMs = 4_000;
 const pollingLimitMs = 4 * 60_000;
 const setupTimeoutMessage = "Die automatische Einrichtung konnte nicht abgeschlossen werden. Bitte wenden Sie sich an die EDV. Ihr bisheriges Outlook-Profil bleibt erhalten.";
-const setupErrorMessage = (cause: unknown) => {
-  const message = String(cause);
-  if (message.includes("OUTLOOK_HELPER_TIMEOUT:")) return setupTimeoutMessage;
-  if (message.includes("OFFICE_ACCOUNT_NOT_DETECTED:")) return "Das Office-Konto konnte auf diesem PC nicht eindeutig zugeordnet werden. Bitte die EDV kontaktieren. Ihr bisheriges Outlook-Profil bleibt erhalten.";
-  return message;
-};
+const setupErrorMessage = (_cause: unknown) => setupTimeoutMessage;
 const stopBackgroundWatcher = () => Promise.resolve().then(() => invoke("stop_outlook_setup_background")).catch(() => undefined);
 
 export function OutlookExchangeProfileSetup({ email, disabled = false, compact = false, leadingAction }: OutlookExchangeProfileSetupProps) {
@@ -202,9 +197,9 @@ export function OutlookExchangeProfileSetup({ email, disabled = false, compact =
   return (
     <section className={`outlook-exchange-setup${compact ? " outlook-exchange-setup-compact" : ""}`} aria-label="Outlook auf Exchange umstellen" aria-busy={configuring}>
       <M365Loading active={configuring || initialLoading} message={configuring ? "Wird eingerichtet. Bitte warten und die Anwendung nicht schließen." : "Outlook-Informationen werden geladen. Bitte warten …"} value={configuring ? progress.value : undefined} label={configuring ? progress.label : undefined} priority={10} />
-      {!configuring && status && !error && !timedOut && <div className={`outlook-exchange-setup-status${complete ? " complete" : ""}`} role="status" aria-live="polite">{complete && <CheckCircle2 size={19} aria-hidden="true" />}<span>{status.message}</span></div>}
+      {!configuring && status && !error && !timedOut && <div className={`outlook-exchange-setup-status${complete ? " complete" : ""}`} role="status" aria-live="polite">{complete && <CheckCircle2 size={19} aria-hidden="true" />}<span>{complete ? "Outlook wurde erfolgreich auf Exchange umgestellt. Ihr Exchange-Profil ist als Standard eingerichtet." : setupTimeoutMessage}</span></div>}
       {!configuring && !initialLoading && timedOut && <p role="status">{setupTimeoutMessage}</p>}
-      {!configuring && !initialLoading && error && <p className="outlook-exchange-setup-error" role="alert">{error}</p>}
+      {!configuring && !initialLoading && error && <p role="status">{error}</p>}
       {!configuring && (!complete || leadingAction) && <div className="button-row">
         {leadingAction}
         {!complete && (waiting ? <>

@@ -965,12 +965,16 @@ fn record_broker_result(
     error: Option<&str>,
     operation: &str,
 ) {
-    crate::support_diagnostic::trace("m365.wam", serde_json::json!({
-        "operation": operation,
-        "status": response.map(|value| value.status.as_str()),
-        "errorCode": response.and_then(|value| value.error_code.as_deref()).or(error),
-        "verifiedEmail": response.and_then(|value| value.verified_email.as_deref())
-    }));
+    crate::support_diagnostic::trace(
+        "m365.wam",
+        serde_json::json!({
+            "operation": operation,
+            "status": response.map(|value| value.status.as_str()),
+            "errorCode": response.and_then(|value| value.error_code.as_deref()).or(error),
+            "verifiedEmail": response.and_then(|value| value.verified_email.as_deref()),
+            "loginDiagnostic": response.and_then(|value| value.diagnostic.as_ref())
+        }),
+    );
     let _ = crate::diagnostics::record(
         app,
         crate::diagnostics::DiagnosticMessage {

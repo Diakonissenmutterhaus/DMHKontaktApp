@@ -376,9 +376,12 @@ async fn output_json<T: DeserializeOwned>(
     if !output.status.success() {
         if crate::support_diagnostic::enabled() {
             let detail = serde_json::from_slice::<serde_json::Value>(&output.stdout).ok();
-            crate::support_diagnostic::trace("outlook.helper.exit", serde_json::json!({
-                "program": program, "exitCode": output.status.code(), "diagnostic": detail.as_ref().and_then(|value| value.get("diagnostic"))
-            }));
+            crate::support_diagnostic::trace(
+                "outlook.helper.exit",
+                serde_json::json!({
+                    "program": program, "exitCode": output.status.code(), "diagnostic": detail.as_ref().and_then(|value| value.get("diagnostic"))
+                }),
+            );
         }
         let error = serde_json::from_slice::<serde_json::Value>(&output.stdout)
             .ok()
@@ -396,15 +399,24 @@ async fn output_json<T: DeserializeOwned>(
 }
 
 async fn powershell<T: DeserializeOwned>(input: serde_json::Value) -> Result<T, String> {
-    if !crate::support_diagnostic::enabled() { return powershell_script(SCRIPT, input).await; }
-    let operation = input.get("operation").and_then(|value| value.as_str()).unwrap_or("unknown").to_string();
+    if !crate::support_diagnostic::enabled() {
+        return powershell_script(SCRIPT, input).await;
+    }
+    let operation = input
+        .get("operation")
+        .and_then(|value| value.as_str())
+        .unwrap_or("unknown")
+        .to_string();
     let started = std::time::Instant::now();
     let result: Result<serde_json::Value, String> = powershell_script(SCRIPT, input).await;
     if operation != "watch-setup-process" && operation != "hide-setup-process" {
-        crate::support_diagnostic::trace(&format!("outlook.ps.{operation}"), serde_json::json!({
-            "elapsedMs": started.elapsed().as_millis(),
-            "result": result.as_ref().ok(), "error": result.as_ref().err()
-        }));
+        crate::support_diagnostic::trace(
+            &format!("outlook.ps.{operation}"),
+            serde_json::json!({
+                "elapsedMs": started.elapsed().as_millis(),
+                "result": result.as_ref().ok(), "error": result.as_ref().err()
+            }),
+        );
     }
     serde_json::from_value(result?).map_err(|_| "Outlook-Antwort ist ungültig.".into())
 }
@@ -494,13 +506,18 @@ fn helper_path(app: &AppHandle, executable: &str) -> Result<PathBuf, String> {
 async fn helper<T: DeserializeOwned>(path: &Path, args: &[&str]) -> Result<T, String> {
     let mut command = tokio::process::Command::from(hidden_command(&path.to_string_lossy()));
     command.args(args);
-    if !crate::support_diagnostic::enabled() { return output_json(command, None, 60).await; }
+    if !crate::support_diagnostic::enabled() {
+        return output_json(command, None, 60).await;
+    }
     let started = std::time::Instant::now();
     let result: Result<serde_json::Value, String> = output_json(command, None, 60).await;
-    crate::support_diagnostic::trace("outlook.native", serde_json::json!({
-        "path": path, "operation": args.first(), "elapsedMs": started.elapsed().as_millis(),
-        "result": result.as_ref().ok(), "error": result.as_ref().err()
-    }));
+    crate::support_diagnostic::trace(
+        "outlook.native",
+        serde_json::json!({
+            "path": path, "operation": args.first(), "elapsedMs": started.elapsed().as_millis(),
+            "result": result.as_ref().ok(), "error": result.as_ref().err()
+        }),
+    );
     serde_json::from_value(result?).map_err(|_| "Outlook-Antwort ist ungültig.".into())
 }
 

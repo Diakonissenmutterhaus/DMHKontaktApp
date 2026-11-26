@@ -36,6 +36,7 @@ use windows_core::{implement, Error as WindowsError, IUnknown, Interface, HRESUL
 use zeroize::{Zeroize, Zeroizing};
 
 mod exchange_profiles;
+mod contact_birthdays;
 
 const ACCT_INIT_NO_STORES_CHECK: u32 = 0x0000_0002;
 const ACCT_INIT_NO_NOTIFICATIONS: u32 = 0x0000_0004;
@@ -704,6 +705,10 @@ fn required_arg(args: &mut impl Iterator<Item = String>, name: &str) -> AppResul
 fn run() -> AppResult<HelperOutput> {
     let mut args = env::args().skip(1);
     match required_arg(&mut args, "Befehl")?.as_str() {
+        "contact-birthdays" => {
+            let profile = required_arg(&mut args, "Profil")?;
+            contact_birthdays::read(&profile).map(HelperOutput::Json)
+        }
         "exchange-list" => exchange_profiles::list().map(HelperOutput::Json),
         "profile-list-native" => exchange_profiles::native_list().map(HelperOutput::Json),
         "profile-set-default" => {

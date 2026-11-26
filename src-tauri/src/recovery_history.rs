@@ -238,8 +238,8 @@ fn sync_contacts(
                 "SELECT id, first_name, last_name, display_name, email, private_email,
                         second_private_email, phone, mobile_phone, private_phone,
                         second_private_phone, company, street, postal_code, city, country,
-                        short_info, notes, created_at, updated_at, deleted_at
-                 FROM contacts
+                        short_info, notes, created_at, updated_at, deleted_at, birthday AS birthday
+             FROM contacts
                  WHERE (updated_at > ?1 OR (updated_at = ?1 AND id > ?2))
                    AND updated_at <= ?3
                  ORDER BY updated_at, id
@@ -269,6 +269,7 @@ fn sync_contacts(
                         country: row.get(15)?,
                         short_info: row.get(16)?,
                         notes: row.get(17)?,
+                        birthday: row.get("birthday")?,
                         groups: Vec::new(),
                         created_at: row.get(18)?,
                         updated_at: row.get(19)?,
@@ -591,8 +592,8 @@ fn sync_pending_contacts(
                     "SELECT id, first_name, last_name, display_name, email, private_email,
                             second_private_email, phone, mobile_phone, private_phone,
                             second_private_phone, company, street, postal_code, city, country,
-                            short_info, notes, created_at, updated_at, deleted_at
-                     FROM contacts WHERE id IN ({placeholders})"
+                            short_info, notes, created_at, updated_at, deleted_at, birthday AS birthday
+             FROM contacts WHERE id IN ({placeholders})"
                 ))
                 .map_err(|error| error.to_string())?;
             contacts = statement
@@ -616,6 +617,7 @@ fn sync_pending_contacts(
                         country: row.get(15)?,
                         short_info: row.get(16)?,
                         notes: row.get(17)?,
+                        birthday: row.get("birthday")?,
                         groups: Vec::new(),
                         created_at: row.get(18)?,
                         updated_at: row.get(19)?,

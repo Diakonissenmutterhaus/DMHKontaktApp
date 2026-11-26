@@ -36,6 +36,7 @@ export const emptyContact: ContactInput = {
   country: "Deutschland",
   shortInfo: "",
   notes: "",
+  birthday: "",
   groupIds: []
 };
 
@@ -59,6 +60,7 @@ export function toContactInput(contact: Contact): ContactInput {
     country: contact.country,
     shortInfo: contact.shortInfo ?? "",
     notes: contact.notes,
+    birthday: contact.birthday ?? "",
     groupIds: contact.groups.map((group) => group.id).filter((id): id is number => Boolean(id))
   };
 }

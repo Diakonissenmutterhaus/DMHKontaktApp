@@ -26,6 +26,7 @@ export interface Contact {
   country: string;
   shortInfo: string;
   notes: string;
+  birthday?: string;
   groups: Group[];
   createdAt: string;
   updatedAt: string;
@@ -51,6 +52,7 @@ export interface ContactInput {
   country: string;
   shortInfo: string;
   notes: string;
+  birthday?: string;
   groupIds: number[];
 }
 

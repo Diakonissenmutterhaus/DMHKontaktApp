@@ -1733,7 +1733,7 @@ export function ContactsPage({ onNavigate, onRegisterNavigationBlocker }: Contac
                       <span className="calendar-actions-separator" />
                       <button type="button" onClick={() => { setTestMenuOpen(false); onNavigate("import"); }}><Upload size={18} /> Kontakte importieren</button>
                       <button type="button" onClick={() => { setTestMenuOpen(false); onNavigate("export"); }}><Download size={18} /> Kontakte exportieren</button>
-                      <button type="button" onClick={() => { setTestMenuOpen(false); setReconciliationOpen(true); }}><RefreshCw size={18} /> Kontakte erneut abgleichen</button>
+                      <button type="button" onClick={() => { setTestMenuOpen(false); setReconciliationOpen(true); }}><RefreshCw size={18} /> Kontakte prüfen und aktualisieren</button>
                       <button type="button" onClick={() => void reviewContactDuplicates()} disabled={duplicateCheckBusy}>
                         <ListChecks size={18} /> {duplicateCheckBusy ? "Duplikate werden geprüft …" : "Duplikate prüfen"}
                       </button>

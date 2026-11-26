@@ -327,9 +327,18 @@ fn completion_message(state: &SetupState) -> String {
 }
 
 async fn output_json<T: DeserializeOwned>(
+    command: tokio::process::Command,
+    input: Option<serde_json::Value>,
+    seconds: u64,
+) -> Result<T, String> {
+    output_json_bounded(command, input, seconds, 256 * 1024).await
+}
+
+async fn output_json_bounded<T: DeserializeOwned>(
     mut command: tokio::process::Command,
     input: Option<serde_json::Value>,
     seconds: u64,
+    max_bytes: usize,
 ) -> Result<T, String> {
     command
         .stdin(if input.is_some() {
@@ -370,7 +379,7 @@ async fn output_json<T: DeserializeOwned>(
         .await
         .map_err(|_| format!("{HELPER_TIMEOUT}: {program}; Zeitlimit {seconds}s"))?
         .map_err(|_| "Outlook-Antwort konnte nicht gelesen werden.".to_string())?;
-    if output.stdout.len() > 256 * 1024 {
+    if output.stdout.len() > max_bytes {
         return Err("Outlook-Antwort ist ungültig.".into());
     }
     if !output.status.success() {
@@ -501,6 +510,45 @@ fn helper_path(app: &AppHandle, executable: &str) -> Result<PathBuf, String> {
             "Outlook-Hilfsprogramm fehlt. Bitte DMH Backup aktualisieren oder neu installieren."
                 .into()
         })
+}
+
+pub(crate) fn birthday_recovery_profile(
+    app: &AppHandle,
+    id: &str,
+    email: &str,
+) -> Result<Option<String>, String> {
+    let Some(state) = read_state(app, id, email)? else {
+        return Ok(None);
+    };
+    if state.phase != "complete" {
+        return Ok(None);
+    }
+    Ok(state
+        .imap_profile
+        .or(state.previous_profile)
+        .filter(|name| name != &state.exchange_profile))
+}
+
+pub(crate) async fn read_contact_birthdays(
+    app: &AppHandle,
+    profile: &str,
+) -> Result<crate::contact_birthdays::SourceSnapshot, String> {
+    let _lock = process_lock(app)?;
+    let inventory = inventory().await?;
+    if !inventory
+        .profile_names
+        .iter()
+        .any(|name| name.eq_ignore_ascii_case(profile))
+    {
+        return Err(
+            "Das frühere Outlook-Profil für die Geburtstagswiederherstellung fehlt.".into(),
+        );
+    }
+    let path = helper_path(app, &inventory.executable)?;
+    let mut command = tokio::process::Command::from(hidden_command(&path.to_string_lossy()));
+    command.args(["contact-birthdays", profile]);
+    // Contact contents must not be included in the generic helper trace.
+    output_json_bounded(command, None, 60, 8 * 1024 * 1024).await
 }
 
 async fn helper<T: DeserializeOwned>(path: &Path, args: &[&str]) -> Result<T, String> {

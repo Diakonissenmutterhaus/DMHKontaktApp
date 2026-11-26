@@ -2090,3 +2090,40 @@ test("exclusões preservam a navegação com configuração antiga e não chamam
   await expect.poll(() => page.evaluate(() => (window as any).__REMOVED_FEATURE_CALLS__)).toEqual([]);
   expect(errors).toEqual([]);
 });
+
+
+test("conferência segura mostra prévia e não regrava o calendário inteiro", async ({ page }, testInfo) => {
+  await installTauriMock(page, [mockContact(1, "Anna", "Beispiel")]);
+  await page.addInitScript(() => {
+    const w = window as any;
+    const invoke = w.__TAURI_INTERNALS__.invoke;
+    w.__RECONCILIATION_WRITES__ = [];
+    w.__TAURI_INTERNALS__.invoke = async (command: string, args: any) => {
+      if (command === "preview_reconciliation") return {
+        token: "preview-token", counts: { update: 1, deleted: 1, review: 1 }, warnings: [],
+        items: [
+          { key: "a", label: "Gemeinsamer Termin", status: "update", selectable: true, reason: "Betroffene Felder lokal unverändert.", differences: [{ field: "location", current: "Raum 1", incoming: "Raum 2" }] },
+          { key: "b", label: "Gelöschter Termin", status: "deleted", selectable: false, reason: "Bleibt gelöscht.", differences: [] },
+          { key: "c", label: "Ungeklärter Termin", status: "review", selectable: false, reason: "Aktuelle Version bleibt erhalten.", differences: [] }
+        ]
+      };
+      if (command === "apply_reconciliation") { w.__RECONCILIATION_WRITES__.push({ command, args }); return { added: 0, updated: 1, unchanged: 2, review: 1 }; }
+      if (["save_calendar_events", "restore_backup", "import_selected_outlook_classic_contacts"].includes(command)) w.__RECONCILIATION_WRITES__.push({ command, args });
+      return invoke(command, args);
+    };
+  });
+  await page.goto("/");
+  await page.getByRole("button", { name: "Kalender", exact: true }).click();
+  await page.getByRole("button", { name: "Weitere Kalenderaktionen" }).click();
+  await page.getByRole("button", { name: "Kalender prüfen und aktualisieren" }).click();
+  const dialog = page.getByRole("dialog", { name: "Kalender prüfen und aktualisieren" });
+  await dialog.getByRole("button", { name: "Outlook Classic" }).click();
+  await expect(dialog.getByText("Gelöschter Termin", { exact: true })).toBeVisible();
+  expect(await page.evaluate(() => (window as any).__RECONCILIATION_WRITES__)).toEqual([]);
+  await dialog.getByText("1 Unterschiede").click();
+  await expect(dialog.getByText("Raum 2", { exact: false })).toBeVisible();
+  await page.screenshot({ path: testInfo.outputPath("pruefen-und-aktualisieren.png") });
+  await dialog.getByRole("button", { name: "Auswahl übernehmen (1)" }).click();
+  await expect(dialog.getByText("Prüfung abgeschlossen")).toBeVisible();
+  expect(await page.evaluate(() => (window as any).__RECONCILIATION_WRITES__)).toEqual([{ command: "apply_reconciliation", args: { token: "preview-token", selected: ["a"] } }]);
+});

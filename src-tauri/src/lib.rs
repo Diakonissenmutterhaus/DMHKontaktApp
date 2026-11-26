@@ -24,6 +24,7 @@ use zeroize::Zeroize;
 
 mod bulk_removal;
 mod calendar_import;
+mod contact_birthdays;
 mod diagnostics;
 mod email_archive;
 mod feature_rollout;
@@ -38,6 +39,7 @@ mod outlook_exchange;
 mod phone_transfer;
 mod procedure_reports;
 mod recovery_history;
+mod reconciliation;
 mod support_diagnostic;
 mod thunderbird;
 mod updates;
@@ -133,6 +135,8 @@ pub struct Contact {
     pub created_at: String,
     pub updated_at: String,
     pub deleted_at: Option<String>,
+    #[serde(default)]
+    pub birthday: String,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -163,6 +167,8 @@ pub struct ContactInput {
     pub short_info: String,
     pub notes: String,
     pub group_ids: Vec<i64>,
+    #[serde(default)]
+    pub birthday: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -503,6 +509,7 @@ struct ExistingContactRow {
     deleted_at: Option<String>,
     outlook_entry_id: Option<String>,
     outlook_store_id: Option<String>,
+    birthday: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -554,6 +561,8 @@ struct OutlookContactRecord {
     short_info: String,
     #[serde(default)]
     notes: String,
+    #[serde(default)]
+    birthday: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -757,6 +766,7 @@ pub struct OutlookContactImportResult {
 #[derive(Debug, Default)]
 struct ContactFingerprintIndex {
     exact_contacts: HashMap<String, String>,
+    exact_contact_ids: HashMap<String, Vec<i64>>,
     emails: HashMap<String, String>,
     phones: HashMap<String, String>,
     names: HashMap<String, String>,
@@ -846,6 +856,8 @@ struct LocalOutlookContact {
     group_ids: Vec<i64>,
     outlook_entry_id: Option<String>,
     outlook_store_id: Option<String>,
+    #[serde(default)]
+    birthday: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -956,6 +968,7 @@ fn init_db(app: &AppHandle) -> Result<(), String> {
             country TEXT NOT NULL DEFAULT '',
             short_info TEXT NOT NULL DEFAULT '',
             notes TEXT NOT NULL DEFAULT '',
+            birthday TEXT NOT NULL DEFAULT '',
             import_batch_id TEXT,
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL,
@@ -1390,6 +1403,7 @@ fn init_db(app: &AppHandle) -> Result<(), String> {
         "TEXT NOT NULL DEFAULT ''",
     )?;
     ensure_column(&conn, "contacts", "company", "TEXT NOT NULL DEFAULT ''")?;
+    ensure_column(&conn, "contacts", "birthday", "TEXT NOT NULL DEFAULT ''")?;
     ensure_column(&conn, "contacts", "outlook_entry_id", "TEXT")?;
     ensure_column(&conn, "contacts", "outlook_store_id", "TEXT")?;
     ensure_column(&conn, "groups", "deleted_at", "TEXT")?;
@@ -1428,6 +1442,7 @@ fn init_db(app: &AppHandle) -> Result<(), String> {
     )
     .map_err(|err| err.to_string())?;
 
+    reconciliation::init(&conn)?;
     // Large installations can contain hundreds of thousands of appointments.
     // Creating two complete JSON archives here would block the first window.
     // App.tsx schedules one combined native safety backup after startup instead.
@@ -2361,7 +2376,7 @@ pub fn read_contact_sync_outbox(
                     contacts.company, contacts.street, contacts.postal_code, contacts.city,
                     contacts.country, contacts.short_info, contacts.notes,
                     contacts.created_at, contacts.updated_at, contacts.deleted_at,
-                    contact_sync_outbox.action
+                    contact_sync_outbox.action, contacts.birthday AS birthday
              FROM contact_sync_outbox
              INNER JOIN contacts ON contacts.id = contact_sync_outbox.local_contact_id
              ORDER BY contact_sync_outbox.queued_at DESC
@@ -2390,6 +2405,7 @@ pub fn read_contact_sync_outbox(
                     country: row.get(15)?,
                     short_info: row.get(16)?,
                     notes: row.get(17)?,
+                    birthday: row.get("birthday")?,
                     groups: Vec::new(),
                     created_at: row.get(18)?,
                     updated_at: row.get(19)?,
@@ -4332,7 +4348,7 @@ fn write_recovered_contact(
                mobile_phone = ?8, private_phone = ?9, second_private_phone = ?10,
                company = ?11, street = ?12, postal_code = ?13, city = ?14,
                country = ?15, short_info = ?16, notes = ?17, updated_at = ?18,
-               deleted_at = NULL
+               deleted_at = NULL, birthday = CASE WHEN birthday = '' THEN ?20 ELSE birthday END
              WHERE id = ?19",
             params![
                 contact.first_name,
@@ -4353,7 +4369,8 @@ fn write_recovered_contact(
                 contact.short_info,
                 contact.notes,
                 now(),
-                existing_id
+                existing_id,
+                crate::contact_birthdays::normalize(&contact.birthday)
             ],
         )
         .map_err(|error| error.to_string())?;
@@ -4363,8 +4380,8 @@ fn write_recovered_contact(
             "INSERT INTO contacts (
                first_name, last_name, display_name, email, private_email, second_private_email,
                phone, mobile_phone, private_phone, second_private_phone, company, street,
-               postal_code, city, country, short_info, notes, created_at, updated_at, deleted_at
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20)",
+               postal_code, city, country, short_info, notes, created_at, updated_at, deleted_at, birthday
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21)",
             params![
                 contact.first_name,
                 contact.last_name,
@@ -4385,7 +4402,8 @@ fn write_recovered_contact(
                 contact.notes,
                 contact.created_at,
                 contact.updated_at,
-                contact.deleted_at
+                contact.deleted_at,
+                crate::contact_birthdays::normalize(&contact.birthday)
             ],
         )
         .map_err(|error| error.to_string())?;
@@ -4680,8 +4698,8 @@ fn list_contacts(
             SELECT DISTINCT c.id, c.first_name, c.last_name, c.display_name, c.email,
                    c.private_email, c.second_private_email, c.phone, c.mobile_phone,
                    c.private_phone, c.second_private_phone, c.company, c.street, c.postal_code,
-                   c.city, c.country, c.short_info, c.notes, c.created_at, c.updated_at
-            FROM contacts c
+                   c.city, c.country, c.short_info, c.notes, c.created_at, c.updated_at, c.birthday AS birthday
+             FROM contacts c
             LEFT JOIN contact_groups cg ON cg.contact_id = c.id
             WHERE (?2 IS NULL OR cg.group_id = ?2)
               AND c.deleted_at IS NULL
@@ -4715,6 +4733,7 @@ fn list_contacts(
                 country: row.get(15)?,
                 short_info: row.get(16)?,
                 notes: row.get(17)?,
+                birthday: row.get("birthday")?,
                 groups: Vec::new(),
                 created_at: row.get(18)?,
                 updated_at: row.get(19)?,
@@ -4860,8 +4879,8 @@ fn save_contact_internal(
             SET first_name = ?, last_name = ?, display_name = ?, email = ?, private_email = ?,
                 second_private_email = ?, phone = ?, mobile_phone = ?, private_phone = ?,
                 second_private_phone = ?, company = ?, street = ?, postal_code = ?, city = ?, country = ?,
-                short_info = ?, notes = ?, updated_at = ?
-            WHERE id = ?
+                short_info = ?, notes = ?, updated_at = ?, birthday = CASE WHEN birthday = '' THEN ? ELSE birthday END
+             WHERE id = ?
             ",
                 params![
                     contact.first_name,
@@ -4882,6 +4901,7 @@ fn save_contact_internal(
                     contact.short_info,
                     contact.notes,
                     &timestamp,
+                    crate::contact_birthdays::normalize(&contact.birthday),
                     id
                 ],
             )
@@ -4894,9 +4914,9 @@ fn save_contact_internal(
             INSERT INTO contacts (
                 first_name, last_name, display_name, email, private_email, second_private_email,
                 phone, mobile_phone, private_phone, second_private_phone, company, street,
-                postal_code, city, country, short_info, notes, created_at, updated_at
+                postal_code, city, country, short_info, notes, created_at, updated_at, birthday
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ",
                 params![
                     contact.first_name,
@@ -4917,7 +4937,8 @@ fn save_contact_internal(
                     contact.short_info,
                     contact.notes,
                     &timestamp,
-                    &timestamp
+                    &timestamp,
+                    crate::contact_birthdays::normalize(&contact.birthday)
                 ],
             )
             .map_err(|err| err.to_string())?;
@@ -5107,8 +5128,8 @@ fn list_deleted_contacts(app: AppHandle) -> Result<Vec<Contact>, String> {
             "
             SELECT id, first_name, last_name, display_name, email, private_email, second_private_email,
                    phone, mobile_phone, private_phone, second_private_phone, company,
-                   street, postal_code, city, country, short_info, notes, created_at, updated_at, deleted_at
-            FROM contacts
+                   street, postal_code, city, country, short_info, notes, created_at, updated_at, deleted_at, birthday AS birthday
+             FROM contacts
             WHERE deleted_at IS NOT NULL
             ORDER BY deleted_at DESC
             ",
@@ -5135,6 +5156,7 @@ fn list_deleted_contacts(app: AppHandle) -> Result<Vec<Contact>, String> {
                 country: row.get(15)?,
                 short_info: row.get(16)?,
                 notes: row.get(17)?,
+                birthday: row.get("birthday")?,
                 groups: Vec::new(),
                 created_at: row.get(18)?,
                 updated_at: row.get(19)?,
@@ -5566,6 +5588,7 @@ fn import_contacts(app: AppHandle, payload: ImportPayload) -> Result<ImportResul
             &display_name,
             &email,
         )) {
+            fill_duplicate_import_birthday(&tx, &fingerprints, &contact, &display_name, &email)?;
             skipped_duplicates += 1;
             continue;
         }
@@ -5575,9 +5598,9 @@ fn import_contacts(app: AppHandle, payload: ImportPayload) -> Result<ImportResul
             INSERT INTO contacts (
                 first_name, last_name, display_name, email, private_email, second_private_email,
                 phone, mobile_phone, private_phone, second_private_phone, company, street,
-                postal_code, city, country, short_info, notes, import_batch_id, created_at, updated_at
+                postal_code, city, country, short_info, notes, import_batch_id, created_at, updated_at, birthday
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ",
             params![
                 contact.first_name,
@@ -5599,12 +5622,18 @@ fn import_contacts(app: AppHandle, payload: ImportPayload) -> Result<ImportResul
                 contact.notes,
                 batch_id,
                 timestamp,
-                timestamp
+                timestamp,
+                crate::contact_birthdays::normalize(&contact.birthday)
             ],
         )
         .map_err(|err| err.to_string())?;
         let contact_id = tx.last_insert_rowid();
         add_fingerprint(&mut fingerprints, &contact, &display_name, &email);
+        fingerprints
+            .exact_contact_ids
+            .entry(contact_exact_key(&contact, &display_name, &email))
+            .or_default()
+            .push(contact_id);
         for group_id in contact.group_ids {
             tx.execute(
                 "INSERT OR IGNORE INTO contact_groups (contact_id, group_id) VALUES (?, ?)",
@@ -5725,8 +5754,8 @@ fn load_backup_data_without_calendar(conn: &Connection) -> Result<BackupData, St
                 "
                 SELECT id, first_name, last_name, display_name, email, private_email, second_private_email,
                        phone, mobile_phone, private_phone, second_private_phone, company,
-                       street, postal_code, city, country, short_info, notes, created_at, updated_at, deleted_at
-                FROM contacts
+                       street, postal_code, city, country, short_info, notes, created_at, updated_at, deleted_at, birthday AS birthday
+             FROM contacts
                 ORDER BY last_name COLLATE NOCASE, first_name COLLATE NOCASE
                 ",
             )
@@ -5752,6 +5781,7 @@ fn load_backup_data_without_calendar(conn: &Connection) -> Result<BackupData, St
                     country: row.get(15)?,
                     short_info: row.get(16)?,
                     notes: row.get(17)?,
+                    birthday: row.get("birthday")?,
                     groups: Vec::new(),
                     created_at: row.get(18)?,
                     updated_at: row.get(19)?,
@@ -6134,9 +6164,9 @@ fn restore_backup(app: AppHandle, backup: BackupData) -> Result<(), String> {
                 INSERT INTO contacts (
                     id, first_name, last_name, display_name, email, private_email, second_private_email,
                     phone, mobile_phone, private_phone, second_private_phone, company, street,
-                    postal_code, city, country, short_info, notes, created_at, updated_at, deleted_at
+                    postal_code, city, country, short_info, notes, created_at, updated_at, deleted_at, birthday
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ",
                 params![
                     id,
@@ -6159,7 +6189,8 @@ fn restore_backup(app: AppHandle, backup: BackupData) -> Result<(), String> {
                     &contact.notes,
                     &contact.created_at,
                     &contact.updated_at,
-                    &contact.deleted_at
+                    &contact.deleted_at,
+                    crate::contact_birthdays::normalize(&contact.birthday)
                 ],
             )
             .map_err(|err| err.to_string())?;
@@ -6170,9 +6201,9 @@ fn restore_backup(app: AppHandle, backup: BackupData) -> Result<(), String> {
                 INSERT INTO contacts (
                     first_name, last_name, display_name, email, private_email, second_private_email,
                     phone, mobile_phone, private_phone, second_private_phone, company, street,
-                    postal_code, city, country, short_info, notes, created_at, updated_at, deleted_at
+                    postal_code, city, country, short_info, notes, created_at, updated_at, deleted_at, birthday
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ",
                 params![
                     &contact.first_name,
@@ -6194,7 +6225,8 @@ fn restore_backup(app: AppHandle, backup: BackupData) -> Result<(), String> {
                     &contact.notes,
                     &contact.created_at,
                     &contact.updated_at,
-                    &contact.deleted_at
+                    &contact.deleted_at,
+                    crate::contact_birthdays::normalize(&contact.birthday)
                 ],
             )
             .map_err(|err| err.to_string())?;
@@ -6835,6 +6867,7 @@ function Read-Contact-Folder($folder, $storeId, $storeName) {
             country = [string]$item.BusinessAddressCountry
             shortInfo = ''
             notes = [string]$item.Body
+            birthday = $(if ($item.Birthday -and $item.Birthday.Year -lt 4501) { $item.Birthday.ToString('yyyy-MM-dd') } else { '' })
           }) | Out-Null
         }
       } catch { $script:skipped++ }
@@ -6942,6 +6975,7 @@ fn read_outlook_classic_contacts_for_import() -> Result<(OutlookReadData, Vec<St
                 country: String::new(),
                 short_info: String::new(),
                 notes: String::new(),
+                birthday: String::new(),
             }
         }));
     Ok((data, warnings))
@@ -7007,6 +7041,7 @@ fn outlook_record_to_contact(record: &OutlookContactRecord) -> ContactInput {
         country: record.country.clone(),
         short_info: record.short_info.clone(),
         notes: record.notes.clone(),
+        birthday: record.birthday.clone(),
         group_ids: Vec::new(),
     }
 }
@@ -7266,7 +7301,7 @@ fn load_contact_fingerprints(conn: &Connection) -> Result<ContactFingerprintInde
         .prepare(
             "SELECT first_name, last_name, display_name, email, private_email, second_private_email,
                     phone, mobile_phone, private_phone, second_private_phone, company,
-                    street, postal_code, city, country, short_info, notes
+                    street, postal_code, city, country, short_info, notes, birthday AS birthday, id
              FROM contacts
              WHERE deleted_at IS NULL",
         )
@@ -7274,7 +7309,7 @@ fn load_contact_fingerprints(conn: &Connection) -> Result<ContactFingerprintInde
     let rows = stmt
         .query_map([], |row| {
             Ok(ContactInput {
-                id: None,
+                id: row.get("id")?,
                 first_name: row.get(0)?,
                 last_name: row.get(1)?,
                 display_name: row.get(2)?,
@@ -7292,6 +7327,7 @@ fn load_contact_fingerprints(conn: &Connection) -> Result<ContactFingerprintInde
                 country: row.get(14)?,
                 short_info: row.get(15)?,
                 notes: row.get(16)?,
+                birthday: row.get("birthday")?,
                 group_ids: Vec::new(),
             })
         })
@@ -7420,6 +7456,15 @@ fn add_fingerprint(
     display_name: &str,
     email: &str,
 ) {
+    if let Some(id) = contact.id {
+        let ids = fingerprints
+            .exact_contact_ids
+            .entry(contact_exact_key(contact, display_name, email))
+            .or_default();
+        if !ids.contains(&id) {
+            ids.push(id);
+        }
+    }
     let label = display_name.trim().to_string();
     fingerprints
         .exact_contacts
@@ -7453,6 +7498,29 @@ fn add_fingerprint(
             .or_default()
             .push(contact.clone());
     }
+}
+
+fn fill_duplicate_import_birthday(
+    conn: &Connection,
+    fingerprints: &ContactFingerprintIndex,
+    contact: &ContactInput,
+    display_name: &str,
+    email: &str,
+) -> Result<(), String> {
+    let birthday = contact_birthdays::normalize(&contact.birthday);
+    if birthday.is_empty() {
+        return Ok(());
+    }
+    if let Some(ids) =
+        fingerprints
+            .exact_contact_ids
+            .get(&contact_exact_key(contact, display_name, email))
+    {
+        if let [id] = ids.as_slice() {
+            conn.execute("UPDATE contacts SET birthday=?1 WHERE id=?2 AND birthday='' AND deleted_at IS NULL",params![birthday,id]).map_err(|e|e.to_string())?;
+        }
+    }
+    Ok(())
 }
 
 fn contact_name_merge_key(contact: &ContactInput) -> String {
@@ -7573,6 +7641,7 @@ fn merge_email_fields(target: &mut ContactInput, source: &ContactInput) {
 }
 
 fn merge_contact_fields(target: &mut ContactInput, source: &ContactInput) {
+    contact_birthdays::fill_missing(&mut target.birthday, &source.birthday);
     fill_blank(&mut target.first_name, &source.first_name);
     fill_blank(&mut target.last_name, &source.last_name);
     fill_blank(&mut target.display_name, &source.display_name);
@@ -7620,7 +7689,7 @@ fn load_contacts_for_consolidation(
             "SELECT id, first_name, last_name, display_name, email, private_email, second_private_email,
                     phone, mobile_phone, private_phone, second_private_phone, company,
                     street, postal_code, city, country, short_info, notes, import_batch_id,
-                    outlook_entry_id, outlook_store_id
+                    outlook_entry_id, outlook_store_id, birthday AS birthday
              FROM contacts
              WHERE deleted_at IS NULL
              ORDER BY id",
@@ -7649,6 +7718,7 @@ fn load_contacts_for_consolidation(
                     country: row.get(15)?,
                     short_info: row.get(16)?,
                     notes: row.get(17)?,
+                    birthday: row.get("birthday")?,
                     group_ids: Vec::new(),
                 },
                 import_batch_id: row.get(18)?,
@@ -7731,8 +7801,8 @@ fn merge_contact_rows(
              second_private_email = ?, phone = ?, mobile_phone = ?, private_phone = ?,
              second_private_phone = ?, company = ?, street = ?, postal_code = ?, city = ?, country = ?,
              short_info = ?, notes = ?, outlook_entry_id = ?, outlook_store_id = ?,
-             updated_at = ?
-         WHERE id = ?",
+             updated_at = ?, birthday = CASE WHEN birthday = '' THEN ? ELSE birthday END
+             WHERE id = ?",
         params![
             survivor.contact.first_name,
             survivor.contact.last_name,
@@ -7754,7 +7824,8 @@ fn merge_contact_rows(
             survivor.outlook_entry_id,
             survivor.outlook_store_id,
             timestamp,
-            survivor.id,
+            crate::contact_birthdays::normalize(&survivor.contact.birthday),
+            survivor.id
         ],
     )
     .map_err(|error| error.to_string())?;
@@ -7802,8 +7873,8 @@ fn merge_contact_rows_to_trash(
              second_private_email = ?, phone = ?, mobile_phone = ?, private_phone = ?,
              second_private_phone = ?, company = ?, street = ?, postal_code = ?, city = ?, country = ?,
              short_info = ?, notes = ?, outlook_entry_id = ?, outlook_store_id = ?,
-             updated_at = ?
-         WHERE id = ? AND deleted_at IS NULL",
+             updated_at = ?, birthday = CASE WHEN birthday = '' THEN ? ELSE birthday END
+             WHERE id = ? AND deleted_at IS NULL",
         params![
             survivor.contact.first_name,
             survivor.contact.last_name,
@@ -7825,7 +7896,8 @@ fn merge_contact_rows_to_trash(
             survivor.outlook_entry_id,
             survivor.outlook_store_id,
             timestamp,
-            survivor.id,
+            crate::contact_birthdays::normalize(&survivor.contact.birthday),
+            survivor.id
         ],
     )
     .map_err(|error| error.to_string())?;
@@ -8222,6 +8294,7 @@ fn import_selected_outlook_classic_contacts_blocking(
         let (status, _, _) =
             classify_outlook_import_record(&fingerprints, record, &contact, &display_name, &email);
         if status == "duplicate_exact" {
+            fill_duplicate_import_birthday(&tx, &fingerprints, &contact, &display_name, &email)?;
             skipped_exact_duplicates += 1;
             continue;
         }
@@ -8232,9 +8305,9 @@ fn import_selected_outlook_classic_contacts_blocking(
                 first_name, last_name, display_name, email, private_email, second_private_email,
                 phone, mobile_phone, private_phone, second_private_phone, company, street,
                 postal_code, city, country, short_info, notes, import_batch_id,
-                created_at, updated_at, outlook_entry_id, outlook_store_id
+                created_at, updated_at, outlook_entry_id, outlook_store_id, birthday
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ",
             params![
                 contact.first_name,
@@ -8258,11 +8331,17 @@ fn import_selected_outlook_classic_contacts_blocking(
                 timestamp,
                 timestamp,
                 record.entry_id.trim(),
-                record.store_id.trim()
+                record.store_id.trim(),
+                crate::contact_birthdays::normalize(&contact.birthday)
             ],
         )
         .map_err(|err| err.to_string())?;
         let local_contact_id = tx.last_insert_rowid();
+        fingerprints
+            .exact_contact_ids
+            .entry(contact_exact_key(&contact, &display_name, &email))
+            .or_default()
+            .push(local_contact_id);
 
         if request.create_source_groups {
             let store_name = outlook_store_name(record);
@@ -8370,8 +8449,8 @@ fn load_local_outlook_contacts(conn: &Connection) -> Result<Vec<LocalOutlookCont
             SELECT id, first_name, last_name, display_name, email, private_email, second_private_email,
                    phone, mobile_phone, private_phone, second_private_phone, company,
                    street, postal_code, city, country, short_info, notes,
-                   outlook_entry_id, outlook_store_id
-            FROM contacts
+                   outlook_entry_id, outlook_store_id, birthday AS birthday
+             FROM contacts
             WHERE deleted_at IS NULL
             ORDER BY updated_at ASC
             ",
@@ -8399,6 +8478,7 @@ fn load_local_outlook_contacts(conn: &Connection) -> Result<Vec<LocalOutlookCont
                 country: row.get(15)?,
                 short_info: row.get(16)?,
                 notes: row.get(17)?,
+                birthday: row.get("birthday")?,
                 groups: Vec::new(),
                 group_ids: Vec::new(),
                 outlook_entry_id: row.get(18)?,
@@ -8530,8 +8610,8 @@ fn load_local_outlook_contact(
         SELECT id, first_name, last_name, display_name, email, private_email, second_private_email,
                phone, mobile_phone, private_phone, second_private_phone, company,
                street, postal_code, city, country, short_info, notes,
-               outlook_entry_id, outlook_store_id
-        FROM contacts
+               outlook_entry_id, outlook_store_id, birthday AS birthday
+             FROM contacts
         WHERE id = ?
         ",
         params![id],
@@ -8555,6 +8635,7 @@ fn load_local_outlook_contact(
                 country: row.get(15)?,
                 short_info: row.get(16)?,
                 notes: row.get(17)?,
+                birthday: row.get("birthday")?,
                 groups: Vec::new(),
                 group_ids: Vec::new(),
                 outlook_entry_id: row.get(18)?,
@@ -9028,6 +9109,9 @@ foreach ($local in $localContacts) {{
       Set-When-Present $item 'Email3Address' $local.secondPrivateEmail
       Set-When-Present $item 'BusinessTelephoneNumber' $local.phone
       Set-When-Present $item 'MobileTelephoneNumber' $local.mobilePhone
+      if ($local.birthday -and (!$item.Birthday -or $item.Birthday.Year -ge 4501)) {{
+        $item.Birthday = [DateTime]::ParseExact([string]$local.birthday, 'yyyy-MM-dd', [Globalization.CultureInfo]::InvariantCulture)
+      }}
       Set-When-Present $item 'HomeTelephoneNumber' $local.privatePhone
       Set-When-Present $item 'Home2TelephoneNumber' $local.secondPrivatePhone
       Set-When-Present $item 'CompanyName' $local.company
@@ -9196,8 +9280,8 @@ fn find_existing_sync_contact(
             SELECT id, first_name, last_name, display_name, email, private_email, second_private_email,
                    phone, mobile_phone, private_phone, second_private_phone, company,
                    street, postal_code, city, country, short_info, notes, deleted_at,
-                   outlook_entry_id, outlook_store_id
-            FROM contacts
+                   outlook_entry_id, outlook_store_id, birthday AS birthday
+             FROM contacts
             WHERE (
                 ?6 <> '' AND outlook_entry_id = ?6
               )
@@ -9248,6 +9332,7 @@ fn find_existing_sync_contact(
                 country: row.get(15)?,
                 short_info: row.get(16)?,
                 notes: row.get(17)?,
+                birthday: row.get("birthday")?,
                 deleted_at: row.get(18)?,
                 outlook_entry_id: row.get(19)?,
                 outlook_store_id: row.get(20)?,
@@ -9284,6 +9369,8 @@ fn contact_needs_update(
         || existing.country != contact.country
         || existing.short_info != contact.short_info
         || existing.notes != contact.notes
+        || (existing.birthday.is_empty()
+            && !contact_birthdays::normalize(&contact.birthday).is_empty())
         || existing.outlook_entry_id.as_deref().unwrap_or_default() != entry_id
         || existing.outlook_store_id.as_deref().unwrap_or_default() != store_id
 }
@@ -9318,6 +9405,7 @@ fn import_outlook_classic_contacts_once(
             &display_name,
             &email,
         )) {
+            fill_duplicate_import_birthday(&tx, &fingerprints, &contact, &display_name, &email)?;
             skipped_duplicates += 1;
             continue;
         }
@@ -9328,9 +9416,9 @@ fn import_outlook_classic_contacts_once(
                 first_name, last_name, display_name, email, private_email, second_private_email,
                 phone, mobile_phone, private_phone, second_private_phone, company, street,
                 postal_code, city, country, short_info, notes, import_batch_id,
-                created_at, updated_at
+                created_at, updated_at, birthday
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ",
             params![
                 contact.first_name,
@@ -9352,11 +9440,17 @@ fn import_outlook_classic_contacts_once(
                 contact.notes,
                 batch_id,
                 timestamp,
-                timestamp
+                timestamp,
+                crate::contact_birthdays::normalize(&contact.birthday)
             ],
         )
         .map_err(|err| err.to_string())?;
         add_fingerprint(&mut fingerprints, &contact, &display_name, &email);
+        fingerprints
+            .exact_contact_ids
+            .entry(contact_exact_key(&contact, &display_name, &email))
+            .or_default()
+            .push(tx.last_insert_rowid());
         imported += 1;
     }
 
@@ -9424,8 +9518,8 @@ fn sync_outlook_classic_contacts(app: AppHandle) -> Result<OutlookSyncResult, St
                         second_private_email = ?, phone = ?, mobile_phone = ?, private_phone = ?,
                         second_private_phone = ?, company = ?, street = ?, postal_code = ?, city = ?, country = ?,
                         short_info = ?, notes = ?, outlook_entry_id = ?, outlook_store_id = ?,
-                        deleted_at = NULL, updated_at = ?
-                    WHERE id = ?
+                        deleted_at = NULL, updated_at = ?, birthday = CASE WHEN birthday = '' THEN ? ELSE birthday END
+             WHERE id = ?
                     ",
                     params![
                         contact.first_name,
@@ -9448,6 +9542,7 @@ fn sync_outlook_classic_contacts(app: AppHandle) -> Result<OutlookSyncResult, St
                         entry_id,
                         store_id,
                         timestamp,
+                        crate::contact_birthdays::normalize(&contact.birthday),
                         existing.id
                     ],
                 )
@@ -9461,9 +9556,9 @@ fn sync_outlook_classic_contacts(app: AppHandle) -> Result<OutlookSyncResult, St
                     first_name, last_name, display_name, email, private_email, second_private_email,
                     phone, mobile_phone, private_phone, second_private_phone, company, street,
                     postal_code, city, country, short_info, notes, import_batch_id,
-                    outlook_entry_id, outlook_store_id, created_at, updated_at
+                    outlook_entry_id, outlook_store_id, created_at, updated_at, birthday
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ",
                 params![
                     contact.first_name,
@@ -9487,7 +9582,8 @@ fn sync_outlook_classic_contacts(app: AppHandle) -> Result<OutlookSyncResult, St
                     entry_id,
                     store_id,
                     timestamp,
-                    timestamp
+                    timestamp,
+                    crate::contact_birthdays::normalize(&contact.birthday)
                 ],
             )
             .map_err(|err| err.to_string())?;
@@ -10209,7 +10305,10 @@ fn import_outlook_classic_appointments_once() -> Result<OutlookOneTimeCalendarIm
 
 fn read_outlook_classic_appointments_for_import(
 ) -> Result<OutlookOneTimeCalendarImportResult, String> {
-    let read_result = read_outlook_classic_appointments()?;
+    outlook_appointments_for_import(read_outlook_classic_appointments()?, false)
+}
+
+fn outlook_appointments_for_import(read_result: OutlookCalendarReadData, require_stable_identity: bool) -> Result<OutlookOneTimeCalendarImportResult, String> {
     let found = read_result.events.len();
     let mut skipped_invalid = read_result.skipped;
     let mut seen_ids = HashSet::new();
@@ -10217,7 +10316,8 @@ fn read_outlook_classic_appointments_for_import(
 
     for (index, record) in read_result.events.into_iter().enumerate() {
         let starts_at = record.starts_at.trim().to_string();
-        if starts_at.is_empty() {
+        if starts_at.is_empty() || (require_stable_identity && (record.store_id.trim().is_empty()
+            || (record.entry_id.trim().is_empty() && record.global_appointment_id.trim().is_empty()))) {
             skipped_invalid += 1;
             continue;
         }
@@ -10411,6 +10511,7 @@ function Read-Folders($folder) {{
             country = [string]$item.BusinessAddressCountry
             shortInfo = ''
             notes = [string]$item.Body
+            birthday = $(if ($item.Birthday -and $item.Birthday.Year -lt 4501) {{ $item.Birthday.ToString('yyyy-MM-dd') }} else {{ '' }})
             groupIds = @()
           }}) | Out-Null
         }}
@@ -10562,6 +10663,8 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            reconciliation::preview_reconciliation,
+            reconciliation::apply_reconciliation,
             workstation_health::get_workstation_health,
             workstation_health::check_migration_services,
             workstation_health::get_edv_announcements,
@@ -11161,6 +11264,56 @@ mod tests {
     }
 
     #[test]
+    fn birthday_schema_upgrade_and_reimport_preserve_contacts_and_saved_dates() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch("CREATE TABLE contacts(id INTEGER PRIMARY KEY,
+            first_name TEXT DEFAULT '',last_name TEXT DEFAULT '',display_name TEXT DEFAULT '',email TEXT DEFAULT '',
+            private_email TEXT DEFAULT '',second_private_email TEXT DEFAULT '',phone TEXT DEFAULT '',mobile_phone TEXT DEFAULT '',
+            private_phone TEXT DEFAULT '',second_private_phone TEXT DEFAULT '',company TEXT DEFAULT '',street TEXT DEFAULT '',
+            postal_code TEXT DEFAULT '',city TEXT DEFAULT '',country TEXT DEFAULT '',short_info TEXT DEFAULT '',notes TEXT DEFAULT '',deleted_at TEXT);
+            INSERT INTO contacts(id,display_name,email) VALUES(1,'Example','a@example.test');").unwrap();
+        ensure_column(&conn, "contacts", "birthday", "TEXT NOT NULL DEFAULT ''").unwrap();
+        ensure_column(&conn, "contacts", "birthday", "TEXT NOT NULL DEFAULT ''").unwrap();
+        let mut contact = sample_contact("Example", "a@example.test", "");
+        contact.country.clear();
+        let original_key = contact_exact_key(&contact, "Example", "a@example.test");
+        let fingerprints = load_contact_fingerprints(&conn).unwrap();
+        assert!(fingerprints.exact_contacts.contains_key(&original_key));
+        contact.birthday = "1975-06-12".into();
+        assert_eq!(
+            contact_exact_key(&contact, "Example", "a@example.test"),
+            original_key
+        );
+        fill_duplicate_import_birthday(&conn, &fingerprints, &contact, "Example", "a@example.test")
+            .unwrap();
+        contact.birthday = "1999-12-31".into();
+        fill_duplicate_import_birthday(&conn, &fingerprints, &contact, "Example", "a@example.test")
+            .unwrap();
+        contact.birthday.clear();
+        fill_duplicate_import_birthday(&conn, &fingerprints, &contact, "Example", "a@example.test")
+            .unwrap();
+        assert_eq!(
+            conn.query_row("SELECT birthday FROM contacts WHERE id=1", [], |r| r
+                .get::<_, String>(0))
+                .unwrap(),
+            "1975-06-12"
+        );
+        assert_eq!(
+            conn.query_row("SELECT COUNT(*) FROM contacts", [], |r| r.get::<_, i64>(0))
+                .unwrap(),
+            1
+        );
+        let mut old_json = serde_json::to_value(contact).unwrap();
+        old_json.as_object_mut().unwrap().remove("birthday");
+        assert_eq!(
+            serde_json::from_value::<ContactInput>(old_json)
+                .unwrap()
+                .birthday,
+            ""
+        );
+    }
+
+    #[test]
     fn contact_import_consolidates_incomplete_duplicates_but_keeps_distinct_emails() {
         let conn = Connection::open_in_memory().expect("in-memory database");
         conn.execute_batch(
@@ -11176,6 +11329,7 @@ mod tests {
                 street TEXT NOT NULL DEFAULT '', postal_code TEXT NOT NULL DEFAULT '',
                 city TEXT NOT NULL DEFAULT '', country TEXT NOT NULL DEFAULT '',
                 short_info TEXT NOT NULL DEFAULT '', notes TEXT NOT NULL DEFAULT '',
+                birthday TEXT NOT NULL DEFAULT '',
                 import_batch_id TEXT, outlook_entry_id TEXT, outlook_store_id TEXT,
                 created_at TEXT NOT NULL DEFAULT '', updated_at TEXT NOT NULL DEFAULT '',
                 deleted_at TEXT
@@ -11288,6 +11442,7 @@ mod tests {
                 street TEXT NOT NULL DEFAULT '', postal_code TEXT NOT NULL DEFAULT '',
                 city TEXT NOT NULL DEFAULT '', country TEXT NOT NULL DEFAULT '',
                 short_info TEXT NOT NULL DEFAULT '', notes TEXT NOT NULL DEFAULT '',
+                birthday TEXT NOT NULL DEFAULT '',
                 import_batch_id TEXT, outlook_entry_id TEXT, outlook_store_id TEXT,
                 created_at TEXT NOT NULL DEFAULT '', updated_at TEXT NOT NULL DEFAULT '',
                 deleted_at TEXT
@@ -11420,6 +11575,7 @@ mod tests {
                 country TEXT NOT NULL DEFAULT '',
                 short_info TEXT NOT NULL DEFAULT '',
                 notes TEXT NOT NULL DEFAULT '',
+                birthday TEXT NOT NULL DEFAULT '',
                 outlook_entry_id TEXT,
                 outlook_store_id TEXT,
                 updated_at TEXT NOT NULL,
@@ -11498,6 +11654,7 @@ mod tests {
             country: String::new(),
             short_info: String::new(),
             notes: String::new(),
+            birthday: String::new(),
             group_ids: Vec::new(),
         }
     }
@@ -12293,6 +12450,7 @@ mod tests {
             country: String::new(),
             short_info: String::new(),
             notes: "Vorherige Notiz".to_string(),
+            birthday: String::new(),
             groups: Vec::new(),
             created_at: "2026-08-18T10:00:00Z".to_string(),
             updated_at: "2026-08-18T10:00:00Z".to_string(),
@@ -12402,6 +12560,7 @@ mod tests {
             country: String::new(),
             short_info: String::new(),
             notes: notes.to_string(),
+            birthday: String::new(),
             groups,
             created_at: "2026-08-18T10:00:00Z".to_string(),
             updated_at: "2026-08-18T10:00:00Z".to_string(),
@@ -12597,6 +12756,7 @@ mod tests {
             country: String::new(),
             short_info: String::new(),
             notes: String::new(),
+            birthday: String::new(),
             groups: Vec::new(),
             created_at: "2026-01-01T10:00:00Z".to_string(),
             updated_at: "2026-01-01T10:00:00Z".to_string(),

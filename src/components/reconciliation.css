@@ -1,0 +1,17 @@
+.reconciliation-dialog.safe-reconciliation { width: min(1120px, calc(100vw - 32px)); max-width: 1120px; max-height: calc(100vh - 40px); overflow: auto; border-radius: 5px; }
+.safe-reconciliation-filters { display: flex; gap: 12px; align-items: end; flex-wrap: wrap; margin: 16px 0; }
+.safe-reconciliation-filters label { display: grid; gap: 4px; font-size: .9rem; }
+.safe-reconciliation-filters span { margin-left: auto; padding-bottom: 8px; }
+.safe-reconciliation-table { max-height: 45vh; overflow: auto; border: 1px solid #dfc1cb; }
+.safe-reconciliation-table table { border-collapse: collapse; width: 100%; text-align: left; font-size: .9rem; }
+.safe-reconciliation-table th { position: sticky; top: 0; background: #f4eef0; color: #861337; z-index: 1; }
+.safe-reconciliation-table th, .safe-reconciliation-table td { padding: 8px 10px; border-bottom: 1px solid #e6dce0; vertical-align: top; }
+.safe-reconciliation-table tr:nth-child(even) { background: #faf8f9; }
+.safe-reconciliation-table td:nth-child(2) { min-width: 150px; overflow-wrap: anywhere; }
+.safe-reconciliation-table input[type=checkbox] { width: 18px; height: 18px; accent-color: #861337; }
+.safe-reconciliation-table summary { cursor: pointer; color: #861337; margin-top: 4px; }
+.safe-reconciliation-table dl { margin: 8px 0; }
+.safe-reconciliation-table dt { font-weight: 600; }
+.safe-reconciliation-table dd { margin: 2px 0 8px; white-space: pre-wrap; overflow-wrap: anywhere; max-width: 600px; }
+.safe-reconciliation-pagination { display: flex; justify-content: end; gap: 12px; align-items: center; padding: 10px 0; font-size: .9rem; }
+@media (max-width: 640px) { .safe-reconciliation-filters label { width: 100%; } .safe-reconciliation-filters span { margin: 0; } }

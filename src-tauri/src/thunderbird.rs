@@ -118,6 +118,7 @@ struct ThunderbirdEventRow {
 
 #[derive(Debug)]
 struct ThunderbirdBook {
+    source_path: String,
     name: String,
     lists: HashMap<String, String>,
     contacts: Vec<ThunderbirdContact>,
@@ -126,6 +127,7 @@ struct ThunderbirdBook {
 
 #[derive(Debug)]
 struct ThunderbirdContact {
+    source_uid: String,
     input: ContactInput,
     list_ids: Vec<String>,
 }
@@ -146,6 +148,7 @@ struct VCardData {
     organization: String,
     title: String,
     notes: String,
+    birthday: String,
 }
 
 fn parse_ini_default_path(contents: &str) -> Option<String> {
@@ -445,6 +448,9 @@ fn parse_vcard(value: &str) -> VCardData {
             }
             "TITLE" if data.title.is_empty() => data.title = decoded,
             "NOTE" if data.notes.is_empty() => data.notes = decoded,
+            "BDAY" if data.birthday.is_empty() => {
+                data.birthday = crate::contact_birthdays::normalize(&decoded)
+            }
             _ => {}
         }
     }
@@ -544,6 +550,7 @@ fn properties_to_contact(properties: &HashMap<String, String>) -> ContactInput {
     let second_private_email = additional_emails.get(1).cloned().unwrap_or_default();
 
     ContactInput {
+        birthday: crate::contact_birthdays::normalize(&vcard.birthday),
         id: None,
         first_name,
         last_name,
@@ -634,12 +641,14 @@ fn read_book(path: &Path, name: String) -> Result<ThunderbirdBook, String> {
     let contacts = properties_by_card
         .into_iter()
         .map(|(card, properties)| ThunderbirdContact {
+            source_uid: card.clone(),
             input: properties_to_contact(&properties),
             list_ids: card_lists.remove(&card).unwrap_or_default(),
         })
         .collect();
 
     Ok(ThunderbirdBook {
+        source_path: path.to_string_lossy().into_owned(),
         name,
         lists,
         contacts,
@@ -696,8 +705,8 @@ fn existing_exact_contact_indexes(tx: &Transaction<'_>) -> Result<HashMap<String
         .prepare(
             "SELECT id, first_name, last_name, display_name, email, private_email, second_private_email,
                 phone, mobile_phone, private_phone, second_private_phone, company,
-                street, postal_code, city, country, short_info, notes
-         FROM contacts WHERE deleted_at IS NULL",
+                street, postal_code, city, country, short_info, notes, birthday AS birthday
+             FROM contacts WHERE deleted_at IS NULL",
         )
         .map_err(|err| err.to_string())?;
     let rows = statement
@@ -723,6 +732,7 @@ fn existing_exact_contact_indexes(tx: &Transaction<'_>) -> Result<HashMap<String
                     country: row.get(15)?,
                     short_info: row.get(16)?,
                     notes: row.get(17)?,
+                    birthday: row.get("birthday")?,
                     group_ids: Vec::new(),
                 },
             ))
@@ -765,6 +775,20 @@ fn ensure_group(
         .map_err(|err| err.to_string())?;
     groups.insert(name.to_string(), id);
     Ok(id)
+}
+
+pub(crate) fn read_reconciliation_contacts() -> Result<Vec<super::reconciliation::SourceItem>, String> {
+    let books = read_thunderbird_books()?;
+    let mut items = Vec::new();
+    for book in books.into_iter().filter(|book| !book.is_autocomplete) {
+        for contact in book.contacts {
+            items.push(super::reconciliation::SourceItem {
+                key: format!("{}:{}", book.source_path, contact.source_uid),
+                data: serde_json::to_value(contact.input).map_err(|e| e.to_string())?,
+            });
+        }
+    }
+    Ok(items)
 }
 
 #[tauri::command]
@@ -962,6 +986,11 @@ pub fn import_thunderbird_contacts_once(
             let exact_key = contact_exact_key(contact, &display_name, &email_key);
             let existing_id = exact_contacts.get(&exact_key).copied();
             let contact_id = if let Some(id) = existing_id {
+                tx.execute(
+                    "UPDATE contacts SET birthday=?1 WHERE id=?2 AND birthday=''",
+                    params![crate::contact_birthdays::normalize(&contact.birthday), id],
+                )
+                .map_err(|e| e.to_string())?;
                 skipped_exact_duplicates += 1;
                 linked_existing_ids.insert(id);
                 if is_autocomplete {
@@ -973,8 +1002,8 @@ pub fn import_thunderbird_contacts_once(
                     "INSERT INTO contacts (
                         first_name, last_name, display_name, email, private_email, second_private_email,
                         phone, mobile_phone, private_phone, second_private_phone, company, street,
-                        postal_code, city, country, short_info, notes, import_batch_id, created_at, updated_at
-                     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                        postal_code, city, country, short_info, notes, import_batch_id, created_at, updated_at, birthday
+                     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     params![
                         contact.first_name, contact.last_name, contact.display_name, contact.email,
                         contact.private_email, contact.second_private_email, contact.phone,
@@ -982,6 +1011,7 @@ pub fn import_thunderbird_contacts_once(
                         contact.company, contact.street, contact.postal_code,
                         contact.city, contact.country, contact.short_info, contact.notes,
                         batch_id, timestamp, timestamp,
+                        crate::contact_birthdays::normalize(&contact.birthday)
                     ],
                 ).map_err(|err| err.to_string())?;
                 let id = tx.last_insert_rowid();

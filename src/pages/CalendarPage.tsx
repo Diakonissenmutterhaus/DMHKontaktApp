@@ -463,7 +463,6 @@ export function CalendarPage({ advancedMode, onAdvancedModeChange, onNavigate }:
   const [calendarLoaded, setCalendarLoaded] = useState(false);
   const [easyImportOpen, setEasyImportOpen] = useState(false);
   const [reconciliationOpen, setReconciliationOpen] = useState(false);
-  const [reconciliationEvents, setReconciliationEvents] = useState<CalendarEvent[]>([]);
   const [categories, setCategories] = useState<CalendarCategory[]>([]);
   const [message, setMessage] = useDiagnosticMessage("CalendarPage:message", "notification");
   const [actionResult, setActionResult] = useState<ActionResult | null>(null);
@@ -1562,16 +1561,7 @@ export function CalendarPage({ advancedMode, onAdvancedModeChange, onNavigate }:
   };
 
   const openReconciliation = async () => {
-    setMessage("Kalenderdaten werden für den Vergleich vorbereitet …");
-    try {
-      const allEvents = "__TAURI_INTERNALS__" in window ? await listCalendarEvents() : events;
-      setReconciliationEvents(allEvents.map(normalizeEvent));
-      setMessage("");
-      setReconciliationOpen(true);
-    } catch (error) {
-      setMessage("");
-      setActionResult({ title: "Kalendervergleich konnte nicht geöffnet werden", summary: String(error), tone: "error" });
-    }
+    setReconciliationOpen(true);
   };
 
   return (
@@ -1596,7 +1586,7 @@ export function CalendarPage({ advancedMode, onAdvancedModeChange, onNavigate }:
               <span className="calendar-actions-separator" />
               <button type="button" onClick={() => { setShowActionsMenu(false); onNavigate("import"); }}><Upload size={18} /> Termine importieren</button>
               <button type="button" onClick={() => { setShowActionsMenu(false); onNavigate("export"); }}><Download size={18} /> Termine exportieren</button>
-              <button type="button" onClick={() => { setShowActionsMenu(false); void openReconciliation(); }}><RefreshCw size={18} /> Kalender erneut abgleichen</button>
+              <button type="button" onClick={() => { setShowActionsMenu(false); void openReconciliation(); }}><RefreshCw size={18} /> Kalender prüfen und aktualisieren</button>
               <button type="button" onClick={() => void openCategoryManager()}><Tag size={18} /> Kategorien verwalten</button>
               <button type="button" onClick={() => { setShowActionsMenu(false); reviewExactDuplicates(); }}><ListChecks size={18} /> Duplikate prüfen</button>
               {duplicateCleanupBackup && <button type="button" onClick={() => { setShowActionsMenu(false); undoDuplicateCleanup(); }}><Undo2 size={18} /> Bereinigung rückgängig</button>}
@@ -2068,10 +2058,12 @@ export function CalendarPage({ advancedMode, onAdvancedModeChange, onNavigate }:
 
       <CalendarReconciliationDialog
         open={reconciliationOpen}
-        events={reconciliationEvents}
-        onClose={() => { setReconciliationOpen(false); setReconciliationEvents([]); }}
-        onChanged={(nextEvents) => {
-          persist(nextEvents);
+        onClose={() => setReconciliationOpen(false)}
+        onChanged={async (nextMessage) => {
+          // Native reconciliation already committed precisely the reviewed rows.
+          // Refresh only: persisting a stale full list here would enqueue other events.
+          await loadVisibleEvents();
+          setMessage(nextMessage);
           try {
             const storedCategories = JSON.parse(localStorage.getItem(calendarCategoriesStorageKey) ?? "[]") as CalendarCategory[];
             setCategories(storedCategories.map(normalizeCategory).filter((category) => category.name));

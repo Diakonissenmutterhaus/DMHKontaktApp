@@ -2137,6 +2137,10 @@ fn remote_contact_input(value: &Value, existing: Option<&crate::Contact>) -> cra
             .map(|contact| contact.short_info.clone())
             .unwrap_or_default(),
         notes: value_text(value, "personalNotes").to_string(),
+        birthday: existing
+            .filter(|contact| !contact.birthday.is_empty())
+            .map(|contact| contact.birthday.clone())
+            .unwrap_or_else(|| crate::contact_birthdays::normalize(value_text(value, "birthday"))),
         group_ids: existing
             .map(|contact| contact.groups.iter().filter_map(|group| group.id).collect())
             .unwrap_or_default(),
@@ -2180,7 +2184,7 @@ fn graph_contact_payload(contact: &crate::Contact) -> Value {
     } else {
         vec![contact.phone.trim().to_string()]
     };
-    json!({
+    let mut payload = json!({
         "givenName": contact.first_name,
         "surname": contact.last_name,
         "displayName": display_name,
@@ -2197,10 +2201,38 @@ fn graph_contact_payload(contact: &crate::Contact) -> Value {
             "countryOrRegion": contact.country
         },
         "personalNotes": contact.notes
-    })
+    });
+    if let Some(birthday) = crate::contact_birthdays::graph_value(&contact.birthday) {
+        payload["birthday"] = Value::String(birthday);
+    }
+    payload
 }
 
 fn contact_equivalent(local: &crate::Contact, remote: &Value) -> bool {
+    crate::contact_birthdays::normalize(&local.birthday).is_empty()
+        == crate::contact_birthdays::normalize(value_text(remote, "birthday")).is_empty()
+        && contact_fields_equivalent(local, remote)
+}
+
+fn birthday_only_action(
+    local: &crate::Contact,
+    remote: &Value,
+    direction: &str,
+) -> Option<&'static str> {
+    if !contact_fields_equivalent(local, remote) {
+        return None;
+    }
+    let local_empty = crate::contact_birthdays::normalize(&local.birthday).is_empty();
+    let remote_empty =
+        crate::contact_birthdays::normalize(value_text(remote, "birthday")).is_empty();
+    match (local_empty, remote_empty) {
+        (true, false) if direction != "export" => Some("updateLocal"),
+        (false, true) if direction != "import" => Some("updateRemote"),
+        _ => None,
+    }
+}
+
+fn contact_fields_equivalent(local: &crate::Contact, remote: &Value) -> bool {
     let remote_input = remote_contact_input(remote, Some(local));
     local.first_name.trim() == remote_input.first_name.trim()
         && local.last_name.trim() == remote_input.last_name.trim()
@@ -2232,6 +2264,7 @@ fn contact_equivalent(local: &crate::Contact, remote: &Value) -> bool {
 fn merge_contact(local: &crate::Contact, remote: &Value) -> crate::Contact {
     let remote_input = remote_contact_input(remote, Some(local));
     let mut merged = local.clone();
+    crate::contact_birthdays::fill_missing(&mut merged.birthday, &remote_input.birthday);
     if merged.first_name.trim().is_empty() {
         merged.first_name = remote_input.first_name;
     }
@@ -3942,7 +3975,7 @@ async fn build_m365_sync_plan(
                 && (!source.shared || request.shared_mailboxes)
         }) {
             let direction = source_direction(request, &source.id);
-            let url = format!("{}?$select=id,givenName,surname,displayName,emailAddresses,businessPhones,mobilePhone,homePhones,companyName,businessAddress,personalNotes,lastModifiedDateTime&$top=100", source.resource_path);
+            let url = format!("{}?$select=id,givenName,surname,displayName,emailAddresses,businessPhones,mobilePhone,homePhones,companyName,businessAddress,personalNotes,birthday,lastModifiedDateTime&$top=100", source.resource_path);
             let values = graph_collection(access_token, &url).await?;
             remote_contacts += values.len();
             let remote_by_id: HashMap<String, &Value> = values
@@ -3988,7 +4021,9 @@ async fn build_m365_sync_plan(
                 if let Some(remote) = remote {
                     let remote_id = value_text(remote, "id");
                     matched_remote_ids.insert(remote_id.to_string());
-                    let equivalent = contact_equivalent(local, remote);
+                    let birthday_action = birthday_only_action(local, remote, &direction);
+                    let equivalent = contact_equivalent(local, remote)
+                        || (birthday_action.is_none() && contact_fields_equivalent(local, remote));
                     let is_linked =
                         linked_remote_id.is_some_and(|linked_id| linked_id == remote_id);
                     if equivalent && is_linked {
@@ -3997,7 +4032,9 @@ async fn build_m365_sync_plan(
                     // During the first synchronization an equal contact must only be
                     // linked. Writing either copy here was the source of duplicate
                     // contacts after a previous manual import.
-                    let action = if equivalent {
+                    let action = if let Some(action) = birthday_action {
+                        action
+                    } else if equivalent {
                         "link"
                     } else if !is_linked {
                         // A matching identity with different data is ambiguous until a
@@ -4742,6 +4779,8 @@ async fn build_m365_sync_plan(
     })
 }
 
+mod birthday_recovery;
+
 async fn graph_write(
     access_token: &str,
     method: reqwest::Method,
@@ -4753,18 +4792,48 @@ async fn graph_write(
             "Der sichere M365-Testmodus sperrt jede Änderung an Microsoft 365.".to_string(),
         );
     }
+    let mut body = body.clone();
+    let mut birthday_etag = None;
+    if method == reqwest::Method::PATCH && body.get("birthday").is_some() {
+        // Never overwrite an existing server date, even with a stale sync preview.
+        // The conditional write also prevents a concurrent edit between GET and PATCH.
+        let latest = graph_json(access_token, url).await?;
+        if latest.get("birthday").is_none() {
+            return Err("Microsoft 365 hat den aktuellen Geburtstag nicht bestätigt; keine Änderung vorgenommen.".into());
+        }
+        if latest.get("birthday") == Some(&Value::Null)
+            || latest.get("birthday").and_then(Value::as_str) == Some("")
+        {
+            birthday_etag = latest
+                .get("@odata.etag")
+                .and_then(Value::as_str)
+                .filter(|etag| !etag.trim().is_empty())
+                .map(str::to_string);
+            if birthday_etag.is_none() {
+                return Err(
+                    "Geburtstag konnte ohne Versionsnachweis nicht sicher ergänzt werden.".into(),
+                );
+            }
+        } else {
+            body.as_object_mut().unwrap().remove("birthday");
+        }
+        if body.as_object().is_some_and(|body| body.is_empty()) {
+            return Ok(Value::Null);
+        }
+    }
     let mut last_network_error = None;
     let idempotent = method != reqwest::Method::POST;
     for attempt in 0..GRAPH_MAX_ATTEMPTS {
-        let response = match http_client()
+        let mut request = http_client()
             .request(method.clone(), url)
             .timeout(GRAPH_REQUEST_TIMEOUT)
             .bearer_auth(access_token)
             .header("Prefer", "outlook.timezone=\"W. Europe Standard Time\"")
-            .json(body)
-            .send()
-            .await
-        {
+            .json(&body);
+        if let Some(etag) = &birthday_etag {
+            request = request.header("If-Match", etag);
+        }
+        let response = match request.send().await {
             Ok(response) => response,
             Err(error) => {
                 last_network_error = Some(error.to_string());
@@ -4992,6 +5061,7 @@ async fn flush_contact_outbox_inner(
     }
     let state = app.state::<crate::AppState>();
     let _sync_guard = state.m365.contact_sync_gate.lock().await;
+    let sync_identity = outlook_profile_identity(&app)?;
     let access_token = refreshed_access_token(&app).await?;
     let backup = crate::get_sync_backup_data(app.clone())?;
     if request.contact_groups {
@@ -5041,7 +5111,7 @@ async fn flush_contact_outbox_inner(
     let mut links = HashMap::<String, HashMap<i64, String>>::new();
     for source in &export_sources {
         let url = format!(
-            "{}?$select=id,givenName,surname,displayName,emailAddresses,businessPhones,mobilePhone,homePhones,companyName,businessAddress,personalNotes,lastModifiedDateTime&$top=100",
+            "{}?$select=id,givenName,surname,displayName,emailAddresses,businessPhones,mobilePhone,homePhones,companyName,businessAddress,personalNotes,birthday,lastModifiedDateTime&$top=100",
             source.resource_path
         );
         remote_contacts.insert(
@@ -5210,6 +5280,46 @@ async fn flush_contact_outbox_inner(
         }
     }
 
+    // Recovery failures go only to EDV diagnostics; a completed Exchange setup
+    // remains completed, and the next background cycle can retry the backfill.
+    match birthday_recovery::sync_linked(
+        &app,
+        &sync_identity,
+        &access_token,
+        &backup.contacts,
+        &export_sources,
+        &remote_contacts,
+        &links,
+    )
+    .await
+    {
+        Ok(updated) => result.updated += updated,
+        Err(error) => birthday_recovery::report_error(&app, &error),
+    }
+    match birthday_recovery::run(
+        &app,
+        &sync_identity,
+        &access_token,
+        &export_sources,
+        &remote_contacts,
+        &links,
+    )
+    .await
+    {
+        Ok(updated) => result.updated += updated,
+        Err(error) => {
+            birthday_recovery::report_error(&app, &error);
+            let _ = crate::diagnostics::record(
+                &app,
+                crate::diagnostics::DiagnosticMessage {
+                    origin: "Geburtstagswiederherstellung".into(),
+                    level: "error".into(),
+                    message: error,
+                    ..Default::default()
+                },
+            );
+        }
+    }
     result.pending = crate::contact_sync_outbox_count(&app)?;
     Ok(result)
 }
@@ -5689,6 +5799,7 @@ fn contact_input_from_contact(contact: &crate::Contact) -> crate::ContactInput {
         country: contact.country.clone(),
         short_info: contact.short_info.clone(),
         notes: contact.notes.clone(),
+        birthday: contact.birthday.clone(),
         group_ids: contact.groups.iter().filter_map(|group| group.id).collect(),
     }
 }
@@ -7258,6 +7369,189 @@ fn unprotect_secret(_protected_secret: &[u8]) -> Result<Vec<u8>, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn mock_birthday_graph(
+        responses: Vec<(u16, Value)>,
+    ) -> (String, std::thread::JoinHandle<Vec<String>>) {
+        use std::io::{Read, Write};
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let url = format!("http://{}/contact", listener.local_addr().unwrap());
+        let worker = std::thread::spawn(move || {
+            let mut requests = Vec::new();
+            for (status, body) in responses {
+                let deadline = std::time::Instant::now() + Duration::from_secs(10);
+                let mut stream = loop {
+                    match listener.accept() {
+                        Ok((stream, _)) => break stream,
+                        Err(e)
+                            if e.kind() == std::io::ErrorKind::WouldBlock
+                                && std::time::Instant::now() < deadline =>
+                        {
+                            std::thread::sleep(Duration::from_millis(5))
+                        }
+                        Err(e) => panic!("mock Graph did not receive request: {e}"),
+                    }
+                };
+                stream.set_nonblocking(false).unwrap();
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(5)))
+                    .unwrap();
+                let mut raw = Vec::new();
+                let mut buffer = [0u8; 4096];
+                loop {
+                    let size = stream.read(&mut buffer).unwrap();
+                    assert!(size > 0);
+                    raw.extend_from_slice(&buffer[..size]);
+                    if let Some(end) = raw.windows(4).position(|v| v == b"\r\n\r\n") {
+                        let headers = String::from_utf8_lossy(&raw[..end]).to_ascii_lowercase();
+                        let length = headers
+                            .lines()
+                            .find_map(|line| {
+                                line.strip_prefix("content-length:")
+                                    .and_then(|v| v.trim().parse::<usize>().ok())
+                            })
+                            .unwrap_or(0);
+                        if raw.len() >= end + 4 + length {
+                            break;
+                        }
+                    }
+                }
+                requests.push(String::from_utf8(raw).unwrap());
+                let body = body.to_string();
+                write!(stream,"HTTP/1.1 {status} Response\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",body.len()).unwrap();
+            }
+            requests
+        });
+        (url, worker)
+    }
+
+    #[test]
+    fn birthday_graph_patch_preserves_server_dates_and_unrelated_fields() {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let body = serde_json::json!({"birthday":"1975-06-12T00:00:00Z"});
+        let (url, server) = mock_birthday_graph(vec![(
+            200,
+            serde_json::json!({"birthday":"1980-02-29T00:00:00Z","@odata.etag":"old"}),
+        )]);
+        runtime
+            .block_on(graph_write(
+                "test-token",
+                reqwest::Method::PATCH,
+                &url,
+                &body,
+            ))
+            .unwrap();
+        assert_eq!(server.join().unwrap().len(), 1); // GET only, no write.
+        let (url, server) = mock_birthday_graph(vec![
+            (
+                200,
+                serde_json::json!({"birthday":null,"@odata.etag":"W/\"version1\""}),
+            ),
+            (200, serde_json::json!({"id":"same-contact"})),
+        ]);
+        runtime
+            .block_on(graph_write(
+                "test-token",
+                reqwest::Method::PATCH,
+                &url,
+                &body,
+            ))
+            .unwrap();
+        let requests = server.join().unwrap();
+        assert_eq!(requests.len(), 2);
+        assert!(requests[0].starts_with("GET "));
+        assert!(requests[1].starts_with("PATCH "));
+        assert!(requests[1]
+            .to_ascii_lowercase()
+            .contains("if-match: w/\"version1\""));
+        let sent: Value =
+            serde_json::from_str(requests[1].split("\r\n\r\n").nth(1).unwrap()).unwrap();
+        assert_eq!(sent, body); // No name, email, phone, calendar, or creation payload.
+    }
+
+    #[test]
+    fn birthday_graph_patch_fails_closed_on_missing_metadata_and_concurrent_edit() {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let body = serde_json::json!({"birthday":"1975-06-12T00:00:00Z"});
+        for metadata in [
+            serde_json::json!({"birthday":null}),
+            serde_json::json!({"@odata.etag":"version1"}),
+        ] {
+            let (url, server) = mock_birthday_graph(vec![(200, metadata)]);
+            assert!(runtime
+                .block_on(graph_write(
+                    "test-token",
+                    reqwest::Method::PATCH,
+                    &url,
+                    &body
+                ))
+                .is_err());
+            assert_eq!(server.join().unwrap().len(), 1);
+        }
+        let (url, server) = mock_birthday_graph(vec![
+            (
+                200,
+                serde_json::json!({"birthday":null,"@odata.etag":"version1"}),
+            ),
+            (
+                412,
+                serde_json::json!({"error":{"code":"ErrorChangeKeyRequired","message":"Contact changed"}}),
+            ),
+        ]);
+        assert!(runtime
+            .block_on(graph_write(
+                "test-token",
+                reqwest::Method::PATCH,
+                &url,
+                &body
+            ))
+            .is_err());
+        assert_eq!(server.join().unwrap().len(), 2); // Never retry without the version guard.
+    }
+
+    #[test]
+    fn birthday_payload_and_inbound_merge_preserve_dates() {
+        let mut local = contact_for_identity("Example", "a@example.test", "");
+        assert!(graph_contact_payload(&local).get("birthday").is_none());
+        local.birthday = "1975-06-12".into();
+        assert_eq!(
+            graph_contact_payload(&local)["birthday"],
+            "1975-06-12T00:00:00Z"
+        );
+        let remote = serde_json::json!({"birthday":"1980-02-29T00:00:00Z"});
+        assert_eq!(merge_contact(&local, &remote).birthday, "1975-06-12");
+        local.birthday.clear();
+        assert_eq!(merge_contact(&local, &remote).birthday, "1980-02-29");
+    }
+
+    #[test]
+    fn birthday_only_sync_fills_the_missing_side_without_conflicts_or_creation() {
+        let mut local = contact_for_identity("Example", "a@example.test", "");
+        let mut remote = graph_contact_payload(&local);
+        remote["birthday"] = serde_json::json!("1975-06-12T00:00:00Z");
+        assert!(!contact_equivalent(&local, &remote));
+        assert_eq!(
+            birthday_only_action(&local, &remote, "both"),
+            Some("updateLocal")
+        );
+        assert_eq!(
+            birthday_only_action(&local, &remote, "import"),
+            Some("updateLocal")
+        );
+        assert_eq!(birthday_only_action(&local, &remote, "export"), None);
+        local.birthday = "1980-02-29".into();
+        assert!(contact_equivalent(&local, &remote)); // Existing dates on both sides are retained.
+        assert_eq!(birthday_only_action(&local, &remote, "both"), None);
+        remote["birthday"] = Value::Null;
+        assert_eq!(
+            birthday_only_action(&local, &remote, "both"),
+            Some("updateRemote")
+        );
+        assert_eq!(birthday_only_action(&local, &remote, "import"), None);
+        remote["displayName"] = Value::String("Someone else".into());
+        assert_eq!(birthday_only_action(&local, &remote, "both"), None);
+    }
     #[test]
     fn exchange_requires_confirmed_excel_identity_and_rejects_another_office_account() {
         let account = Microsoft365Account {
@@ -7372,6 +7666,7 @@ mod tests {
             country: String::new(),
             short_info: String::new(),
             notes: String::new(),
+            birthday: String::new(),
             groups: Vec::new(),
             created_at: String::new(),
             updated_at: String::new(),

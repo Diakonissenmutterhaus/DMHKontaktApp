@@ -1,6 +1,7 @@
 import Papa from "papaparse";
 import type { ContactInput } from "../types/contact";
 import { emptyContact } from "./contact";
+import { normalizeContactBirthday } from "./contactBirthday";
 
 export interface PreviewContact extends ContactInput {
   selected: boolean;
@@ -68,6 +69,7 @@ const aliases: Record<ImportField, string[]> = {
   city: ["stadt", "ort", "ort geschaeftlich", "ort geschäftlich", "ort privat", "city", "business city", "home city"],
   country: ["land", "land/region", "country", "country/region", "business country/region"],
   shortInfo: ["kurz-info", "kurzinfo", "kurzinformation", "short info", "shortinfo"],
+  birthday: ["geburtstag", "geburtsdatum", "birthday", "birth date", "date of birth"],
   notes: ["notizen", "notes", "bemerkungen"]
 };
 
@@ -82,7 +84,8 @@ export const mappingFields: Array<{ field: ImportField; label: string }> = [
   { field: "phone", label: "Telefon" },
   { field: "mobilePhone", label: "Mobiltelefon" },
   { field: "privatePhone", label: "Telefon privat" },
-  { field: "company", label: "Unternehmen" }
+  { field: "company", label: "Unternehmen" },
+  { field: "birthday", label: "Geburtstag" }
 ];
 
 const normalize = (value: string) =>
@@ -146,6 +149,7 @@ export function mapRows(rows: Record<string, unknown>[], mapping: ImportMapping)
           contact[field] = String(row[header] ?? "").trim();
         }
       }
+      contact.birthday = normalizeContactBirthday(contact.birthday);
 
       if (!contact.displayName) {
         contact.displayName = `${contact.firstName} ${contact.lastName}`.trim();

@@ -1,4 +1,5 @@
 import type { BackupData, Contact } from "../types/contact";
+import { normalizeContactBirthday } from "./contactBirthday";
 
 const csvCell = (value: unknown) => {
   const text = String(value ?? "");
@@ -12,7 +13,7 @@ const toCsv = (headers: string[], rows: Array<Array<unknown>>) => {
 
 export function exportGeneralCsv(contacts: Contact[]): string {
   return toCsv(
-    ["Vorname", "Nachname", "Anzeigename", "E-Mail geschäftlich", "E-Mail privat", "Zweite private E-Mail", "Telefon geschäftlich", "Mobiltelefon", "Telefon privat", "Weiteres privates Telefon", "Unternehmen", "Straße", "PLZ", "Stadt", "Land", "Kurz-info", "Notizen", "Gruppen"],
+    ["Vorname", "Nachname", "Anzeigename", "E-Mail geschäftlich", "E-Mail privat", "Zweite private E-Mail", "Telefon geschäftlich", "Mobiltelefon", "Telefon privat", "Weiteres privates Telefon", "Unternehmen", "Straße", "PLZ", "Stadt", "Land", "Kurz-info", "Notizen", "Gruppen", "Geburtstag"],
     contacts.map((contact) => [
       contact.firstName,
       contact.lastName,
@@ -31,7 +32,8 @@ export function exportGeneralCsv(contacts: Contact[]): string {
       contact.country,
       contact.shortInfo,
       contact.notes,
-      contact.groups.map((group) => group.name).join(", ")
+      contact.groups.map((group) => group.name).join(", "),
+      normalizeContactBirthday(contact.birthday)
     ])
   );
 }
@@ -54,7 +56,8 @@ export function exportOutlookClassicCsv(contacts: Contact[]): string {
       "Business Postal Code",
       "Business City",
       "Business Country/Region",
-      "Notes"
+      "Notes",
+      "Birthday"
     ],
     contacts.map((contact) => [
       contact.firstName,
@@ -72,14 +75,15 @@ export function exportOutlookClassicCsv(contacts: Contact[]): string {
       contact.postalCode,
       contact.city,
       contact.country,
-      contact.notes
+      contact.notes,
+      normalizeContactBirthday(contact.birthday)
     ])
   );
 }
 
 export function exportNewOutlookCsv(contacts: Contact[]): string {
   return toCsv(
-    ["First Name", "Last Name", "Email Address", "Email Address 2", "Email Address 3", "Phone", "Mobile Phone", "Home Phone", "Home Phone 2", "Company", "Street", "Postal Code", "City", "Country", "Notes"],
+    ["First Name", "Last Name", "Email Address", "Email Address 2", "Email Address 3", "Phone", "Mobile Phone", "Home Phone", "Home Phone 2", "Company", "Street", "Postal Code", "City", "Country", "Notes", "Birthday"],
     contacts.map((contact) => [
       contact.firstName,
       contact.lastName,
@@ -95,7 +99,8 @@ export function exportNewOutlookCsv(contacts: Contact[]): string {
       contact.postalCode,
       contact.city,
       contact.country,
-      contact.notes
+      contact.notes,
+      normalizeContactBirthday(contact.birthday)
     ])
   );
 }
